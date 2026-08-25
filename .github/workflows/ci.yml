@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Проверки и сборка
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Окружение
+        run: |
+          swift --version
+          sw_vers
+
+      # Переводы держим сгенерированными: правка руками в .lproj потеряется
+      # при следующем запуске генератора, поэтому ловим расхождение здесь.
+      - name: Переводы совпадают с генератором
+        run: |
+          python3 Tools/make-strings.py
+          if ! git diff --quiet -- Resources; then
+            echo "::error::Resources/*.lproj разошлись с Tools/make-strings.py."
+            echo "Запусти «python3 Tools/make-strings.py» и закоммить результат."
+            git --no-pager diff --stat -- Resources
+            exit 1
+          fi
+
+      - name: Синтаксис файлов локализации
+        run: plutil -lint Resources/*.lproj/Localizable.strings
+
+      - name: Генератор иконки работает
+        run: |
+          swift Tools/make-icon.swift
+          test -s Resources/AppIcon.icns
+          file Resources/AppIcon.icns | grep -q 'Mac OS X icon'
+
+      - name: Сборка бандла
+        run: ./build.sh
+
+      # Оффлайн-проверки: парсеры, JWT, форматирование, полнота всех локализаций
+      # и совпадение спецификаторов формата с английским.
+      - name: Самопроверка
+        run: NOTCHLIMITS_SELFTEST=1 ./build/NotchLimits.app/Contents/MacOS/NotchLimits
+
+      - name: Бандл собран правильно
+        run: |
+          APP=build/NotchLimits.app
+          plutil -lint "$APP/Contents/Info.plist"
+          codesign --verify --deep --strict "$APP"
+          test "$(plutil -extract LSUIElement raw "$APP/Contents/Info.plist")" = "true"
+          test -f "$APP/Contents/Resources/AppIcon.icns"
+          LOCALES=$(find "$APP/Contents/Resources" -maxdepth 1 -name '*.lproj' | wc -l | tr -d ' ')
+          echo "локализаций в бандле: $LOCALES"
+          test "$LOCALES" -ge 14
+
+      - name: Артефакт сборки
+        uses: actions/upload-artifact@v4
+        with:
+          name: NotchLimits-${{ github.sha }}
+          path: build/NotchLimits.app
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,150 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Версия без префикса v, например 1.2.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Сборка и публикация релиза
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Нужна вся история и теги: из них собирается список изменений.
+          fetch-depth: 0
+
+      - name: Версия и тег
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+            TAG="v${VERSION}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#v}"
+          fi
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$'; then
+            echo "::error::Версия «${VERSION}» не похожа на семвер"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Релиз ${TAG} (версия ${VERSION})"
+
+      - name: Сборка
+        env:
+          NOTCHLIMITS_VERSION: ${{ steps.meta.outputs.version }}
+        run: ./build.sh
+
+      - name: Самопроверка
+        run: NOTCHLIMITS_SELFTEST=1 ./build/NotchLimits.app/Contents/MacOS/NotchLimits
+
+      - name: Версия в бандле совпадает с тегом
+        run: |
+          IN_BUNDLE=$(plutil -extract CFBundleShortVersionString raw build/NotchLimits.app/Contents/Info.plist)
+          test "$IN_BUNDLE" = "${{ steps.meta.outputs.version }}"
+
+      - name: Упаковка
+        id: package
+        run: |
+          NAME="NotchLimits-${{ steps.meta.outputs.version }}.zip"
+          # ditto, а не zip: сохраняет подпись бандла и расширенные атрибуты.
+          ditto -c -k --sequesterRsrc --keepParent build/NotchLimits.app "$NAME"
+          shasum -a 256 "$NAME" > SHA256SUMS.txt
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "sha=$(shasum -a 256 "$NAME" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "size=$(du -h "$NAME" | cut -f1 | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+      - name: Заметки к релизу
+        id: notes
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          PREV=$(git tag --sort=-v:refname | grep -v "^${TAG}$" | head -1 || true)
+          if [ -n "$PREV" ]; then
+            RANGE="${PREV}..HEAD"
+            HEADING="Изменения с ${PREV}"
+          else
+            RANGE=""
+            HEADING="Первый релиз"
+          fi
+
+          # paste -sd ', ' на macOS чередует разделители по кругу,
+          # поэтому склеиваем одним символом и разводим уже потом.
+          LOCALES=$(find build/NotchLimits.app/Contents/Resources -maxdepth 1 -name '*.lproj' \
+            -exec basename {} .lproj \; | sort | paste -sd ',' - | sed 's/,/, /g')
+
+          {
+            echo "Панель с лимитами Claude Code и Codex, выезжающая из челки MacBook."
+            echo
+            echo "## Установка"
+            echo
+            echo '```bash'
+            echo "unzip ${{ steps.package.outputs.name }}"
+            echo "mv NotchLimits.app /Applications/"
+            echo "xattr -dr com.apple.quarantine /Applications/NotchLimits.app"
+            echo "open /Applications/NotchLimits.app"
+            echo '```'
+            echo
+            echo "Третья строка обязательна: сборка подписана ad-hoc, без сертификата"
+            echo "Apple Developer, поэтому Gatekeeper иначе не даст её запустить."
+            echo
+            echo "Приложение фоновое — иконки в доке нет. Наведи курсор на челку,"
+            echo "либо нажми ⌘P. Выход и настройки — правым кликом по панели."
+            echo
+            echo "## ${HEADING}"
+            echo
+            git log --no-merges --pretty='- %s (%h)' ${RANGE} | head -100
+            echo
+            echo "## Состав"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Версия | ${{ steps.meta.outputs.version }} |"
+            echo "| Минимальная macOS | 13.0 |"
+            echo "| Размер архива | ${{ steps.package.outputs.size }} |"
+            echo "| Языки интерфейса | ${LOCALES} |"
+            echo "| Подпись | ad-hoc |"
+            echo
+            echo "Самопроверка (парсеры, JWT, форматирование, полнота локализаций)"
+            echo "пройдена на этой сборке."
+            echo
+            echo "## Контрольная сумма"
+            echo
+            echo '```'
+            echo "SHA-256  ${{ steps.package.outputs.sha }}"
+            echo "         ${{ steps.package.outputs.name }}"
+            echo '```'
+          } > NOTES.md
+
+          cat NOTES.md
+
+      # При ручном запуске тега ещё нет — ставим его на тот же коммит,
+      # который только что собрали, чтобы релиз и артефакт не разъехались.
+      - name: Тег для ручного запуска
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.meta.outputs.tag }}" -m "NotchLimits ${{ steps.meta.outputs.version }}"
+          git push origin "${{ steps.meta.outputs.tag }}"
+
+      - name: Публикация
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.meta.outputs.tag }}" \
+            "${{ steps.package.outputs.name }}" \
+            SHA256SUMS.txt \
+            --title "NotchLimits ${{ steps.meta.outputs.version }}" \
+            --notes-file NOTES.md

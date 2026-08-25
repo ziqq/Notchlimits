@@ -1,0 +1,97 @@
+/* NotchLimits — tr. Собрано Tools/make-strings.py */
+
+// Окна лимитов и время
+"reset.days" = "%1$d g %2$d sa sonra sıfırlanır";
+"reset.hours" = "%1$d sa %2$d dk sonra sıfırlanır";
+"reset.minutes" = "%d dk sonra sıfırlanır";
+"reset.imminent" = "Şimdi sıfırlanıyor";
+"age.justNow" = "az önce";
+"age.seconds" = "%d sn önce";
+"age.minutes" = "%d dk önce";
+"age.hours" = "%d sa önce";
+"age.days" = "%d g önce";
+"window.fiveHour" = "5 saatlik pencere";
+"window.week" = "Haftalık pencere";
+"window.hours" = "%d saatlik pencere";
+"window.days" = "%d günlük pencere";
+"window.generic" = "Limit penceresi";
+"format.percent" = "%%%d";
+
+// Колонка
+"column.updating" = "yenileniyor…";
+"column.stale" = "%@ verisi";
+"column.reauth.claude" = "yeniden giriş: claude çalıştır";
+"column.reauth.codex" = "yeniden giriş: codex çalıştır";
+
+// Панель
+"panel.updated" = "Güncellendi %@";
+"panel.noData" = "Henüz veri yok";
+"panel.refresh.help" = "Tüm sütunları yenile";
+"panel.empty.title" = "Hesap yok";
+"panel.empty.hint" = "Sağ tık → “Claude hesabı ekle…” ya da “Codex hesabı ekle…”";
+"panel.hidden.title" = "Tüm sütunlar gizli";
+"panel.hidden.hint" = "Sağ tık → “Gizli sütunları göster”";
+
+// Контекстное меню
+"menu.refresh" = "Yenile";
+"menu.addClaude" = "Claude hesabı ekle…";
+"menu.addCodex" = "Codex hesabı ekle…";
+"menu.hideColumn" = "Sütunu gizle";
+"menu.noColumns" = "Sütun yok";
+"menu.renameColumn" = "Sütunu yeniden adlandır";
+"menu.showHidden" = "Gizli sütunları göster";
+"menu.hotKey" = "Kısayol: %@";
+"menu.hotKey.change" = "Değiştir…";
+"menu.hotKey.standard" = "Varsayılan (⌘P)";
+"menu.hotKey.disable" = "Kapat";
+"menu.loginItem" = "Girişte başlat";
+"menu.quit" = "Çık";
+
+// Горячая клавиша
+"hotkey.disabled" = "kapalı";
+"hotkey.recorder.title" = "Kısayol";
+"hotkey.recorder.hint" = "Bir kombinasyona bas — ⌘, ⌥ ya da ⌃ içermeli.";
+"hotkey.recorder.save" = "Kaydet";
+"hotkey.taken.title" = "%@ zaten kullanılıyor";
+"hotkey.taken.body" = "Başka bir uygulama onu tutuyor. Önceki ayarın değişmedi.";
+
+// Переименование колонки
+"rename.title" = "Sütun adı";
+"rename.hint" = "Bu sütunun etiketi. Boş bırakırsan “%@” geri gelir.";
+
+// Общее
+"common.ok" = "Tamam";
+"common.cancel" = "Vazgeç";
+"common.save" = "Kaydet";
+
+// Добавление аккаунта
+"setup.claude.title" = "Yeni Claude hesabı";
+"setup.codex.title" = "Yeni Codex hesabı";
+"setup.profile.hint" = "Bu hesap için kısa bir ad seç — örneğin work ya da personal. Sütun başlığı olacak ve CLI ayarlarını bu adı taşıyan klasörde tutacak.";
+"setup.profile.terminal" = "“Oluştur”dan sonra Terminal açılır — girişi orada yap.";
+"setup.profile.folder" = "Klasör: %@";
+"setup.profile.badChars" = "Yalnızca Latin harfleri, rakam, tire ve alt çizgi.";
+"setup.profile.exists" = "Bu adda bir profil zaten var.";
+"setup.create" = "Oluştur";
+"setup.badName.title" = "Geçersiz profil adı";
+"setup.badName.body" = "Yalnızca Latin harfleri, rakam, tire ve alt çizgi. Ad boş ya da kullanımda olamaz.";
+"setup.failed.title" = "Profil oluşturulamadı";
+"setup.missing.title" = "%@ bulunamadı";
+"setup.missing.body" = "CLI’yi kur ve tekrar dene:\n\n%@";
+"setup.script.profile" = "Profil: %@";
+"setup.script.hint" = "Giris yap, sonra bu pencereyi kapat.";
+"loginItem.failed.title" = "Girişte başlatma değiştirilemedi";
+
+// Уведомления
+"notification.title" = "%1$@ — %%%2$d";
+"notification.body" = "%1$@: %%%2$d";
+
+// Ошибки в колонке
+"error.network" = "ağ hatası";
+"error.timeout" = "zaman aşımı";
+"error.noHTTP" = "HTTP yanıtı yok";
+"error.http" = "HTTP %d";
+"error.parse" = "yanıt çözümlenemedi";
+"error.unknownSource" = "bilinmeyen kaynak";
+"error.noProvider" = "sağlayıcı yok";
+"error.unreachable" = "ağ kullanılamıyor";

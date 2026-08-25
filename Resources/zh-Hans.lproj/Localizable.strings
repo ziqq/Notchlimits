@@ -1,0 +1,97 @@
+/* NotchLimits — zh-Hans. Собрано Tools/make-strings.py */
+
+// Окна лимитов и время
+"reset.days" = "%1$d 天 %2$d 小时后重置";
+"reset.hours" = "%1$d 小时 %2$d 分钟后重置";
+"reset.minutes" = "%d 分钟后重置";
+"reset.imminent" = "即将重置";
+"age.justNow" = "刚刚";
+"age.seconds" = "%d 秒前";
+"age.minutes" = "%d 分钟前";
+"age.hours" = "%d 小时前";
+"age.days" = "%d 天前";
+"window.fiveHour" = "5 小时窗口";
+"window.week" = "每周窗口";
+"window.hours" = "%d 小时窗口";
+"window.days" = "%d 天窗口";
+"window.generic" = "限额窗口";
+"format.percent" = "%d%%";
+
+// Колонка
+"column.updating" = "正在刷新…";
+"column.stale" = "%@的数据";
+"column.reauth.claude" = "重新认证：运行 claude";
+"column.reauth.codex" = "重新认证：运行 codex";
+
+// Панель
+"panel.updated" = "更新于 %@";
+"panel.noData" = "暂无数据";
+"panel.refresh.help" = "刷新所有列";
+"panel.empty.title" = "没有账户";
+"panel.empty.hint" = "右键点击 →「添加 Claude 账户…」或「添加 Codex 账户…」";
+"panel.hidden.title" = "所有列已隐藏";
+"panel.hidden.hint" = "右键点击 →「显示隐藏的列」";
+
+// Контекстное меню
+"menu.refresh" = "刷新";
+"menu.addClaude" = "添加 Claude 账户…";
+"menu.addCodex" = "添加 Codex 账户…";
+"menu.hideColumn" = "隐藏列";
+"menu.noColumns" = "没有列";
+"menu.renameColumn" = "重命名列";
+"menu.showHidden" = "显示隐藏的列";
+"menu.hotKey" = "快捷键：%@";
+"menu.hotKey.change" = "更改…";
+"menu.hotKey.standard" = "默认 (⌘P)";
+"menu.hotKey.disable" = "关闭";
+"menu.loginItem" = "登录时启动";
+"menu.quit" = "退出";
+
+// Горячая клавиша
+"hotkey.disabled" = "已关闭";
+"hotkey.recorder.title" = "快捷键";
+"hotkey.recorder.hint" = "按下组合键 — 必须包含 ⌘、⌥ 或 ⌃。";
+"hotkey.recorder.save" = "存储";
+"hotkey.taken.title" = "%@ 已被占用";
+"hotkey.taken.body" = "另一个 App 已占用它。之前的设置保持不变。";
+
+// Переименование колонки
+"rename.title" = "列名称";
+"rename.hint" = "这一列的标题。留空则恢复为「%@」。";
+
+// Общее
+"common.ok" = "好";
+"common.cancel" = "取消";
+"common.save" = "存储";
+
+// Добавление аккаунта
+"setup.claude.title" = "新的 Claude 账户";
+"setup.codex.title" = "新的 Codex 账户";
+"setup.profile.hint" = "为这个账户取一个简短的名字，例如 work 或 personal。它会成为列标题，CLI 也会把设置放在同名文件夹里。";
+"setup.profile.terminal" = "点击「创建」后会打开「终端」，在那里登录。";
+"setup.profile.folder" = "文件夹：%@";
+"setup.profile.badChars" = "只能使用拉丁字母、数字、连字符和下划线。";
+"setup.profile.exists" = "同名的配置已存在。";
+"setup.create" = "创建";
+"setup.badName.title" = "配置名称无效";
+"setup.badName.body" = "只能使用拉丁字母、数字、连字符和下划线。名称不能为空或重复。";
+"setup.failed.title" = "无法创建配置";
+"setup.missing.title" = "找不到 %@";
+"setup.missing.body" = "请安装 CLI 后重试：\n\n%@";
+"setup.script.profile" = "配置：%@";
+"setup.script.hint" = "登录后关闭此窗口。";
+"loginItem.failed.title" = "无法更改登录时启动";
+
+// Уведомления
+"notification.title" = "%1$@ — %2$d%%";
+"notification.body" = "%1$@：%2$d%%";
+
+// Ошибки в колонке
+"error.network" = "网络错误";
+"error.timeout" = "超时";
+"error.noHTTP" = "没有 HTTP 响应";
+"error.http" = "HTTP %d";
+"error.parse" = "无法解析响应";
+"error.unknownSource" = "来源未知";
+"error.noProvider" = "没有提供方";
+"error.unreachable" = "网络不可用";
