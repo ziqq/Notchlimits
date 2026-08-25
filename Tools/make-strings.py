@@ -52,7 +52,8 @@ ORDER = [
         "setup.missing.title", "setup.missing.body",
         "setup.script.profile", "setup.script.hint", "loginItem.failed.title",
     ]),
-    ("Уведомления", ["notification.title", "notification.body"]),
+    ("Уведомления", ["notification.title", "notification.body",
+                     "notification.reset.title", "notification.reset.body"]),
     ("Ошибки в колонке", [
         "error.network", "error.timeout", "error.noHTTP", "error.http",
         "error.parse", "error.unknownSource", "error.noProvider",
@@ -887,6 +888,30 @@ T["zh-Hant"] = {
     "error.unknownSource": "來源不明", "error.noProvider": "沒有提供者",
     "error.unreachable": "網路無法使用",
 }
+
+
+# Уведомления о сбросе окна. Держим отдельным словарём: строки notification.*
+# у многих языков совпадают дословно, и точечная правка каждой таблицы была бы
+# неоднозначной. Оба ключа несут ровно один «%@» — спецификаторы совпадают везде.
+_RESET = {
+    "en":      ("%@ — limit reset",          "%@ is available again"),
+    "ru":      ("%@ — лимит сброшен",         "%@ снова доступно"),
+    "de":      ("%@ — Limit zurückgesetzt",   "%@ ist wieder verfügbar"),
+    "fr":      ("%@ — limite réinitialisée",  "%@ est de nouveau disponible"),
+    "es":      ("%@ — límite reiniciado",     "%@ vuelve a estar disponible"),
+    "it":      ("%@ — limite azzerato",       "%@ è di nuovo disponibile"),
+    "pt-BR":   ("%@ — limite redefinido",     "%@ está disponível de novo"),
+    "uk":      ("%@ — ліміт скинуто",         "%@ знову доступне"),
+    "pl":      ("%@ — limit zresetowany",     "%@ znów dostępne"),
+    "tr":      ("%@ — limit sıfırlandı",      "%@ yeniden kullanılabilir"),
+    "ja":      ("%@ — 制限リセット",           "%@ が再び利用可能です"),
+    "ko":      ("%@ — 한도 초기화",            "%@ 다시 사용 가능"),
+    "zh-Hans": ("%@ — 限额已重置",            "%@ 重新可用"),
+    "zh-Hant": ("%@ — 限額已重置",            "%@ 重新可用"),
+}
+for _lang, (_title, _body) in _RESET.items():
+    T[_lang]["notification.reset.title"] = _title
+    T[_lang]["notification.reset.body"] = _body
 
 
 def main():

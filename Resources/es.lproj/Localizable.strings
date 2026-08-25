@@ -85,6 +85,8 @@
 // Уведомления
 "notification.title" = "%1$@ — %2$d %%";
 "notification.body" = "%1$@: %2$d %%";
+"notification.reset.title" = "%@ — límite reiniciado";
+"notification.reset.body" = "%@ vuelve a estar disponible";
 
 // Ошибки в колонке
 "error.network" = "error de red";

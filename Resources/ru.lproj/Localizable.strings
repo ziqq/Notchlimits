@@ -85,6 +85,8 @@
 // Уведомления
 "notification.title" = "%1$@ — %2$d %%";
 "notification.body" = "%1$@: %2$d %%";
+"notification.reset.title" = "%@ — лимит сброшен";
+"notification.reset.body" = "%@ снова доступно";
 
 // Ошибки в колонке
 "error.network" = "сбой сети";

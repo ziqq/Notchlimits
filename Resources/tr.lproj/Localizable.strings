@@ -85,6 +85,8 @@
 // Уведомления
 "notification.title" = "%1$@ — %%%2$d";
 "notification.body" = "%1$@: %%%2$d";
+"notification.reset.title" = "%@ — limit sıfırlandı";
+"notification.reset.body" = "%@ yeniden kullanılabilir";
 
 // Ошибки в колонке
 "error.network" = "ağ hatası";

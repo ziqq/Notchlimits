@@ -85,6 +85,8 @@
 // Уведомления
 "notification.title" = "%1$@ — %2$d%%";
 "notification.body" = "%1$@：%2$d%%";
+"notification.reset.title" = "%@ — 限额已重置";
+"notification.reset.body" = "%@ 重新可用";
 
 // Ошибки в колонке
 "error.network" = "网络错误";
