@@ -1,5 +1,3 @@
-<img src="docs/icon.png" width="48" height="48" align="right" alt="Иконка NotchLimits">
-
 # NotchLimits
 
 Панель, выезжающая из челки MacBook, с лимитами **Claude Code** и **Codex** (OpenAI).
