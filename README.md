@@ -1,374 +1,211 @@
 # NotchLimits
 
-Панель, выезжающая из челки MacBook, с лимитами **Claude Code** и **Codex** (OpenAI).
-Нативное macOS-приложение на Swift/SwiftUI, собирается одним скриптом, без Xcode-проекта.
+**English** · [Русский](README.ru.md)
 
-![Раскрытая панель](docs/panel.png)
+A panel that slides out of the MacBook notch with **Claude Code** and **Codex** (OpenAI) rate limits. Native macOS app in Swift/SwiftUI, built with one script — no Xcode project.
 
-## Что умеет
+![Expanded panel](docs/panel.png)
 
-- Колонка на каждый аккаунт: свой Claude-профиль, свой Codex-профиль, всё сразу на одном экране.
-- Набор окон лимитов не зашит в код — рисуется всё, что вернул API, включая окна, которых ещё не было вчера.
-- Живёт в челке: свёрнутая панель совпадает с вырезом пиксель в пиксель и не видна.
-- Работает и без челки — на внешнем мониторе, Mac mini, iMac.
-- Уведомления при пересечении 80 % и 95 % по любому окну.
-- Данные переживают перезапуск: последние проценты кэшируются и показываются с пометкой возраста.
-- Ошибка или лимит одного аккаунта не трогает остальные колонки.
-- Интерфейс на 14 языках, выбирается по языку системы.
-- Названия окон не обрезаются: длинные переносятся, а панель подрастает под них.
+## Features
 
-## Требования
+- One column per account — every Claude and Codex profile at once.
+- Limit windows aren't hardcoded: whatever the API returns is drawn, including windows that didn't exist yesterday.
+- Lives in the notch — the collapsed panel matches the cutout pixel-for-pixel and stays invisible.
+- Works without a notch too (external display, Mac mini, iMac).
+- Notifications when any window crosses 80 % and 95 %, and when a heavily-used window resets and frees up.
+- Survives restarts: last percentages are cached and shown with an age note.
+- One account's error or rate limit never touches the other columns.
+- UI in 14 languages, picked from the system language.
+- Long window titles wrap instead of truncating; the panel grows to fit.
 
-- macOS 13 и новее
-- Swift 5.9 и новее (Xcode Command Line Tools)
-- `claude` и/или `codex` CLI с выполненным входом
+## Requirements
 
-## Сборка и запуск
+- macOS 13+
+- Swift 5.9+ (Xcode Command Line Tools)
+- `claude` and/or `codex` CLI, logged in
+
+## Build & run
 
 ```bash
 ./build.sh && open build/NotchLimits.app
 ```
 
-`build.sh` делает `swift build -c release`, собирает `build/NotchLimits.app`
-с `Info.plist` (`LSUIElement = true`, `CFBundleIdentifier = com.ziqq.notchlimits`)
-и подписывает бандл.
+`build.sh` runs `swift build -c release`, assembles `build/NotchLimits.app` with an `Info.plist` (`LSUIElement = true`, `CFBundleIdentifier = com.ziqq.notchlimits`) and signs it. The app is background-only — no Dock or menu-bar icon; quit from the panel's context menu.
 
-Приложение фоновое: иконки в доке и в меню-баре нет. Выход — через контекстное меню панели.
-
-Перезапуск после пересборки:
+Restart after a rebuild:
 
 ```bash
 pkill -x NotchLimits; open build/NotchLimits.app
 ```
 
-## Как пользоваться
+## Usage
 
-| Действие | Что происходит |
+| Action | Result |
 | --- | --- |
-| Навести курсор на челку | Панель раскрывается |
-| Увести курсор | Через 0,1 с панель закрывается |
-| Клик по панели | Закрепить раскрытой |
-| Повторный клик, клик мимо, **Esc** | Закрыть |
-| **⌘P** (настраивается) | Открыть/закрыть из любого приложения |
-| Правый клик | Контекстное меню |
+| Hover the notch | Panel expands |
+| Move the cursor away | Closes after 0.1 s |
+| Click the panel | Pin it open |
+| Click again, click outside, **Esc** | Close |
+| **⌘P** (configurable) | Toggle from any app |
+| Right-click | Context menu |
 
-На экране без челки панель живёт в верхнем центре, а в свёрнутом виде выглядит
-как маленькая пилюля с точкой на каждый аккаунт — цвет точки показывает самое
-загруженное окно этого аккаунта:
+On a notch-less screen the panel sits top-center; collapsed, it's a small pill with one dot per account, colored by that account's busiest window:
 
-![Свёрнутая панель без челки](docs/collapsed.png)
+![Collapsed panel](docs/collapsed.png)
 
-### Контекстное меню
+The context menu covers: **Refresh** (force-poll, bypassing timers and backoff), **Add Claude / Codex account…**, **Hide** / **Rename column** submenus, **Show hidden columns**, **Hotkey** submenu, **Launch at login** (`SMAppService`), and **Quit**.
 
-- **Обновить** — принудительный опрос всех аккаунтов, минуя таймеры и бэкофф.
-- **Добавить аккаунт Claude…** / **Добавить аккаунт Codex…**
-- **Скрыть колонку** → подменю со списком колонок.
-- **Переименовать колонку** → подменю со списком колонок.
-- **Показать скрытые колонки**
-- **Горячая клавиша: …** → подменю (см. ниже).
-- **Запуск при входе** — через `SMAppService`.
-- **Выход**
+## Column names
 
-## Имена колонок
+The primary profile of both providers is labeled `main`, so headers don't diverge into "CLAUDE · main" vs "CODEX · default". Extra profiles take their folder name. Rename any column via right-click → **Rename column**; an empty field restores the profile name. The name lives in `UserDefaults` separately from the column id, so renaming doesn't drop the cache or notification state.
 
-Основной профиль у обоих провайдеров подписан одинаково — `main`, чтобы
-заголовки не расходились на «CLAUDE · main» и «CODEX · default». Дополнительные
-профили берут имя своей папки.
+## Hotkey
 
-Любую колонку можно переподписать: правый клик → **Переименовать колонку** →
-выбрать колонку. Пустое поле возвращает исходное имя профиля. Имя хранится
-в `UserDefaults` отдельно от идентификатора колонки, поэтому переименование
-не роняет кэш и состояние уведомлений.
+Default is **⌘P**. Being a global hotkey, it overrides "Print" elsewhere while NotchLimits runs — so it's configurable via right-click → **Hotkey**:
 
-## Горячая клавиша
+- **Change…** captures the next keypress. At least one of ⌘, ⌥, ⌃ is required, or a global hotkey would swallow ordinary input.
+- **Default (⌘P)** / **Disable** (leaves only hover and click).
 
-По умолчанию — **⌘P**. Поскольку это глобальный хоткей, пока NotchLimits запущен,
-⌘P перестанет работать как «Печать» в других приложениях. Поэтому сочетание
-настраивается: правый клик → **Горячая клавиша** →
+The binding uses the physical key code, so switching layout doesn't affect it. If the combo is already taken, the panel says so and keeps the previous setting.
 
-- **Изменить…** — диалог ловит следующее нажатие. Нужен хотя бы один модификатор
-  ⌘, ⌥ или ⌃: без них глобальный хоткей перехватывал бы обычный ввод.
-- **Стандартная (⌘P)** — вернуть значение по умолчанию.
-- **Выключить** — оставить только наведение курсора и клик.
+## Languages
 
-Привязка идёт к физическому коду клавиши, поэтому переключение раскладки на неё
-не влияет. Если сочетание уже занято другим приложением, панель об этом скажет
-и оставит прежнюю настройку.
+14 languages: English, Russian, Ukrainian, German, French, Spanish, Portuguese (Brazil), Italian, Polish, Turkish, Japanese, Korean, Simplified and Traditional Chinese. Chosen from the system's preferred-languages list; English is the fallback. LTR only — the layout isn't mirrored, so Hebrew and Arabic are intentionally omitted.
 
-## Языки
-
-Интерфейс переведён на 14 языков: английский, русский, украинский, немецкий,
-французский, испанский, португальский (Бразилия), итальянский, польский,
-турецкий, японский, корейский, китайский упрощённый и китайский традиционный.
-Язык выбирается по списку предпочитаемых языков в системных настройках;
-запасной — английский.
-
-Только LTR-языки: макет панели не зеркалится, поэтому иврит и арабский
-намеренно не добавлены — им нужна отдельная работа над раскладкой.
-
-Проверить любой язык, не меняя системные настройки:
+Check any language without changing system settings:
 
 ```bash
 ./build/NotchLimits.app/Contents/MacOS/NotchLimits -AppleLanguages "(ja)"
 ```
 
-Единственный источник правды по переводам — `Tools/make-strings.py`; он
-раскладывает их по `Resources/<язык>.lproj/Localizable.strings` и падает, если
-в каком-то языке ключ забыт или лишний:
+Translations have a single source of truth — `Tools/make-strings.py` — which lays them out into `Resources/<lang>.lproj/Localizable.strings` and fails if any key is missing or extra. Durations and the percent sign are localized too: `42 %` in French, `42%` in Japanese, `%42` in Turkish.
 
-```bash
-python3 Tools/make-strings.py
-```
+## Panel size
 
-`build.sh` копирует все `.lproj` в бандл и сам дописывает `CFBundleLocalizations`,
-так что новый язык — это одна запись в словаре генератора.
+Width is 250 pt per column, no less than 500 pt and no wider than the screen minus 40 pt. Height adapts to content: titles like "GPT-5.3-Codex-Spark · Weekly window" wrap rather than truncate — the layout reports its real height and the window resizes to it, between 252 pt and 560 pt.
 
-Времена и единицы намеренно сокращённые («3 д 1 ч», «vor 12 s», «%d分前») — так
-строки не зависят от правил множественного числа, которые в русском, польском и
-украинском разные. Знак процента тоже локализован: `42 %` во французском,
-`42%` в японском, `%42` в турецком.
+## Column states
 
-## Размеры панели
+![Column states](docs/states.png)
 
-Ширина — 250 pt на колонку, но не меньше 500 pt и не шире экрана минус 40 pt.
+- **Fresh data** — progress bar and time to reset. Green up to 60 %, yellow 60–85 %, red above.
+- **`re-auth: run claude` / `codex`** — no token, expired, or a 401. The panel never refreshes tokens itself; the CLI does.
+- **`data N min ago`** — grey note: no fresh response right now (rate limit, network, just launched); last known values shown.
+- **`updating…`** — no data yet.
 
-Высота подстраивается под содержимое. Названия окон вроде
-«GPT-5.3-Codex-Spark · Недельное окно» шире колонки, поэтому они переносятся
-на несколько строк, а не режутся многоточием: вёрстка сообщает наверх реальную
-высоту блока колонок, и окно панели меняет размер под неё. Ниже базовых 252 pt
-панель не сжимается и выше 560 pt не растёт.
+## Multiple accounts
 
-## Состояния колонок
+Menu → **Add Claude account…** or **Add Codex account…**. The dialog asks for a short profile name and previews the result live (`Folder: ~/.claude-profiles/work`); the Create button stays disabled until the name is valid. The panel then creates `~/.claude-profiles/<name>` (or `~/.codex-profiles/<name>`), drops a `login.command` there and opens it in Terminal.app. Passwords are never seen or asked — the CLI handles login. New profiles are picked up automatically, no restart.
 
-![Состояния колонок](docs/states.png)
-
-- **Свежие данные** — прогресс-бар и время до сброса. Зелёный до 60 %, жёлтый
-  60–85 %, красный выше 85 %.
-- **`re-auth: запусти claude` / `codex`** — токена нет, он протух или пришёл 401.
-  Панель принципиально не обновляет токены сама, этим занимается CLI.
-- **`данные N мин назад`** — серая пометка: свежего ответа сейчас нет (лимит
-  запросов, сеть, только что запустились), показаны последние известные значения.
-- **`обновляю…`** — данных ещё не было ни разу.
-
-## Несколько аккаунтов
-
-Меню → **«Добавить аккаунт Claude…»** или **«Добавить аккаунт Codex…»**.
-
-Диалог просит короткое имя профиля и сразу показывает, что получится: под полем
-живёт строка `Папка: ~/.claude-profiles/work`, которая обновляется по мере ввода.
-Кнопка «Создать» неактивна, пока имя не годится, а запрещённые символы и уже
-занятое имя подсвечиваются красным на месте, а не после нажатия.
-
-Дальше панель создаст `~/.claude-profiles/<имя>` или `~/.codex-profiles/<имя>`,
-положит туда `login.command` и откроет его в Terminal.app.
-
-Пароли панель не спрашивает и не видит — вход целиком делает штатный CLI.
-`.command`-файл выбран намеренно: он открывается без разрешения «Автоматизация»,
-которое потребовал бы AppleScript `do script`.
-
-То же самое руками:
+The equivalent by hand:
 
 ```bash
 CLAUDE_CONFIG_DIR=~/.claude-profiles/work claude
-```
-
-```bash
 CODEX_HOME=~/.codex-profiles/work codex login
 ```
 
-Новые профили подхватываются автоматически, перезапуск не нужен.
+Binaries are found not via `PATH` (nearly empty for a GUI app) but at known install locations: `~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`, `/usr/local/bin`, the VS Code `anthropic.claude-code-*` extension, and `/Applications/ChatGPT.app` for `codex`.
 
-Бинарники ищутся не по `PATH` (у GUI-приложения он почти пустой), а по известным
-местам установки: `~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`,
-`/usr/local/bin`, расширение VS Code `anthropic.claude-code-*` и
-`/Applications/ChatGPT.app` для `codex`. Если CLI не найден, панель покажет
-команду установки.
+## Data sources
 
-## Источники данных
-
-### Claude Code
-
-Токен читается из Keychain: generic password со службой `Claude Code-credentials`,
-секрет — JSON `{"claudeAiOauth": {"accessToken", "refreshToken", "expiresAt", …}}`.
-Дополнительные профили пишутся как `Claude Code-credentials-<hash>`, где hash —
-от пути `CLAUDE_CONFIG_DIR`. Хэш не вычисляется наугад: панель перечисляет все
-записи с этим префиксом и сопоставляет суффикс с sha256 путей папок профилей.
+**Claude Code.** Token read from Keychain (generic password, service `Claude Code-credentials`; extra profiles as `Claude Code-credentials-<hash>` where the hash is the sha256 of `CLAUDE_CONFIG_DIR`).
 
 ```
 GET https://api.anthropic.com/api/oauth/usage
 Authorization: Bearer <accessToken>
 anthropic-beta: oauth-2025-04-20
-User-Agent: claude-code/<версия установленного CLI>
+User-Agent: claude-code/<installed CLI version>
 ```
 
-Родной `User-Agent` важен: без него эндпоинт заметно чаще отвечает 429.
+The native `User-Agent` matters — without it the endpoint returns 429 far more often. Any field-object with a numeric `utilization` counts as a window (`extra_usage` ignored), so new windows appear on their own, including internal model code-names like `nimbus_quill`. Titles: `five_hour`/`seven_day` get friendly labels, known prefixes expand (`seven_day_opus` → "Weekly window · Opus"), the rest are shown as words rather than raw snake_case. The subtitle shows the plan (`Pro`, `Max`) from the Keychain entry — Anthropic exposes no email anywhere.
 
-В ответе любое поле-объект с числовым `utilization` считается окном лимита;
-`extra_usage` игнорируется. Набор окон не зашит в код, поэтому новые появляются
-сами — включая те, что приходят под внутренними кодовыми именами моделей вроде
-`nimbus_quill`.
-
-Названия строятся так: `five_hour` и `seven_day` — понятные подписи; известные
-префиксы разворачиваются (`seven_day_opus` → «Недельное окно · Opus»); всё
-остальное показывается словами, а не сырым snake_case (`nimbus_quill` →
-«Nimbus Quill»).
-
-### Codex
-
-Авторизация из `~/.codex/auth.json` (или `$CODEX_HOME/auth.json`). Режим `apikey`
-до usage-эндпоинта не дотягивается — нужен вход через ChatGPT. Срок жизни токена
-берётся из claim `exp` внутри JWT, e-mail для подписи колонки — из `id_token`.
+**Codex.** Auth from `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`); `apikey` mode can't reach the usage endpoint — ChatGPT login is required. Token lifetime from the JWT `exp` claim, email for the column subtitle from `id_token`.
 
 ```
 GET https://chatgpt.com/backend-api/wham/usage
 Authorization: Bearer <access_token>
 ChatGPT-Account-ID: <account_id>
-User-Agent: codex_cli_rs/<версия>
+User-Agent: codex_cli_rs/<version>
 ```
 
-Рисуются `rate_limit.primary_window`, `secondary_window` и все
-`additional_rate_limits[]` — последние с префиксом из `limit_name` либо
-`metered_feature`. Название окна выводится из `limit_window_seconds`.
+`rate_limit.primary_window`, `secondary_window` and every `additional_rate_limits[]` are drawn — the latter prefixed by `limit_name` or `metered_feature`. Window title derives from `limit_window_seconds`.
 
-## Обновление и устойчивость
+## Refresh & resilience
 
-- Каждый аккаунт опрашивается независимо раз в 3 минуты, со сдвигом 4 секунды
-  между аккаунтами — не залпом.
-- При раскрытии панели обновляются только колонки старше двух минут.
-- Таймаут запроса 10 секунд, один ретрай на 5xx и сетевую ошибку.
-- **HTTP 429 не считается ошибкой.** Пауза берётся из `Retry-After`, иначе растёт
-  2 → 4 → 8 → 15 минут. В колонке остаются последние данные с пометкой возраста.
-- Последние успешные значения кэшируются в `UserDefaults` и показываются сразу
-  после перезапуска.
-- Уведомление о пороге срабатывает один раз за окно и перевзводится, когда
-  меняется `resets_at`, то есть когда началось новое окно.
+- Each account polls independently every 3 minutes, staggered 4 s apart — not in a burst.
+- Expanding the panel refreshes only columns older than two minutes.
+- 10 s request timeout, one retry on 5xx and network errors.
+- **HTTP 429 isn't an error.** Backoff comes from `Retry-After`, else grows 2 → 4 → 8 → 15 min; last data stays with an age note.
+- Last successful values are cached in `UserDefaults` and shown right after a restart.
+- A threshold notification fires once per window and re-arms when `resets_at` changes (a new window began). When a window that reached ≥ 50 % rolls over, a "limit reset" notification fires — you were throttled, now you're free.
 
-## Разрешения
+## Permissions
 
-**Keychain.** При первом обновлении Claude macOS спросит доступ к записи
-`Claude Code-credentials`. Нажми **«Разрешать всегда»** — иначе диалог будет
-появляться при каждом опросе. Прочитанный токен кэшируется в памяти до
-`expiresAt` или до первого 401, так что Keychain не дёргается на каждом цикле.
+- **Keychain.** On the first Claude refresh macOS asks for access to `Claude Code-credentials` — click **Always Allow**. The token is cached in memory until `expiresAt` or a 401, so Keychain isn't hit each cycle.
+- **Signing.** With an "Apple Development" certificate, `build.sh` signs with it and the Keychain grant survives rebuilds. Without one, signing is ad-hoc — the code hash changes each build, so **Keychain re-asks after every rebuild**. The script warns about this.
+- **Notifications.** Requested on first launch.
+- **No Accessibility needed** — the hotkey uses Carbon `RegisterEventHotKey`, and login runs via a `.command` file, not AppleScript.
 
-**Подпись.** Если в системе есть сертификат «Apple Development», `build.sh`
-подписывает им, и разрешение Keychain переживает пересборки. Если сертификата
-нет, подпись будет ad-hoc: хэш кода меняется при каждой сборке, поэтому
-**Keychain будет заново спрашивать доступ после каждой пересборки**. Скрипт
-предупреждает об этом сам.
+## Privacy
 
-**Уведомления.** При первом запуске система спросит разрешение на уведомления.
+The app's only network requests are the two official usage endpoints above. Nowhere else. Tokens live in memory only — never logged, never written to disk, never cached. Only settings and last percentages (with reset times) go to `UserDefaults`, without a single token. `URLSession` runs ephemeral, no cookies, no disk cache.
 
-**Accessibility не нужен.** Хоткей сделан на Carbon `RegisterEventHotKey`, а вход
-в аккаунты запускается `.command`-файлом, а не AppleScript.
+## CI & releases
 
-## Приватность
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push to `main`, every PR, and on demand: regenerate translations and check `Resources/*.lproj` didn't drift, `plutil -lint` the strings, verify the icon generator produces a valid `.icns`, `./build.sh`, self-test, and bundle checks (`Info.plist` validity, signature, `LSUIElement`, icon, all 14 locales), then upload the `.app` artifact.
 
-Единственные сетевые запросы приложения — два официальных usage-эндпоинта выше.
-Больше никуда оно не ходит.
+The self-test (`NOTCHLIMITS_SELFTEST=1`) needs no network, Keychain, or window server, and covers Claude/Codex parsing (garbage, `null` windows, unknown keys), window order and titles, JWT claims, time/age/percent formatting, cache and hotkey serialization, and localization completeness — matching key sets, no empty values, and **format specifiers matching English**, or `String(format:)` would crash in another language.
 
-Токены живут только в памяти: не логируются, не пишутся на диск, не попадают
-в кэш. На диск идут только настройки и последние проценты со временем сброса —
-в `UserDefaults`, без единого токена. `URLSession` работает в ephemeral-режиме,
-без кук и дискового кэша.
+[`.github/workflows/release.yml`](.github/workflows/release.yml) runs on a `v*` tag or manually with a version: builds, self-tests, checks the `Info.plist` version against the tag, packs with `ditto` (plain `zip` breaks the signature), computes SHA-256, and publishes a release with the `.zip` and `SHA256SUMS.txt`. Release notes are generated: install steps (including the mandatory quarantine removal for ad-hoc builds), commits since the last tag, a spec table, and the checksum.
 
-## CI и релизы
-
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) — на каждый push в `main`,
-каждый pull request и по кнопке. Порядок шагов:
-
-1. `python3 Tools/make-strings.py` и проверка, что `Resources/*.lproj` не
-   разошлись с генератором — правки руками в `.lproj` иначе потерялись бы молча.
-2. `plutil -lint` по всем файлам локализации.
-3. `swift Tools/make-icon.swift` — генератор иконки должен собирать валидный `.icns`.
-4. `./build.sh` — сборка бандла (на раннере сертификата нет, подпись ad-hoc).
-5. **Самопроверка** — см. ниже.
-6. Проверки бандла: валидность `Info.plist`, целостность подписи,
-   `LSUIElement = true`, наличие иконки и всех 14 локализаций.
-7. Загрузка `.app` артефактом.
-
-Самопроверка (`NOTCHLIMITS_SELFTEST=1`) не требует ни сети, ни Keychain, ни
-оконного сервера и покрывает:
-
-- разбор ответов Claude и Codex, включая мусор, `null`-окна и неизвестные ключи;
-- порядок и названия окон, вывод названия из `limit_window_seconds`;
-- разбор claims JWT;
-- форматирование времени, возраста и процентов;
-- сериализацию кэша и настройки хоткея;
-- полноту всех локализаций: одинаковый набор ключей, отсутствие пустых значений
-  и **совпадение спецификаторов формата с английским** — иначе `String(format:)`
-  уронил бы приложение на чужом языке.
-
-[`.github/workflows/release.yml`](.github/workflows/release.yml) — по тегу `v*`
-или вручную с указанием версии. Собирает, гоняет самопроверку, сверяет версию
-в `Info.plist` с тегом, пакует бандл через `ditto` (обычный `zip` портит подпись),
-считает SHA-256 и публикует релиз с приложенными `.zip` и `SHA256SUMS.txt`.
-
-Заметки к релизу собираются автоматически: инструкция по установке (включая
-обязательное снятие карантина — сборка ad-hoc), список коммитов с прошлого тега,
-таблица состава (версия, минимальная macOS, размер, языки, тип подписи)
-и контрольная сумма.
-
-Версия берётся из переменной `NOTCHLIMITS_VERSION`, иначе из файла
-[`VERSION`](VERSION):
+Version comes from `NOTCHLIMITS_VERSION`, else the [`VERSION`](VERSION) file:
 
 ```bash
-NOTCHLIMITS_VERSION=1.2.0 ./build.sh
+NOTCHLIMITS_VERSION=1.2.0 ./build.sh    # build
+git tag v1.2.0 && git push origin v1.2.0    # release
 ```
 
-Выпустить релиз:
+## Debug modes
 
-```bash
-git tag v1.2.0 && git push origin v1.2.0
-```
+Environment variables for running the binary directly (`./build/NotchLimits.app/Contents/MacOS/NotchLimits`):
 
-## Отладочные режимы
-
-Переменные окружения для запуска бинарника напрямую
-(`./build/NotchLimits.app/Contents/MacOS/NotchLimits`):
-
-| Переменная | Что делает |
+| Variable | Effect |
 | --- | --- |
-| `NOTCHLIMITS_PROBE=1` | Проверяет хоткеи и парсер Claude, опрашивает реальные аккаунты и печатает результат без GUI |
-| `NOTCHLIMITS_RENDER=<папка>` | Рендерит `panel.png`, `states.png`, `collapsed.png` — картинки из этого README |
-| `-AppleLanguages "(ja)"` | Не переменная, а аргумент: запуск на выбранном языке |
-| `NOTCHLIMITS_SNAPSHOT=<файл.png>` | Снимает реальное окно панели (не требует «Записи экрана») |
-| `NOTCHLIMITS_MOCK=1` | Мок-данные вместо провайдеров |
-| `NOTCHLIMITS_SELFTEST=1` | Оффлайн-самопроверка для CI, ненулевой код при провале |
+| `NOTCHLIMITS_PROBE=1` | Checks hotkeys and the Claude parser, polls real accounts, prints results without GUI |
+| `NOTCHLIMITS_RENDER=<dir>` | Renders `panel.png`, `states.png`, `collapsed.png` — the images in this README |
+| `NOTCHLIMITS_SNAPSHOT=<file.png>` | Snapshots the real panel window (no Screen Recording needed) |
+| `NOTCHLIMITS_MOCK=1` | Mock data instead of providers |
+| `NOTCHLIMITS_SELFTEST=1` | Offline self-test for CI, nonzero exit on failure |
+| `-AppleLanguages "(ja)"` | An argument, not a variable: launch in a chosen language |
 
-## Иконка
+## Icon
 
-`Resources/AppIcon.icns` не хранится «как есть» — он рисуется кодом:
+`Resources/AppIcon.icns` isn't stored as-is — it's drawn in code:
 
 ```bash
 swift Tools/make-icon.swift
 ```
 
-Скрипт отрисовывает все десять размеров iconset и собирает `.icns` через
-`iconutil`. Палитра полос та же, что в `Theme.swift`, так что иконка не разъедется
-с интерфейсом.
+The script renders all ten iconset sizes and assembles the `.icns` via `iconutil`, using the same bar palette as `Theme.swift`.
 
-## Устройство
+## Architecture
 
 ```
 Sources/NotchLimits/
-  App/        точка входа, делегат, контекстное меню, отладочные режимы
-  Notch/      геометрия челки, NSPanel, hover-логика и анимации
-  UI/         SwiftUI-вёрстка панели
-  Model/      типы колонок и окон лимитов
+  App/        entry point, delegate, context menu, debug modes
+  Notch/      notch geometry, NSPanel, hover logic and animations
+  UI/         SwiftUI panel layout
+  Model/      column and limit-window types
   Providers/  Claude (Keychain + api.anthropic.com), Codex (auth.json + chatgpt.com)
-  Core/       планировщик опроса, кэш, уведомления, хоткеи, добавление аккаунтов
+  Core/       poll scheduler, cache, notifications, hotkeys, account setup
 Tools/
-  make-strings.py   переводы для всех языков
-  make-icon.swift   иконка приложения
+  make-strings.py   translations for every language
+  make-icon.swift   app icon
 ```
 
-Пара мест, где реализация неочевидна и менять её нужно осторожно:
+A few spots where the implementation is subtle and needs care:
 
-- `NotchPanel.constrainFrameRect(_:to:)` возвращает рамку без изменений. Иначе
-  AppKit сдвинет окно из-под меню-бара и панель перестанет прилипать к челке.
-- Уровень окна — `.popUpMenu`, а не `.statusBar + 1`: на свежих macOS меню-бар
-  рисуется выше, и панель оказалась бы под пунктами меню.
-- `NotchHostingView.safeAreaInsets` занулён: окно само стоит поверх выреза,
-  и добавочная safe area сдвинула бы содержимое ещё на высоту челки.
-- При закрытии рамка окна ужимается на 0,35 с позже старта анимации, чтобы
-  не срезать её последние кадры.
+- `NotchPanel.constrainFrameRect(_:to:)` returns the frame unchanged. Otherwise AppKit shoves the window out from under the menu bar and it stops hugging the notch.
+- Window level is `.popUpMenu`, not `.statusBar + 1`: on recent macOS the menu bar draws higher and the panel would fall behind menu items.
+- `NotchHostingView.safeAreaInsets` is zeroed: the window already sits over the cutout, and an extra safe area would push content down by the notch height again.
+- On close, the window frame shrinks 0.35 s after the animation starts, so its last frames aren't clipped.
