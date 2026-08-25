@@ -9,6 +9,7 @@ actor ClaudeProvider: UsageProvider {
     private struct CachedToken {
         let value: String
         let expiresAt: Date?
+        let plan: String?
 
         var isUsable: Bool {
             guard let expiresAt else { return true }
@@ -29,8 +30,10 @@ actor ClaudeProvider: UsageProvider {
             return .reauth(L.t("column.reauth.claude"))
         }
 
+        let subtitle = token.plan.map { Self.humanized($0) }
+
         let headers = [
-            "Authorization": "Bearer \(token)",
+            "Authorization": "Bearer \(token.value)",
             "anthropic-beta": "oauth-2025-04-20",
             // Без «родного» User-Agent эндпоинт заметно чаще отвечает 429.
             "User-Agent": Self.userAgent(),
@@ -48,7 +51,7 @@ actor ClaudeProvider: UsageProvider {
                 guard let windows = Self.parse(response.data), !windows.isEmpty else {
                     return .failure(L.t("error.parse"))
                 }
-                return .success(UsageSnapshot(subtitle: nil, windows: windows))
+                return .success(UsageSnapshot(subtitle: subtitle, windows: windows))
             case 401, 403:
                 tokens[service] = nil
                 return .reauth(L.t("column.reauth.claude"))
@@ -62,8 +65,8 @@ actor ClaudeProvider: UsageProvider {
 
     // MARK: - Токен
 
-    private func token(for service: String) async -> String? {
-        if let cached = tokens[service], cached.isUsable { return cached.value }
+    private func token(for service: String) async -> CachedToken? {
+        if let cached = tokens[service], cached.isUsable { return cached }
         tokens[service] = nil
 
         // SecItemCopyMatching блокирует поток, пока пользователь отвечает на диалог.
@@ -72,10 +75,12 @@ actor ClaudeProvider: UsageProvider {
         }.value
 
         guard let credentials else { return nil }
-        let cached = CachedToken(value: credentials.accessToken, expiresAt: credentials.expiresAt)
+        let cached = CachedToken(value: credentials.accessToken,
+                                 expiresAt: credentials.expiresAt,
+                                 plan: credentials.plan)
         guard cached.isUsable else { return nil }
         tokens[service] = cached
-        return cached.value
+        return cached
     }
 
     /// Считается один раз за запуск: `static let` инициализируется лениво и потокобезопасно.
