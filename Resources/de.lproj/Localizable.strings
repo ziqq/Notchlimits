@@ -1,0 +1,97 @@
+/* NotchLimits — de. Собрано Tools/make-strings.py */
+
+// Окна лимитов и время
+"reset.days" = "Zurücksetzung in %1$d T %2$d Std";
+"reset.hours" = "Zurücksetzung in %1$d Std %2$d Min";
+"reset.minutes" = "Zurücksetzung in %d Min";
+"reset.imminent" = "Wird gerade zurückgesetzt";
+"age.justNow" = "gerade eben";
+"age.seconds" = "vor %d s";
+"age.minutes" = "vor %d Min";
+"age.hours" = "vor %d Std";
+"age.days" = "vor %d T";
+"window.fiveHour" = "5-Stunden-Fenster";
+"window.week" = "Wochenfenster";
+"window.hours" = "%d-Stunden-Fenster";
+"window.days" = "%d-Tage-Fenster";
+"window.generic" = "Limitfenster";
+"format.percent" = "%d %%";
+
+// Колонка
+"column.updating" = "wird aktualisiert…";
+"column.stale" = "Daten von %@";
+"column.reauth.claude" = "Neu anmelden: claude starten";
+"column.reauth.codex" = "Neu anmelden: codex starten";
+
+// Панель
+"panel.updated" = "Aktualisiert %@";
+"panel.noData" = "Noch keine Daten";
+"panel.refresh.help" = "Alle Spalten aktualisieren";
+"panel.empty.title" = "Keine Accounts";
+"panel.empty.hint" = "Rechtsklick → „Claude-Account hinzufügen…“ oder „Codex-Account hinzufügen…“";
+"panel.hidden.title" = "Alle Spalten ausgeblendet";
+"panel.hidden.hint" = "Rechtsklick → „Ausgeblendete Spalten zeigen“";
+
+// Контекстное меню
+"menu.refresh" = "Aktualisieren";
+"menu.addClaude" = "Claude-Account hinzufügen…";
+"menu.addCodex" = "Codex-Account hinzufügen…";
+"menu.hideColumn" = "Spalte ausblenden";
+"menu.noColumns" = "Keine Spalten";
+"menu.renameColumn" = "Spalte umbenennen";
+"menu.showHidden" = "Ausgeblendete Spalten zeigen";
+"menu.hotKey" = "Tastenkürzel: %@";
+"menu.hotKey.change" = "Ändern…";
+"menu.hotKey.standard" = "Standard (⌘P)";
+"menu.hotKey.disable" = "Ausschalten";
+"menu.loginItem" = "Beim Anmelden starten";
+"menu.quit" = "Beenden";
+
+// Горячая клавиша
+"hotkey.disabled" = "aus";
+"hotkey.recorder.title" = "Tastenkürzel";
+"hotkey.recorder.hint" = "Drücke eine Kombination — mit ⌘, ⌥ oder ⌃.";
+"hotkey.recorder.save" = "Sichern";
+"hotkey.taken.title" = "%@ ist bereits belegt";
+"hotkey.taken.body" = "Eine andere App belegt es bereits. Die vorherige Einstellung bleibt unverändert.";
+
+// Переименование колонки
+"rename.title" = "Spaltenname";
+"rename.hint" = "Wie diese Spalte beschriftet wird. Leer lassen, um zu „%@“ zurückzukehren.";
+
+// Общее
+"common.ok" = "OK";
+"common.cancel" = "Abbrechen";
+"common.save" = "Sichern";
+
+// Добавление аккаунта
+"setup.claude.title" = "Neuer Claude-Account";
+"setup.codex.title" = "Neuer Codex-Account";
+"setup.profile.hint" = "Wähle einen kurzen Namen für diesen Account — etwa work oder personal. Er wird zur Spaltenüberschrift, und das CLI legt seine Einstellungen in einem Ordner dieses Namens ab.";
+"setup.profile.terminal" = "Nach „Erstellen“ öffnet sich das Terminal — melde dich dort an.";
+"setup.profile.folder" = "Ordner: %@";
+"setup.profile.badChars" = "Nur lateinische Buchstaben, Ziffern, Bindestrich und Unterstrich.";
+"setup.profile.exists" = "Ein Profil mit diesem Namen existiert bereits.";
+"setup.create" = "Erstellen";
+"setup.badName.title" = "Ungültiger Profilname";
+"setup.badName.body" = "Nur lateinische Buchstaben, Ziffern, Bindestrich und Unterstrich. Der Name darf nicht leer oder schon vergeben sein.";
+"setup.failed.title" = "Profil konnte nicht erstellt werden";
+"setup.missing.title" = "%@ nicht gefunden";
+"setup.missing.body" = "Installiere das CLI und versuche es erneut:\n\n%@";
+"setup.script.profile" = "Profil: %@";
+"setup.script.hint" = "Melde dich an und schliesse dieses Fenster.";
+"loginItem.failed.title" = "Anmeldeobjekt konnte nicht geändert werden";
+
+// Уведомления
+"notification.title" = "%1$@ — %2$d %%";
+"notification.body" = "%1$@: %2$d %%";
+
+// Ошибки в колонке
+"error.network" = "Netzwerkfehler";
+"error.timeout" = "Zeitüberschreitung";
+"error.noHTTP" = "keine HTTP-Antwort";
+"error.http" = "HTTP %d";
+"error.parse" = "Antwort nicht lesbar";
+"error.unknownSource" = "unbekannte Quelle";
+"error.noProvider" = "kein Anbieter";
+"error.unreachable" = "Netzwerk nicht verfügbar";

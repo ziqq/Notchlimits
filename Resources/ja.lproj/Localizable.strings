@@ -1,0 +1,97 @@
+/* NotchLimits — ja. Собрано Tools/make-strings.py */
+
+// Окна лимитов и время
+"reset.days" = "リセットまで %1$d日 %2$d時間";
+"reset.hours" = "リセットまで %1$d時間 %2$d分";
+"reset.minutes" = "リセットまで %d分";
+"reset.imminent" = "まもなくリセット";
+"age.justNow" = "たった今";
+"age.seconds" = "%d秒前";
+"age.minutes" = "%d分前";
+"age.hours" = "%d時間前";
+"age.days" = "%d日前";
+"window.fiveHour" = "5時間ウィンドウ";
+"window.week" = "週間ウィンドウ";
+"window.hours" = "%d時間ウィンドウ";
+"window.days" = "%d日ウィンドウ";
+"window.generic" = "制限ウィンドウ";
+"format.percent" = "%d%%";
+
+// Колонка
+"column.updating" = "更新中…";
+"column.stale" = "%@のデータ";
+"column.reauth.claude" = "再認証: claude を実行";
+"column.reauth.codex" = "再認証: codex を実行";
+
+// Панель
+"panel.updated" = "更新 %@";
+"panel.noData" = "データがまだありません";
+"panel.refresh.help" = "すべての列を更新";
+"panel.empty.title" = "アカウントなし";
+"panel.empty.hint" = "右クリック →「Claude アカウントを追加…」または「Codex アカウントを追加…」";
+"panel.hidden.title" = "すべての列が非表示";
+"panel.hidden.hint" = "右クリック →「非表示の列を表示」";
+
+// Контекстное меню
+"menu.refresh" = "更新";
+"menu.addClaude" = "Claude アカウントを追加…";
+"menu.addCodex" = "Codex アカウントを追加…";
+"menu.hideColumn" = "列を非表示";
+"menu.noColumns" = "列がありません";
+"menu.renameColumn" = "列の名前を変更";
+"menu.showHidden" = "非表示の列を表示";
+"menu.hotKey" = "ショートカット: %@";
+"menu.hotKey.change" = "変更…";
+"menu.hotKey.standard" = "デフォルト (⌘P)";
+"menu.hotKey.disable" = "オフにする";
+"menu.loginItem" = "ログイン時に起動";
+"menu.quit" = "終了";
+
+// Горячая клавиша
+"hotkey.disabled" = "オフ";
+"hotkey.recorder.title" = "ショートカット";
+"hotkey.recorder.hint" = "組み合わせを押してください — ⌘、⌥、⌃ のいずれかが必要です。";
+"hotkey.recorder.save" = "保存";
+"hotkey.taken.title" = "%@ は使用中です";
+"hotkey.taken.body" = "他のアプリが使っています。以前の設定のままです。";
+
+// Переименование колонки
+"rename.title" = "列の名前";
+"rename.hint" = "この列の見出しです。空にすると「%@」に戻ります。";
+
+// Общее
+"common.ok" = "OK";
+"common.cancel" = "キャンセル";
+"common.save" = "保存";
+
+// Добавление аккаунта
+"setup.claude.title" = "新しい Claude アカウント";
+"setup.codex.title" = "新しい Codex アカウント";
+"setup.profile.hint" = "このアカウントの短い名前を決めてください（例: work、personal）。列の見出しになり、CLI はその名前のフォルダに設定を保存します。";
+"setup.profile.terminal" = "「作成」を押すとターミナルが開きます。ログインはそこで行います。";
+"setup.profile.folder" = "フォルダ: %@";
+"setup.profile.badChars" = "半角英字・数字・ハイフン・アンダースコアのみ。";
+"setup.profile.exists" = "同じ名前のプロファイルがすでにあります。";
+"setup.create" = "作成";
+"setup.badName.title" = "プロファイル名が不正です";
+"setup.badName.body" = "半角英字・数字・ハイフン・アンダースコアのみ。空や既存の名前は使えません。";
+"setup.failed.title" = "プロファイルを作成できませんでした";
+"setup.missing.title" = "%@ が見つかりません";
+"setup.missing.body" = "CLI をインストールして再試行してください:\n\n%@";
+"setup.script.profile" = "プロファイル: %@";
+"setup.script.hint" = "ログインしたら、このウインドウを閉じてください。";
+"loginItem.failed.title" = "ログイン時の起動を変更できませんでした";
+
+// Уведомления
+"notification.title" = "%1$@ — %2$d%%";
+"notification.body" = "%1$@: %2$d%%";
+
+// Ошибки в колонке
+"error.network" = "ネットワークエラー";
+"error.timeout" = "タイムアウト";
+"error.noHTTP" = "HTTP 応答なし";
+"error.http" = "HTTP %d";
+"error.parse" = "応答を解析できません";
+"error.unknownSource" = "不明なソース";
+"error.noProvider" = "プロバイダなし";
+"error.unreachable" = "ネットワークに接続できません";

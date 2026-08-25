@@ -1,0 +1,97 @@
+/* NotchLimits — uk. Собрано Tools/make-strings.py */
+
+// Окна лимитов и время
+"reset.days" = "Скидання через %1$d д %2$d год";
+"reset.hours" = "Скидання через %1$d год %2$d хв";
+"reset.minutes" = "Скидання через %d хв";
+"reset.imminent" = "Скидання ось-ось";
+"age.justNow" = "щойно";
+"age.seconds" = "%d с тому";
+"age.minutes" = "%d хв тому";
+"age.hours" = "%d год тому";
+"age.days" = "%d д тому";
+"window.fiveHour" = "5-годинне вікно";
+"window.week" = "Тижневе вікно";
+"window.hours" = "%d-годинне вікно";
+"window.days" = "%d-денне вікно";
+"window.generic" = "Вікно ліміту";
+"format.percent" = "%d %%";
+
+// Колонка
+"column.updating" = "оновлюю…";
+"column.stale" = "дані %@";
+"column.reauth.claude" = "re-auth: запусти claude";
+"column.reauth.codex" = "re-auth: запусти codex";
+
+// Панель
+"panel.updated" = "Оновлено %@";
+"panel.noData" = "Даних ще немає";
+"panel.refresh.help" = "Оновити всі колонки";
+"panel.empty.title" = "Немає акаунтів";
+"panel.empty.hint" = "Правий клік → «Додати акаунт Claude…» або «Додати акаунт Codex…»";
+"panel.hidden.title" = "Усі колонки приховано";
+"panel.hidden.hint" = "Правий клік → «Показати приховані колонки»";
+
+// Контекстное меню
+"menu.refresh" = "Оновити";
+"menu.addClaude" = "Додати акаунт Claude…";
+"menu.addCodex" = "Додати акаунт Codex…";
+"menu.hideColumn" = "Приховати колонку";
+"menu.noColumns" = "Немає колонок";
+"menu.renameColumn" = "Перейменувати колонку";
+"menu.showHidden" = "Показати приховані колонки";
+"menu.hotKey" = "Гаряча клавіша: %@";
+"menu.hotKey.change" = "Змінити…";
+"menu.hotKey.standard" = "Стандартна (⌘P)";
+"menu.hotKey.disable" = "Вимкнути";
+"menu.loginItem" = "Запуск при вході";
+"menu.quit" = "Вихід";
+
+// Горячая клавиша
+"hotkey.disabled" = "вимкнено";
+"hotkey.recorder.title" = "Гаряча клавіша";
+"hotkey.recorder.hint" = "Натисни комбінацію — обов’язково з ⌘, ⌥ або ⌃.";
+"hotkey.recorder.save" = "Зберегти";
+"hotkey.taken.title" = "Комбінація %@ зайнята";
+"hotkey.taken.body" = "Її вже тримає інша програма. Попереднє налаштування лишилося без змін.";
+
+// Переименование колонки
+"rename.title" = "Назва колонки";
+"rename.hint" = "Як підписати цю колонку. Порожньо — повернути «%@».";
+
+// Общее
+"common.ok" = "Ок";
+"common.cancel" = "Скасувати";
+"common.save" = "Зберегти";
+
+// Добавление аккаунта
+"setup.claude.title" = "Новий акаунт Claude";
+"setup.codex.title" = "Новий акаунт Codex";
+"setup.profile.hint" = "Придумай коротку назву для цього акаунта — наприклад work або personal. Вона стане заголовком колонки, а CLI триматиме налаштування в теці з такою назвою.";
+"setup.profile.terminal" = "Після «Створити» відкриється Термінал — вхід робиться там.";
+"setup.profile.folder" = "Тека: %@";
+"setup.profile.badChars" = "Лише латиниця, цифри, дефіс і підкреслення.";
+"setup.profile.exists" = "Профіль із такою назвою вже є.";
+"setup.create" = "Створити";
+"setup.badName.title" = "Погана назва профілю";
+"setup.badName.body" = "Лише латиниця, цифри, дефіс і підкреслення. Назва не має бути порожньою або вже зайнятою.";
+"setup.failed.title" = "Не вдалося створити профіль";
+"setup.missing.title" = "Не знайшов %@";
+"setup.missing.body" = "Встанови CLI і спробуй знову:\n\n%@";
+"setup.script.profile" = "Профіль: %@";
+"setup.script.hint" = "Увійди в акаунт, потім закрий це вікно.";
+"loginItem.failed.title" = "Не вдалося змінити запуск при вході";
+
+// Уведомления
+"notification.title" = "%1$@ — %2$d %%";
+"notification.body" = "%1$@: %2$d %%";
+
+// Ошибки в колонке
+"error.network" = "збій мережі";
+"error.timeout" = "тайм-аут";
+"error.noHTTP" = "немає HTTP-відповіді";
+"error.http" = "HTTP %d";
+"error.parse" = "не розібрав відповідь";
+"error.unknownSource" = "невідоме джерело";
+"error.noProvider" = "немає провайдера";
+"error.unreachable" = "мережа недоступна";

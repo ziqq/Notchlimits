@@ -1,0 +1,97 @@
+/* NotchLimits — it. Собрано Tools/make-strings.py */
+
+// Окна лимитов и время
+"reset.days" = "Reset tra %1$d g %2$d h";
+"reset.hours" = "Reset tra %1$d h %2$d min";
+"reset.minutes" = "Reset tra %d min";
+"reset.imminent" = "Reset imminente";
+"age.justNow" = "poco fa";
+"age.seconds" = "%d s fa";
+"age.minutes" = "%d min fa";
+"age.hours" = "%d h fa";
+"age.days" = "%d g fa";
+"window.fiveHour" = "Finestra da 5 h";
+"window.week" = "Finestra settimanale";
+"window.hours" = "Finestra da %d h";
+"window.days" = "Finestra da %d g";
+"window.generic" = "Finestra di limite";
+"format.percent" = "%d%%";
+
+// Колонка
+"column.updating" = "aggiornamento…";
+"column.stale" = "dati di %@";
+"column.reauth.claude" = "riautenticazione: avvia claude";
+"column.reauth.codex" = "riautenticazione: avvia codex";
+
+// Панель
+"panel.updated" = "Aggiornato %@";
+"panel.noData" = "Ancora nessun dato";
+"panel.refresh.help" = "Aggiorna tutte le colonne";
+"panel.empty.title" = "Nessun account";
+"panel.empty.hint" = "Clic destro → «Aggiungi account Claude…» o «Aggiungi account Codex…»";
+"panel.hidden.title" = "Tutte le colonne nascoste";
+"panel.hidden.hint" = "Clic destro → «Mostra colonne nascoste»";
+
+// Контекстное меню
+"menu.refresh" = "Aggiorna";
+"menu.addClaude" = "Aggiungi account Claude…";
+"menu.addCodex" = "Aggiungi account Codex…";
+"menu.hideColumn" = "Nascondi colonna";
+"menu.noColumns" = "Nessuna colonna";
+"menu.renameColumn" = "Rinomina colonna";
+"menu.showHidden" = "Mostra colonne nascoste";
+"menu.hotKey" = "Scorciatoia: %@";
+"menu.hotKey.change" = "Modifica…";
+"menu.hotKey.standard" = "Predefinita (⌘P)";
+"menu.hotKey.disable" = "Disattiva";
+"menu.loginItem" = "Avvia all’accesso";
+"menu.quit" = "Esci";
+
+// Горячая клавиша
+"hotkey.disabled" = "disattivata";
+"hotkey.recorder.title" = "Scorciatoia";
+"hotkey.recorder.hint" = "Premi una combinazione — con ⌘, ⌥ o ⌃.";
+"hotkey.recorder.save" = "Salva";
+"hotkey.taken.title" = "%@ è già in uso";
+"hotkey.taken.body" = "Un’altra app lo usa già. L’impostazione precedente resta invariata.";
+
+// Переименование колонки
+"rename.title" = "Nome della colonna";
+"rename.hint" = "Come si chiama questa colonna. Lascia vuoto per tornare a «%@».";
+
+// Общее
+"common.ok" = "OK";
+"common.cancel" = "Annulla";
+"common.save" = "Salva";
+
+// Добавление аккаунта
+"setup.claude.title" = "Nuovo account Claude";
+"setup.codex.title" = "Nuovo account Codex";
+"setup.profile.hint" = "Scegli un nome breve per questo account — per esempio work o personal. Diventerà il titolo della colonna e la CLI terrà le sue impostazioni in una cartella con quel nome.";
+"setup.profile.terminal" = "Dopo «Crea» si apre il Terminale — accedi da lì.";
+"setup.profile.folder" = "Cartella: %@";
+"setup.profile.badChars" = "Solo lettere latine, cifre, trattino e trattino basso.";
+"setup.profile.exists" = "Esiste già un profilo con questo nome.";
+"setup.create" = "Crea";
+"setup.badName.title" = "Nome profilo non valido";
+"setup.badName.body" = "Solo lettere latine, cifre, trattino e trattino basso. Il nome non può essere vuoto o già usato.";
+"setup.failed.title" = "Impossibile creare il profilo";
+"setup.missing.title" = "Impossibile trovare %@";
+"setup.missing.body" = "Installa la CLI e riprova:\n\n%@";
+"setup.script.profile" = "Profilo: %@";
+"setup.script.hint" = "Accedi, poi chiudi questa finestra.";
+"loginItem.failed.title" = "Impossibile modificare l’avvio all’accesso";
+
+// Уведомления
+"notification.title" = "%1$@ — %2$d%%";
+"notification.body" = "%1$@: %2$d%%";
+
+// Ошибки в колонке
+"error.network" = "errore di rete";
+"error.timeout" = "timeout";
+"error.noHTTP" = "nessuna risposta HTTP";
+"error.http" = "HTTP %d";
+"error.parse" = "risposta non leggibile";
+"error.unknownSource" = "origine sconosciuta";
+"error.noProvider" = "nessun provider";
+"error.unreachable" = "rete non disponibile";

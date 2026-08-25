@@ -1,0 +1,97 @@
+/* NotchLimits — en. Собрано Tools/make-strings.py */
+
+// Окна лимитов и время
+"reset.days" = "Resets in %1$dd %2$dh";
+"reset.hours" = "Resets in %1$dh %2$dm";
+"reset.minutes" = "Resets in %dm";
+"reset.imminent" = "Resetting now";
+"age.justNow" = "just now";
+"age.seconds" = "%ds ago";
+"age.minutes" = "%dm ago";
+"age.hours" = "%dh ago";
+"age.days" = "%dd ago";
+"window.fiveHour" = "5-hour window";
+"window.week" = "Weekly window";
+"window.hours" = "%d-hour window";
+"window.days" = "%d-day window";
+"window.generic" = "Limit window";
+"format.percent" = "%d%%";
+
+// Колонка
+"column.updating" = "refreshing…";
+"column.stale" = "data from %@";
+"column.reauth.claude" = "re-auth: run claude";
+"column.reauth.codex" = "re-auth: run codex";
+
+// Панель
+"panel.updated" = "Updated %@";
+"panel.noData" = "No data yet";
+"panel.refresh.help" = "Refresh all columns";
+"panel.empty.title" = "No accounts";
+"panel.empty.hint" = "Right-click → “Add Claude account…” or “Add Codex account…”";
+"panel.hidden.title" = "All columns hidden";
+"panel.hidden.hint" = "Right-click → “Show hidden columns”";
+
+// Контекстное меню
+"menu.refresh" = "Refresh";
+"menu.addClaude" = "Add Claude account…";
+"menu.addCodex" = "Add Codex account…";
+"menu.hideColumn" = "Hide column";
+"menu.noColumns" = "No columns";
+"menu.renameColumn" = "Rename column";
+"menu.showHidden" = "Show hidden columns";
+"menu.hotKey" = "Shortcut: %@";
+"menu.hotKey.change" = "Change…";
+"menu.hotKey.standard" = "Default (⌘P)";
+"menu.hotKey.disable" = "Turn off";
+"menu.loginItem" = "Launch at login";
+"menu.quit" = "Quit";
+
+// Горячая клавиша
+"hotkey.disabled" = "off";
+"hotkey.recorder.title" = "Shortcut";
+"hotkey.recorder.hint" = "Press a combination — it must include ⌘, ⌥ or ⌃.";
+"hotkey.recorder.save" = "Save";
+"hotkey.taken.title" = "%@ is already taken";
+"hotkey.taken.body" = "Another app already holds it. Your previous shortcut is unchanged.";
+
+// Переименование колонки
+"rename.title" = "Column name";
+"rename.hint" = "How this column is labelled. Leave empty to go back to “%@”.";
+
+// Общее
+"common.ok" = "OK";
+"common.cancel" = "Cancel";
+"common.save" = "Save";
+
+// Добавление аккаунта
+"setup.claude.title" = "New Claude account";
+"setup.codex.title" = "New Codex account";
+"setup.profile.hint" = "Pick a short name for this account — for example work or personal. It becomes the column heading, and the CLI keeps its settings in a folder of that name.";
+"setup.profile.terminal" = "After you click Create, Terminal opens — sign in there.";
+"setup.profile.folder" = "Folder: %@";
+"setup.profile.badChars" = "Latin letters, digits, hyphen and underscore only.";
+"setup.profile.exists" = "A profile with this name already exists.";
+"setup.create" = "Create";
+"setup.badName.title" = "Bad profile name";
+"setup.badName.body" = "Latin letters, digits, hyphen and underscore only. The name must not be empty or already taken.";
+"setup.failed.title" = "Could not create the profile";
+"setup.missing.title" = "Couldn’t find %@";
+"setup.missing.body" = "Install the CLI and try again:\n\n%@";
+"setup.script.profile" = "Profile: %@";
+"setup.script.hint" = "Sign in, then close this window.";
+"loginItem.failed.title" = "Could not change launch at login";
+
+// Уведомления
+"notification.title" = "%1$@ — %2$d%%";
+"notification.body" = "%1$@: %2$d%%";
+
+// Ошибки в колонке
+"error.network" = "network error";
+"error.timeout" = "timeout";
+"error.noHTTP" = "no HTTP response";
+"error.http" = "HTTP %d";
+"error.parse" = "could not parse response";
+"error.unknownSource" = "unknown source";
+"error.noProvider" = "no provider";
+"error.unreachable" = "network unavailable";
