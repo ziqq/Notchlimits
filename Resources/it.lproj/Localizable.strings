@@ -85,6 +85,8 @@
 // Уведомления
 "notification.title" = "%1$@ — %2$d%%";
 "notification.body" = "%1$@: %2$d%%";
+"notification.reset.title" = "%@ — limite azzerato";
+"notification.reset.body" = "%@ è di nuovo disponibile";
 
 // Ошибки в колонке
 "error.network" = "errore di rete";

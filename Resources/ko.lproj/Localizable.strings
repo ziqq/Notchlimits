@@ -85,6 +85,8 @@
 // Уведомления
 "notification.title" = "%1$@ — %2$d%%";
 "notification.body" = "%1$@: %2$d%%";
+"notification.reset.title" = "%@ — 한도 초기화";
+"notification.reset.body" = "%@ 다시 사용 가능";
 
 // Ошибки в колонке
 "error.network" = "네트워크 오류";

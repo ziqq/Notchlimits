@@ -19,6 +19,7 @@ enum SelfTest {
         checkCodexParser()
         checkWindowTitles()
         checkJWT()
+        checkNotifications()
         checkFormatting()
         checkCodableRoundTrips()
         checkLocalizations()
@@ -147,6 +148,42 @@ enum SelfTest {
         expect("email прочитан", JWT.email(token) == "user@example.com")
         expect("мусор не ломает", JWT.claims("не.токен") == nil)
         expect("пустая строка не ломает", JWT.expiry("") == nil)
+    }
+
+    private static func checkNotifications() {
+        section("Уведомления о порогах и сбросе")
+        let thresholds: [Double] = [80, 95]
+        let floor: Double = 50
+        func decide(_ stored: String, _ stamp: String, _ util: Double) -> ThresholdNotifier.Decision {
+            ThresholdNotifier.decide(stored: stored, stamp: stamp, utilization: util,
+                                     thresholds: thresholds, resetFloor: floor)
+        }
+
+        // Первое наблюдение окна: сброс не шлём, порог 80 срабатывает.
+        let first = decide("", "100", 90)
+        expect("первое окно без пуша о сбросе", first.postReset == false)
+        expect("порог 80 сработал", first.fireThresholds == [80])
+        expect("пик и метка записаны", first.encoded == "100@80@90")
+
+        // То же окно, дошло до 96 — 80 уже был, шлём только 95.
+        let again = decide("100@80@90", "100", 96)
+        expect("порог 95 сработал", again.fireThresholds == [95])
+        expect("80 повторно не шлём", !again.fireThresholds.contains(80))
+        expect("пик подрос до 96", again.encoded == "100@80,95@96")
+
+        // Метка сменилась после тяжёлого окна — шлём сброс, пороги перевзведены.
+        let reset = decide("100@80,95@96", "200", 4)
+        expect("сброс после тяжёлого окна", reset.postReset == true)
+        expect("пороги перевзведены", reset.fireThresholds.isEmpty)
+        expect("новая метка, пик обнулён", reset.encoded == "200@@4")
+
+        // Метка сменилась, но окно почти не трогали — сброс не шлём.
+        let quiet = decide("100@@30", "200", 2)
+        expect("тихое окно без пуша о сбросе", quiet.postReset == false)
+
+        // Старый формат состояния без поля пика читается и не ломает разбор.
+        let legacy = decide("100@80,95", "200", 3)
+        expect("старый формат: пик отсутствует → не шумим", legacy.postReset == false)
     }
 
     private static func checkFormatting() {
