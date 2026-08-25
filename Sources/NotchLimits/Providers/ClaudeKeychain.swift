@@ -14,6 +14,9 @@ enum ClaudeKeychain {
     struct Credentials {
         let accessToken: String
         let expiresAt: Date?
+        /// План подписки из записи Keychain («pro», «max»…). Почты Anthropic
+        /// нигде не отдаёт, поэтому в подзаголовок кладём хотя бы план.
+        let plan: String?
     }
 
     /// Имена всех generic password с нашим префиксом.
@@ -57,7 +60,8 @@ enum ClaudeKeychain {
         if let millis = oauth["expiresAt"] as? Double {
             expiresAt = Date(timeIntervalSince1970: millis / 1000)
         }
-        return Credentials(accessToken: token, expiresAt: expiresAt)
+        let plan = (oauth["subscriptionType"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        return Credentials(accessToken: token, expiresAt: expiresAt, plan: plan)
     }
 
     /// Папка профиля для записи с суффиксом-хэшем.

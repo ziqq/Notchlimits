@@ -11,14 +11,16 @@ struct ColumnView: View {
                 .foregroundColor(Theme.secondary)
                 .lineLimit(1)
 
-            if let subtitle = column.subtitle, !subtitle.isEmpty {
-                Text(subtitle)
-                    .font(.system(size: 9))
-                    .foregroundColor(Theme.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .padding(.top, 2)
-            }
+            // Строку подзаголовка резервируем всегда — даже когда её нет.
+            // Иначе колонка с почтой (Codex) уезжает вниз относительно
+            // колонки без неё (Claude), и первые строки лимитов не совпадают.
+            Text(column.subtitle?.isEmpty == false ? column.subtitle! : " ")
+                .font(.system(size: 9))
+                .foregroundColor(Theme.tertiary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.top, 2)
+                .opacity(column.subtitle?.isEmpty == false ? 1 : 0)
 
             Spacer().frame(height: 10)
 
