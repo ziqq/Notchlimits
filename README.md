@@ -1,4 +1,4 @@
-<img src="docs/icon.png" width="120" align="right" alt="Иконка NotchLimits">
+<img src="docs/icon.png" width="48" height="48" align="right" alt="Иконка NotchLimits">
 
 # NotchLimits
 
