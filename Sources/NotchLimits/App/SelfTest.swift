@@ -19,6 +19,7 @@ enum SelfTest {
         checkCodexParser()
         checkWindowTitles()
         checkJWT()
+        checkClaudeAuth()
         checkNotifications()
         checkFormatting()
         checkCodableRoundTrips()
@@ -57,7 +58,8 @@ enum SelfTest {
           "seven_day":        {"utilization": 63,   "resets_at": "2026-08-30T09:00:00+00:00"},
           "seven_day_opus":   {"utilization": 91,   "resets_at": "2026-08-30T09:00:00.500Z"},
           "brand_new_window": {"utilization": 4,    "resets_at": "2026-08-26T00:00:00Z"},
-          "extra_usage":      {"utilization": 999,  "used_credits": 12.5},
+          "extra_usage":      {"utilization": null, "used_credits": 10308,
+                               "currency": "USD",   "decimal_places": 2},
           "plan": "max",
           "nested": {"no_utilization": 1}
         }
@@ -88,11 +90,19 @@ enum SelfTest {
 
         let stats = ClaudeProvider.stats(Data(payload.utf8))
         expect("extra_usage ушёл в статистику", stats.first?.key == "extraUsage")
-        expect("дробное значение с одним знаком", stats.first?.value == "12.5")
+        // Сумма минорная: 10308 при decimal_places=2 — это 103.08, а не 10308.
+        expect("минорные единицы превращены в сумму",
+               stats.first.map { $0.value.contains("103") && !$0.value.contains("10308") } == true,
+               stats.first?.value ?? "нет строки")
         expect("нулевой extra_usage не показываем",
                ClaudeProvider.stats(Data(#"{"extra_usage":{"used_credits":0}}"#.utf8)).isEmpty)
         expect("без extra_usage статистики нет",
                ClaudeProvider.stats(Data("{}".utf8)).isEmpty)
+        expect("отсутствие decimal_places не ломает",
+               ClaudeProvider.stats(Data(#"{"extra_usage":{"used_credits":500}}"#.utf8))
+                   .first?.value.contains("5") == true)
+        expect("нулевой decimal_places оставляет целое",
+               Format.money(minor: 42, places: 0, currency: "USD").contains("42"))
     }
 
     private static func checkCodexParser() {
@@ -182,6 +192,71 @@ enum SelfTest {
         expect("email прочитан", JWT.email(token) == "user@example.com")
         expect("мусор не ломает", JWT.claims("не.токен") == nil)
         expect("пустая строка не ломает", JWT.expiry("") == nil)
+    }
+
+    private static func checkClaudeAuth() {
+        section("Claude: запись Keychain и обновление токена")
+        let now = Date(timeIntervalSince1970: 1_000_000)
+
+        // Запись CLI. Сроки в ней — миллисекунды.
+        let item: [String: Any] = [
+            "claudeAiOauth": [
+                "accessToken": "at",
+                "refreshToken": "rt",
+                "expiresAt": 1_000_000_000 as NSNumber,
+                "refreshTokenExpiresAt": 4_000_000_000_000 as NSNumber,
+                "subscriptionType": "max",
+                "scopes": ["user:inference", "user:profile"]
+            ]
+        ]
+        guard let parsed = ClaudeKeychain.parse(item) else {
+            expect("запись разобрана", false)
+            return
+        }
+        expect("запись разобрана", true)
+        expect("миллисекунды переведены в дату",
+               parsed.expiresAt == Date(timeIntervalSince1970: 1_000_000))
+        expect("refresh-токен прочитан", parsed.refreshToken == "rt")
+        expect("права прочитаны", parsed.scopes.count == 2)
+        expect("план прочитан", parsed.plan == "max")
+        expect("живой refresh-токен годен к обновлению", parsed.isRefreshable)
+
+        expect("запись без refresh-токена не обновляема",
+               ClaudeKeychain.parse(["claudeAiOauth": ["accessToken": "at"]])?.isRefreshable == false)
+        expect("протухший refresh-токен не обновляем",
+               ClaudeKeychain.parse(["claudeAiOauth": [
+                   "accessToken": "at", "refreshToken": "rt",
+                   "refreshTokenExpiresAt": 1000 as NSNumber]])?.isRefreshable == false)
+        expect("чужой JSON не ломает", ClaudeKeychain.parse(["other": 1]) == nil)
+
+        // Ответ на обновление: сроки относительные, в секундах.
+        let response = """
+        {"access_token":"new","refresh_token":"newrt","expires_in":3600,
+         "refresh_token_expires_in":7200,"scope":"user:inference user:profile"}
+        """
+        guard let tokens = ClaudeOAuth.parse(Data(response.utf8), now: now) else {
+            expect("ответ разобран", false)
+            return
+        }
+        expect("ответ разобран", true)
+        expect("срок доступа отсчитан от сейчас",
+               tokens.expiresAt == now.addingTimeInterval(3_600))
+        expect("ротация подхвачена", tokens.refreshToken == "newrt")
+        expect("срок refresh-токена отсчитан",
+               tokens.refreshTokenExpiresAt == now.addingTimeInterval(7_200))
+        expect("права разобраны из строки", tokens.scopes == ["user:inference", "user:profile"])
+
+        // Без ротации сервер не присылает refresh_token — прежний остаётся годен,
+        // и затирать его нулём нельзя.
+        let noRotation = ClaudeOAuth.parse(Data(#"{"access_token":"a","expires_in":60}"#.utf8), now: now)
+        expect("без ротации refresh-токен не трогаем", noRotation?.refreshToken == nil)
+        expect("без ротации срок refresh-токена не трогаем", noRotation?.refreshTokenExpiresAt == nil)
+
+        expect("ответ без токена отвергнут",
+               ClaudeOAuth.parse(Data(#"{"expires_in":60}"#.utf8), now: now) == nil)
+        expect("ответ без срока отвергнут",
+               ClaudeOAuth.parse(Data(#"{"access_token":"a"}"#.utf8), now: now) == nil)
+        expect("мусор не ломает", ClaudeOAuth.parse(Data("не json".utf8), now: now) == nil)
     }
 
     private static func checkNotifications() {

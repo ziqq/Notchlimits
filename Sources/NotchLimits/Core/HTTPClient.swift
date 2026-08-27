@@ -1,7 +1,8 @@
 import Foundation
 
-/// Единственные сетевые запросы приложения — официальные usage-эндпоинты
-/// Anthropic и OpenAI. Кэш URLSession отключён, куки не хранятся.
+/// Сетевые запросы приложения — только официальные эндпоинты Anthropic и
+/// OpenAI: usage у обоих плюс обновление OAuth-токена Anthropic.
+/// Кэш URLSession отключён, куки не хранятся.
 struct HTTPClient {
 
     static let shared = HTTPClient()
@@ -30,12 +31,30 @@ struct HTTPClient {
 
     /// GET с одним ретраем на сетевую ошибку или 5xx.
     func get(_ url: URL, headers: [String: String]) async -> Result<Response, Failure> {
+        await send("GET", url, headers: headers, body: nil)
+    }
+
+    /// POST с телом JSON. Ретрай тот же, что у GET: обновление токена
+    /// идемпотентно ровно до тех пор, пока сервер не ответил, — а 5xx и обрыв
+    /// означают, что ответа не было.
+    func post(_ url: URL, headers: [String: String], json: [String: Any]) async -> Result<Response, Failure> {
+        guard let body = try? JSONSerialization.data(withJSONObject: json) else {
+            return .failure(.transport(L.t("error.network")))
+        }
+        var merged = headers
+        merged["Content-Type"] = "application/json"
+        return await send("POST", url, headers: merged, body: body)
+    }
+
+    private func send(_ method: String, _ url: URL,
+                      headers: [String: String], body: Data?) async -> Result<Response, Failure> {
         var lastError = L.t("error.unreachable")
         for attempt in 0..<2 {
             if attempt > 0 { try? await Task.sleep(nanoseconds: 800_000_000) }
             do {
                 var request = URLRequest(url: url)
-                request.httpMethod = "GET"
+                request.httpMethod = method
+                request.httpBody = body
                 for (key, value) in headers { request.setValue(value, forHTTPHeaderField: key) }
 
                 let (data, response) = try await session.data(for: request)

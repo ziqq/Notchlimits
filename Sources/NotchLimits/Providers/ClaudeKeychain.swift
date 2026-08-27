@@ -17,6 +17,19 @@ enum ClaudeKeychain {
         /// План подписки из записи Keychain («pro», «max»…). Почты Anthropic
         /// нигде не отдаёт, поэтому в подзаголовок кладём хотя бы план.
         let plan: String?
+        /// Токен обновления и его срок — ими продлевается доступ, когда
+        /// accessToken протух, а перезапускать CLI некому.
+        let refreshToken: String?
+        let refreshTokenExpiresAt: Date?
+        /// Права из записи: их же отправляем при обновлении, чтобы не сузить
+        /// набор молча.
+        let scopes: [String]
+
+        var isRefreshable: Bool {
+            guard let refreshToken, !refreshToken.isEmpty else { return false }
+            guard let refreshTokenExpiresAt else { return true }
+            return refreshTokenExpiresAt.timeIntervalSinceNow > 60
+        }
     }
 
     /// Имена всех generic password с нашим префиксом.
@@ -42,6 +55,13 @@ enum ClaudeKeychain {
 
     /// Чтение секрета. Блокирующий вызов — только вне главного потока.
     static func credentials(service: String) -> Credentials? {
+        guard let json = rawItem(service: service) else { return nil }
+        return parse(json)
+    }
+
+    /// Сырой JSON записи. Нужен отдельно, чтобы при записи сохранить поля,
+    /// про которые мы не знаем: их пишет CLI, и терять их нельзя.
+    private static func rawItem(service: String) -> [String: Any]? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -51,17 +71,81 @@ enum ClaudeKeychain {
         var result: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
               let data = result as? Data,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let oauth = json["claudeAiOauth"] as? [String: Any],
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return json
+    }
+
+    /// Разбор записи. Вынесен отдельно — так его покрывает самопроверка,
+    /// не трогая Keychain.
+    static func parse(_ json: [String: Any]) -> Credentials? {
+        guard let oauth = json["claudeAiOauth"] as? [String: Any],
               let token = oauth["accessToken"] as? String, !token.isEmpty
         else { return nil }
 
-        var expiresAt: Date?
-        if let millis = oauth["expiresAt"] as? Double {
-            expiresAt = Date(timeIntervalSince1970: millis / 1000)
-        }
         let plan = (oauth["subscriptionType"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        return Credentials(accessToken: token, expiresAt: expiresAt, plan: plan)
+        let refresh = (oauth["refreshToken"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        return Credentials(accessToken: token,
+                           expiresAt: millis(oauth["expiresAt"]),
+                           plan: plan,
+                           refreshToken: refresh,
+                           refreshTokenExpiresAt: millis(oauth["refreshTokenExpiresAt"]),
+                           scopes: (oauth["scopes"] as? [String]) ?? [])
+    }
+
+    /// Сроки в записи хранятся в миллисекундах.
+    private static func millis(_ value: Any?) -> Date? {
+        guard let millis = (value as? NSNumber)?.doubleValue, millis > 0 else { return nil }
+        return Date(timeIntervalSince1970: millis / 1000)
+    }
+
+    /// Можно ли вообще писать в эту запись: пишем в неё же то, что там лежит.
+    ///
+    /// Нужно до обновления, а не после: сервер вправе ротировать refresh-токен,
+    /// и если записать новый мы не сможем, прежний окажется отозван, а CLI
+    /// останется с мёртвым токеном. Проще не обновляться вовсе.
+    static func isWritable(service: String) -> Bool {
+        guard let json = rawItem(service: service),
+              let data = try? JSONSerialization.data(withJSONObject: json)
+        else { return false }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service
+        ]
+        return SecItemUpdate(query as CFDictionary,
+                             [kSecValueData as String: data] as CFDictionary) == errSecSuccess
+    }
+
+    /// Записать обновлённые токены обратно в запись CLI.
+    ///
+    /// Читаем прямо перед записью и накладываем изменения на свежий JSON:
+    /// между нашим чтением и записью CLI мог сам обновить токен, и затирать
+    /// его целой старой копией нельзя. Все незнакомые поля сохраняются.
+    /// Блокирующий вызов — только вне главного потока.
+    @discardableResult
+    static func save(service: String, tokens: ClaudeOAuth.Tokens) -> Bool {
+        guard var json = rawItem(service: service) else { return false }
+        var oauth = (json["claudeAiOauth"] as? [String: Any]) ?? [:]
+
+        oauth["accessToken"] = tokens.accessToken
+        oauth["expiresAt"] = tokens.expiresAt.timeIntervalSince1970 * 1000
+        // Ротация необязательна: если сервер не прислал новый токен обновления,
+        // прежний остаётся действующим и трогать его нельзя.
+        if let refreshToken = tokens.refreshToken { oauth["refreshToken"] = refreshToken }
+        if let refreshExpiry = tokens.refreshTokenExpiresAt {
+            oauth["refreshTokenExpiresAt"] = refreshExpiry.timeIntervalSince1970 * 1000
+        }
+        if let scopes = tokens.scopes, !scopes.isEmpty { oauth["scopes"] = scopes }
+
+        json["claudeAiOauth"] = oauth
+        guard let data = try? JSONSerialization.data(withJSONObject: json) else { return false }
+
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service
+        ]
+        return SecItemUpdate(query as CFDictionary,
+                             [kSecValueData as String: data] as CFDictionary) == errSecSuccess
     }
 
     /// Папка профиля для записи с суффиксом-хэшем.
