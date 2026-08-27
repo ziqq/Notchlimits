@@ -89,7 +89,7 @@ Width is 250 pt per column, no less than 500 pt and no wider than the screen min
 ![Column states](docs/states.png)
 
 - **Fresh data** — progress bar and time to reset. Green up to 60 %, yellow 60–85 %, red above.
-- **`re-auth: run claude` / `codex`** — no token, expired, or a 401. The panel never refreshes tokens itself; the CLI does.
+- **`re-auth: run claude` / `codex`** — no usable token and no way to renew it: the refresh token is gone or rejected (Claude), or auth is missing/expired (Codex).
 - **`data N min ago`** — grey note: no fresh response right now (rate limit, network, just launched); last known values shown.
 - **`updating…`** — no data yet.
 
@@ -121,7 +121,29 @@ anthropic-beta: oauth-2025-04-20
 User-Agent: claude-code/<installed CLI version>
 ```
 
-The native `User-Agent` matters — without it the endpoint returns 429 far more often. Any field-object with a numeric `utilization` counts as a window (`extra_usage` ignored), so new windows appear on their own, including internal model code-names like `nimbus_quill`. Titles: `five_hour`/`seven_day` get friendly labels, known prefixes expand (`seven_day_opus` → "Weekly window · Opus"), the rest are shown as words rather than raw snake_case. The subtitle shows the plan (`Pro`, `Max`) from the Keychain entry — Anthropic exposes no email anywhere. `extra_usage` isn't a window (it's spend, not a share of a quota), so it goes to the stats line instead.
+The native `User-Agent` matters — without it the endpoint returns 429 far more often. Any field-object with a numeric `utilization` counts as a window, so new windows appear on their own, including internal model code-names like `nimbus_quill`. Titles: `five_hour`/`seven_day` get friendly labels, known prefixes expand (`seven_day_opus` → "Weekly window · Opus"), the rest are shown as words rather than raw snake_case. `extra_usage` is excluded from the windows — it's spend, not a share of a quota — and goes to the stats line instead. The subtitle shows the plan (`Pro`, `Max`) from the Keychain entry; neither endpoint returns an email for Claude.
+
+### Token refresh
+
+A Claude access token lives a few hours. If the CLI isn't run, it expires and the column freezes — so when the token is expired and the Keychain entry holds a live `refreshToken`, the panel renews it itself, exactly as the CLI does:
+
+```
+POST https://platform.claude.com/v1/oauth/token
+Content-Type: application/json
+
+{"grant_type": "refresh_token", "refresh_token": "…",
+ "client_id": "9d1c250a-e61b-44d9-88ed-5944d1962f5e", "scope": "<scopes from the entry>"}
+```
+
+`client_id` is Claude Code's public client identifier — no secret involved. Scopes are taken from the entry rather than hardcoded, so the set is never silently narrowed.
+
+Three details that matter:
+
+- **The refresh token rotates.** The response usually carries a new one, and the old one stops working the moment it does. So the result is written back to the Keychain entry — not writing it back would break the CLI's own login. The write merges into a *freshly read* entry, preserving `subscriptionType`, `rateLimitTier` and every field the panel doesn't know about.
+- **Writability is checked before the request**, by writing the entry back unchanged. If the Keychain won't let us write, no refresh is attempted at all — otherwise rotation would revoke the old token with nowhere to store the new one.
+- **A 401 marks that exact token as rejected**, so the next cycle renews instead of re-reading the same dead token from the Keychain. If the entry meanwhile holds a different token, the CLI refreshed first and that one is used.
+
+Renewal happens only on expiry, never preemptively, which keeps the window for racing the CLI small.
 
 **Codex.** Auth from `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`); `apikey` mode can't reach the usage endpoint — ChatGPT login is required. Token lifetime from the JWT `exp` claim, email for the column subtitle from `id_token`.
 
@@ -152,7 +174,7 @@ User-Agent: codex_cli_rs/<version>
 
 ## Privacy
 
-The app's only network requests are the two official usage endpoints above. Nowhere else. Tokens live in memory only — never logged, never written to disk, never cached. Only settings and last percentages (with reset times) go to `UserDefaults`, without a single token. `URLSession` runs ephemeral, no cookies, no disk cache.
+The app talks to three official endpoints and nowhere else: the two usage endpoints above, plus Anthropic's OAuth token endpoint when a Claude access token has expired (see [Token refresh](#token-refresh)). Tokens are never logged and never written to a plain file; the only thing written back is the refreshed Claude token, into the same Keychain entry the CLI already owns. Only settings and last percentages (with reset times) go to `UserDefaults`, without a single token. `URLSession` runs ephemeral, no cookies, no disk cache.
 
 ## CI & releases
 
