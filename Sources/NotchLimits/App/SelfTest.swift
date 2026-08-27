@@ -58,6 +58,7 @@ enum SelfTest {
           "seven_day":        {"utilization": 63,   "resets_at": "2026-08-30T09:00:00+00:00"},
           "seven_day_opus":   {"utilization": 91,   "resets_at": "2026-08-30T09:00:00.500Z"},
           "brand_new_window": {"utilization": 4,    "resets_at": "2026-08-26T00:00:00Z"},
+          "nimbus_quill":     {"utilization": 0,    "resets_at": null},
           "extra_usage":      {"is_enabled": true, "used_credits": 10308,
                                "currency": "USD",  "decimal_places": 2},
           "plan": "max",
@@ -71,6 +72,12 @@ enum SelfTest {
         expect("окон ровно 4", windows.count == 4, "получено \(windows.count)")
         expect("extra_usage отброшен", !windows.contains { $0.key == "extra_usage" })
         expect("поля без utilization отброшены", !windows.contains { $0.key == "nested" })
+        expect("инертное окно (0 % без сброса) скрыто",
+               !windows.contains { $0.key == "nimbus_quill" })
+        expect("окно 0 % с датой сброса остаётся",
+               ClaudeProvider.parse(Data(#"{"five_hour":{"utilization":0,"resets_at":"2026-08-26T00:00:00Z"}}"#.utf8))?.count == 1)
+        expect("если все окна инертны — показываем как есть",
+               ClaudeProvider.parse(Data(#"{"nimbus_quill":{"utilization":0}}"#.utf8))?.count == 1)
         expect("five_hour первым", windows.first?.key == "five_hour")
         expect("seven_day вторым", windows.dropFirst().first?.key == "seven_day")
         expect("дробный процент сохранён", windows.first?.utilization == 12.5)

@@ -214,7 +214,14 @@ actor ClaudeProvider: UsageProvider {
                                        resetsAt: resetsAt))
         }
 
-        return windows.sorted { lhs, rhs in
+        // Инертные окна-заглушки не показываем: 0 % и без даты сброса — это
+        // внутренние кодовые имена (например `nimbus_quill`), которые сервер
+        // отдаёт про запас. Смотреть там не на что, а строка сбивает с толку.
+        // Оживёт (появится процент или дата сброса) — вернётся само.
+        let active = windows.filter { !($0.utilization == 0 && $0.resetsAt == nil) }
+        let visible = active.isEmpty ? windows : active
+
+        return visible.sorted { lhs, rhs in
             let lhsRank = rank(lhs.key), rhsRank = rank(rhs.key)
             if lhsRank != rhsRank { return lhsRank < rhsRank }
             return lhs.key < rhs.key
