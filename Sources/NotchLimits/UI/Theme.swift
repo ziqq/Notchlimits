@@ -62,6 +62,18 @@ enum Format {
         return L.t("reset.minutes", max(minutes, 1))
     }
 
+    /// Точный момент сброса для тултипа: «сегодня, 13:30», «завтра, 09:00»,
+    /// «2 сент. 2026 г., 23:00». «Сегодня/Завтра» и порядок дают форматтеры
+    /// системы по текущей локали — свои строки на 14 языков заводить не нужно.
+    static func resetAbsolute(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.doesRelativeDateFormatting = true
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
     /// Возраст данных: «12 с назад», «3 мин назад», «2 ч назад».
     static func age(_ date: Date, now: Date = Date()) -> String {
         let seconds = max(0, Int(now.timeIntervalSince(date)))

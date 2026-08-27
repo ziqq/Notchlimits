@@ -159,5 +159,7 @@ struct LimitRowView: View {
                     .foregroundColor(Theme.tertiary)
             }
         }
+        // При наведении — точный момент сброса: «сегодня, 13:30».
+        .help(window.resetsAt.map(Format.resetAbsolute) ?? "")
     }
 }
