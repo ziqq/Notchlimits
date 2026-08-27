@@ -19,6 +19,8 @@ actor ClaudeProvider: UsageProvider {
     }
 
     private var tokens: [String: CachedToken] = [:]
+    /// Токены, отвергнутые сервером: брать их из Keychain повторно бессмысленно.
+    private var rejected: [String: String] = [:]
     private let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
 
     func fetch(_ account: DiscoveredAccount) async -> FetchOutcome {
@@ -55,6 +57,10 @@ actor ClaudeProvider: UsageProvider {
                                               windows: windows,
                                               stats: Self.stats(response.data)))
             case 401, 403:
+                // Сервер отверг токен, хотя по сроку тот ещё жив — значит,
+                // он отозван. Помечаем, чтобы следующий заход не взял его же
+                // из Keychain снова, а сразу пошёл обновляться.
+                rejected[service] = token.value
                 tokens[service] = nil
                 return .reauth(L.t("column.reauth.claude"))
             case 429:
@@ -71,18 +77,77 @@ actor ClaudeProvider: UsageProvider {
         if let cached = tokens[service], cached.isUsable { return cached }
         tokens[service] = nil
 
-        // SecItemCopyMatching блокирует поток, пока пользователь отвечает на диалог.
-        let credentials = await Task.detached(priority: .utility) {
+        guard let credentials = await read(service) else { return nil }
+        // Тот самый токен, что сервер уже отверг, брать снова нельзя — только
+        // обновлять. Если в записи оказался другой, значит CLI обновился сам.
+        let isRejected = rejected[service] == credentials.accessToken
+        if !isRejected {
+            rejected[service] = nil
+            if let cached = Self.cache(credentials) {
+                tokens[service] = cached
+                return cached
+            }
+        }
+
+        // Токен протух. Раньше мы просто просили запустить claude; теперь
+        // продлеваем сами — CLI мог не запускаться сутками.
+        guard credentials.isRefreshable, let refreshToken = credentials.refreshToken else { return nil }
+
+        // Убеждаемся, что запись нам поддаётся, до обращения к серверу: иначе
+        // ротация отзовёт refresh-токен, а записать новый будет некуда.
+        let writable = await Task.detached(priority: .utility) {
+            ClaudeKeychain.isWritable(service: service)
+        }.value
+        guard writable else { return nil }
+
+        switch await ClaudeOAuth.refresh(refreshToken: refreshToken, scopes: credentials.scopes) {
+        case .success(let fresh):
+            // Запись обязательна: при ротации прежний refresh-токен уже отозван,
+            // и без записи вход сломается у самого CLI.
+            // Если запись не удалась, работать всё равно можем — токен есть в
+            // памяти. Но при ротации это значит, что CLI остался со старым
+            // refresh-токеном, поэтому пробуем записать ещё раз.
+            var saved = await Task.detached(priority: .utility) {
+                ClaudeKeychain.save(service: service, tokens: fresh)
+            }.value
+            if !saved {
+                saved = await Task.detached(priority: .utility) {
+                    ClaudeKeychain.save(service: service, tokens: fresh)
+                }.value
+            }
+            let cached = CachedToken(value: fresh.accessToken,
+                                     expiresAt: fresh.expiresAt,
+                                     plan: credentials.plan)
+            rejected[service] = nil
+            tokens[service] = cached
+            return cached
+
+        case .rejected:
+            // Наш refresh-токен уже недействителен. Возможно, CLI успел
+            // обновиться сам между нашим чтением и запросом — перечитываем.
+            if let latest = await read(service), let cached = Self.cache(latest) {
+                tokens[service] = cached
+                return cached
+            }
+            return nil
+
+        case .unavailable:
+            return nil
+        }
+    }
+
+    /// SecItemCopyMatching блокирует поток, пока пользователь отвечает на диалог.
+    private func read(_ service: String) async -> ClaudeKeychain.Credentials? {
+        await Task.detached(priority: .utility) {
             ClaudeKeychain.credentials(service: service)
         }.value
+    }
 
-        guard let credentials else { return nil }
+    private static func cache(_ credentials: ClaudeKeychain.Credentials) -> CachedToken? {
         let cached = CachedToken(value: credentials.accessToken,
                                  expiresAt: credentials.expiresAt,
                                  plan: credentials.plan)
-        guard cached.isUsable else { return nil }
-        tokens[service] = cached
-        return cached
+        return cached.isUsable ? cached : nil
     }
 
     /// Считается один раз за запуск: `static let` инициализируется лениво и потокобезопасно.
@@ -127,22 +192,22 @@ actor ClaudeProvider: UsageProvider {
         }
     }
 
-    /// `extra_usage` — расход сверх лимита, оплачиваемый отдельно. В окна он не
-    /// годится (это не процент от квоты), но цифру показать стоит.
+    /// `extra_usage` — оплачиваемый расход сверх лимитов плана. В окна он не
+    /// годится (это деньги, а не процент квоты), поэтому идёт в статистику.
+    ///
+    /// Сумма приходит в минорных единицах: 10308 при `decimal_places: 2` — это
+    /// 103.08 USD. Показывать сырое число нельзя.
     static func stats(_ data: Data) -> [UsageStat] {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let extra = root["extra_usage"] as? [String: Any]
+              let extra = root["extra_usage"] as? [String: Any],
+              let minor = (extra["used_credits"] as? NSNumber)?.doubleValue, minor > 0
         else { return [] }
 
-        // Поле называлось по-разному в разных версиях эндпоинта.
-        let amount = ["used_credits", "credits_used", "amount", "used"]
-            .lazy
-            .compactMap { (extra[$0] as? NSNumber)?.doubleValue }
-            .first
-        guard let amount, amount > 0 else { return [] }
+        let places = (extra["decimal_places"] as? NSNumber)?.intValue ?? 2
+        let currency = (extra["currency"] as? String) ?? "USD"
         return [UsageStat(key: "extraUsage",
                           label: L.t("stat.extraUsage"),
-                          value: Format.compact(amount))]
+                          value: Format.money(minor: minor, places: places, currency: currency))]
     }
 
     private static func rank(_ key: String) -> Int {
