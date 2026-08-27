@@ -6,6 +6,8 @@ A panel that slides out of the MacBook notch with **Claude Code** and **Codex** 
 
 ![Expanded panel](docs/panel.png)
 
+*Screenshots use generated sample data — the emails, the `Opus` window and the percentages are illustrative, not a real account.*
+
 ## Features
 
 - One column per account — every Claude and Codex profile at once.
@@ -121,7 +123,7 @@ anthropic-beta: oauth-2025-04-20
 User-Agent: claude-code/<installed CLI version>
 ```
 
-The native `User-Agent` matters — without it the endpoint returns 429 far more often. Any field-object with a numeric `utilization` counts as a window, so new windows appear on their own, including internal model code-names like `nimbus_quill`. Titles: `five_hour`/`seven_day` get friendly labels, known prefixes expand (`seven_day_opus` → "Weekly window · Opus"), the rest are shown as words rather than raw snake_case. `extra_usage` (pay-as-you-go beyond the plan) is not a window — it's spend, not a share of a quota — so it goes to the stats line, but **only while `is_enabled` is true**: `used_credits` is then a live spend meter (shown as money, since the amount is minor units — `10308` at `decimal_places: 2` is `$103.08`, plus the `monthly_limit` cap when set). When extra usage is off (`out_of_credits`), the same number is just historical depleted credits and would read as an active charge, so it's hidden.
+The native `User-Agent` matters — without it the endpoint returns 429 far more often. Any field-object with a numeric `utilization` counts as a window, so new windows appear on their own, including internal model code-names. Windows that are inert — `0 %` **and** no reset date, like the `nimbus_quill` placeholder the endpoint returns in reserve — are hidden until they come alive, so they don't clutter the column with a row you can't act on. Titles: `five_hour`/`seven_day` get friendly labels, known prefixes expand (`seven_day_opus` → "Weekly window · Opus", shown to Max/Opus accounts), the rest are shown as words rather than raw snake_case. `extra_usage` (pay-as-you-go beyond the plan) is not a window — it's spend, not a share of a quota — so it goes to the stats line, but **only while `is_enabled` is true**: `used_credits` is then a live spend meter (shown as money, since the amount is minor units — `10308` at `decimal_places: 2` is `$103.08`, plus the `monthly_limit` cap when set). When extra usage is off (`out_of_credits`), the same number is just historical depleted credits and would read as an active charge, so it's hidden.
 
 The subtitle is `plan · email`, matching Codex. The plan (`Pro`, `Max`) comes from the Keychain entry; the email isn't in either endpoint, so it's read from `claude auth status --json` — the CLI is run once per profile as a subprocess (with `CLAUDE_CONFIG_DIR` set for extra profiles) and the result cached.
 
@@ -156,7 +158,7 @@ ChatGPT-Account-ID: <account_id>
 User-Agent: codex_cli_rs/<version>
 ```
 
-`rate_limit.primary_window`, `secondary_window` and every `additional_rate_limits[]` are drawn — the latter prefixed by `limit_name` or `metered_feature`. Window title derives from `limit_window_seconds`. The subtitle is `plan_type · email`; `credits.balance` and `rate_limit_reset_credits.available_count` become stats lines.
+`rate_limit.primary_window`, `secondary_window` and every `additional_rate_limits[]` are drawn — the latter prefixed by `limit_name` or `metered_feature`. Those extra entries are per-model buckets the API reports separately from the main quota (e.g. `GPT-5.3-Codex-Spark`, a specific model tier); the app shows whatever names come back, so the list tracks OpenAI's without code changes. Window title derives from `limit_window_seconds` (`18000` → 5-hour, `604800` → weekly). The subtitle is `plan_type · email`; `credits.balance` and `rate_limit_reset_credits.available_count` become stats lines.
 
 ## Refresh & resilience
 
