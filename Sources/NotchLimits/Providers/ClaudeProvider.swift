@@ -21,10 +21,13 @@ actor ClaudeProvider: UsageProvider {
     private var tokens: [String: CachedToken] = [:]
     /// Токены, отвергнутые сервером: брать их из Keychain повторно бессмысленно.
     private var rejected: [String: String] = [:]
+    /// Почта из CLI, по одной на профиль. Пустое значение — «уже пробовали,
+    /// не вышло»: подпроцесс на каждый цикл ради косметики гонять незачем.
+    private var emails: [String: String] = [:]
     private let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
 
     func fetch(_ account: DiscoveredAccount) async -> FetchOutcome {
-        guard case .claudeKeychain(let service, _) = account.source else {
+        guard case .claudeKeychain(let service, let configDir) = account.source else {
             return .failure(L.t("error.unknownSource"))
         }
 
@@ -32,7 +35,10 @@ actor ClaudeProvider: UsageProvider {
             return .reauth(L.t("column.reauth.claude"))
         }
 
-        let subtitle = token.plan.map { Self.humanized($0) }
+        // Почту API не отдаёт, зато её знает CLI (`claude auth status`). Тянем
+        // подпроцессом один раз за запуск и кэшируем — как у Codex: «Pro · почта».
+        let email = await email(for: service, configDir: configDir)
+        let subtitle = Self.subtitle(plan: token.plan, email: email)
 
         let headers = [
             "Authorization": "Bearer \(token.value)",
@@ -150,6 +156,29 @@ actor ClaudeProvider: UsageProvider {
         return cached.isUsable ? cached : nil
     }
 
+    // MARK: - Почта из CLI
+
+    /// Почта профиля. Спрашиваем `claude auth status` один раз за запуск:
+    /// раз получив, держим в памяти; неудачу тоже запоминаем (пустой строкой),
+    /// чтобы не запускать подпроцесс каждые три минуты ради подписи.
+    private func email(for service: String, configDir: URL?) async -> String? {
+        if let cached = emails[service] { return cached.isEmpty ? nil : cached }
+        let email = await Task.detached(priority: .utility) {
+            BinaryLocator.claudeEmail(configDir: configDir)
+        }.value
+        emails[service] = email ?? ""
+        return email
+    }
+
+    /// Подпись колонки: «Pro · user@example.com». Как у Codex — план и почта
+    /// через разделитель, любая часть может отсутствовать.
+    static func subtitle(plan: String?, email: String?) -> String? {
+        let parts = [plan.map(humanized), email]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
     /// Считается один раз за запуск: `static let` инициализируется лениво и потокобезопасно.
     private static let cachedUserAgent: String = {
         let version = BinaryLocator.claude().map {
@@ -192,22 +221,31 @@ actor ClaudeProvider: UsageProvider {
         }
     }
 
-    /// `extra_usage` — оплачиваемый расход сверх лимитов плана. В окна он не
-    /// годится (это деньги, а не процент квоты), поэтому идёт в статистику.
+    /// `extra_usage` — доплата за расход сверх лимитов плана (pay-as-you-go).
     ///
-    /// Сумма приходит в минорных единицах: 10308 при `decimal_places: 2` — это
-    /// 103.08 USD. Показывать сырое число нельзя.
+    /// Показываем только когда доплата **включена** (`is_enabled: true`): тогда
+    /// `used_credits` — это живой счётчик потраченного за период. Когда выключена
+    /// (`out_of_credits`, план без доплаты), `used_credits` — исторический остаток
+    /// уже израсходованных кредитов, и как «расход прямо сейчас» он вводит в
+    /// заблуждение. Сумма в минорных единицах: 10308 при `decimal_places: 2` —
+    /// это 103.08 USD, сырое число показывать нельзя.
     static func stats(_ data: Data) -> [UsageStat] {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let extra = root["extra_usage"] as? [String: Any],
+              extra["is_enabled"] as? Bool == true,
               let minor = (extra["used_credits"] as? NSNumber)?.doubleValue, minor > 0
         else { return [] }
 
         let places = (extra["decimal_places"] as? NSNumber)?.intValue ?? 2
         let currency = (extra["currency"] as? String) ?? "USD"
+        var value = Format.money(minor: minor, places: places, currency: currency)
+        // Если задан месячный потолок — показываем «потрачено / потолок».
+        if let cap = (extra["monthly_limit"] as? NSNumber)?.doubleValue, cap > 0 {
+            value += " / " + Format.money(minor: cap, places: places, currency: currency)
+        }
         return [UsageStat(key: "extraUsage",
                           label: L.t("stat.extraUsage"),
-                          value: Format.money(minor: minor, places: places, currency: currency))]
+                          value: value)]
     }
 
     private static func rank(_ key: String) -> Int {

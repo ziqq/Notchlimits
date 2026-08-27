@@ -58,8 +58,8 @@ enum SelfTest {
           "seven_day":        {"utilization": 63,   "resets_at": "2026-08-30T09:00:00+00:00"},
           "seven_day_opus":   {"utilization": 91,   "resets_at": "2026-08-30T09:00:00.500Z"},
           "brand_new_window": {"utilization": 4,    "resets_at": "2026-08-26T00:00:00Z"},
-          "extra_usage":      {"utilization": null, "used_credits": 10308,
-                               "currency": "USD",   "decimal_places": 2},
+          "extra_usage":      {"is_enabled": true, "used_credits": 10308,
+                               "currency": "USD",  "decimal_places": 2},
           "plan": "max",
           "nested": {"no_utilization": 1}
         }
@@ -89,20 +89,42 @@ enum SelfTest {
         expect("мусор не ломает", ClaudeProvider.parse(Data("не json".utf8)) == nil)
 
         let stats = ClaudeProvider.stats(Data(payload.utf8))
-        expect("extra_usage ушёл в статистику", stats.first?.key == "extraUsage")
+        expect("включённый extra_usage ушёл в статистику", stats.first?.key == "extraUsage")
         // Сумма минорная: 10308 при decimal_places=2 — это 103.08, а не 10308.
         expect("минорные единицы превращены в сумму",
                stats.first.map { $0.value.contains("103") && !$0.value.contains("10308") } == true,
                stats.first?.value ?? "нет строки")
+        // Выключенная доплата — исторический остаток, не «расход сейчас»: не шумим.
+        expect("выключенный extra_usage не показываем",
+               ClaudeProvider.stats(Data(#"{"extra_usage":{"is_enabled":false,"used_credits":10308,"decimal_places":2}}"#.utf8)).isEmpty)
         expect("нулевой extra_usage не показываем",
-               ClaudeProvider.stats(Data(#"{"extra_usage":{"used_credits":0}}"#.utf8)).isEmpty)
+               ClaudeProvider.stats(Data(#"{"extra_usage":{"is_enabled":true,"used_credits":0}}"#.utf8)).isEmpty)
         expect("без extra_usage статистики нет",
                ClaudeProvider.stats(Data("{}".utf8)).isEmpty)
-        expect("отсутствие decimal_places не ломает",
-               ClaudeProvider.stats(Data(#"{"extra_usage":{"used_credits":500}}"#.utf8))
-                   .first?.value.contains("5") == true)
+        expect("месячный потолок даёт «потрачено / потолок»",
+               ClaudeProvider.stats(Data(#"{"extra_usage":{"is_enabled":true,"used_credits":500,"monthly_limit":2000,"decimal_places":2}}"#.utf8))
+                   .first?.value.contains("/") == true)
         expect("нулевой decimal_places оставляет целое",
                Format.money(minor: 42, places: 0, currency: "USD").contains("42"))
+
+        // Подпись как у Codex: план и почта через разделитель, части опциональны.
+        expect("подпись — план и почта",
+               ClaudeProvider.subtitle(plan: "pro", email: "u@e.com") == "Pro · u@e.com")
+        expect("без почты остаётся план",
+               ClaudeProvider.subtitle(plan: "max", email: nil) == "Max")
+        expect("без плана остаётся почта",
+               ClaudeProvider.subtitle(plan: nil, email: "u@e.com") == "u@e.com")
+        expect("без обоих подписи нет",
+               ClaudeProvider.subtitle(plan: nil, email: nil) == nil)
+
+        // Разбор `claude auth status --json`.
+        expect("почта из auth status вынута",
+               BinaryLocator.parseAuthEmail(#"{"loggedIn":true,"email":"u@e.com"}"#) == "u@e.com")
+        expect("не залогинен — почты нет",
+               BinaryLocator.parseAuthEmail(#"{"loggedIn":false,"email":"u@e.com"}"#) == nil)
+        expect("посторонние строки вокруг JSON не мешают",
+               BinaryLocator.parseAuthEmail("note\n{\"loggedIn\":true,\"email\":\"u@e.com\"}\n") == "u@e.com")
+        expect("мусор не ломает разбор почты", BinaryLocator.parseAuthEmail("не json") == nil)
     }
 
     private static func checkCodexParser() {
