@@ -82,6 +82,12 @@
 "setup.script.hint" = "Zaloguj sie, potem zamknij to okno.";
 "loginItem.failed.title" = "Nie udało się zmienić uruchamiania przy logowaniu";
 
+// Статистика под окнами
+"stat.credits" = "Kredyty";
+"stat.unlimited" = "bez limitu";
+"stat.resetCredits" = "Wcześniejsze resety";
+"stat.extraUsage" = "Zużycie ponad limit";
+
 // Уведомления
 "notification.title" = "%1$@ — %2$d%%";
 "notification.body" = "%1$@: %2$d%%";

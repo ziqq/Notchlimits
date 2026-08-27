@@ -57,7 +57,7 @@ enum SelfTest {
           "seven_day":        {"utilization": 63,   "resets_at": "2026-08-30T09:00:00+00:00"},
           "seven_day_opus":   {"utilization": 91,   "resets_at": "2026-08-30T09:00:00.500Z"},
           "brand_new_window": {"utilization": 4,    "resets_at": "2026-08-26T00:00:00Z"},
-          "extra_usage":      {"utilization": 999,  "resets_at": "2026-08-26T00:00:00Z"},
+          "extra_usage":      {"utilization": 999,  "used_credits": 12.5},
           "plan": "max",
           "nested": {"no_utilization": 1}
         }
@@ -85,6 +85,14 @@ enum SelfTest {
                windows.map(\.key).joined(separator: ","))
         expect("пустой ответ не ломает", ClaudeProvider.parse(Data("{}".utf8))?.isEmpty == true)
         expect("мусор не ломает", ClaudeProvider.parse(Data("не json".utf8)) == nil)
+
+        let stats = ClaudeProvider.stats(Data(payload.utf8))
+        expect("extra_usage ушёл в статистику", stats.first?.key == "extraUsage")
+        expect("дробное значение с одним знаком", stats.first?.value == "12.5")
+        expect("нулевой extra_usage не показываем",
+               ClaudeProvider.stats(Data(#"{"extra_usage":{"used_credits":0}}"#.utf8)).isEmpty)
+        expect("без extra_usage статистики нет",
+               ClaudeProvider.stats(Data("{}".utf8)).isEmpty)
     }
 
     private static func checkCodexParser() {
@@ -92,6 +100,9 @@ enum SelfTest {
         let payload = """
         {
           "email": "user@example.com",
+          "plan_type": "pro",
+          "credits": {"unlimited": false, "balance": "42"},
+          "rate_limit_reset_credits": {"available_count": 1, "applicable_available_count": 0},
           "rate_limit": {
             "primary_window":   {"used_percent": 21, "limit_window_seconds": 604800, "reset_at": 1788149680},
             "secondary_window": null
@@ -123,6 +134,29 @@ enum SelfTest {
                windows.last?.resetsAt != nil)
         expect("e-mail вынут", CodexProvider.email(from: Data(payload.utf8)) == "user@example.com")
         expect("мусор не ломает", CodexProvider.parse(Data("[]".utf8)) == nil)
+
+        expect("подпись — план и почта",
+               CodexProvider.subtitle(from: Data(payload.utf8), email: "user@example.com")
+                   == "Pro · user@example.com")
+        expect("без плана остаётся почта",
+               CodexProvider.subtitle(from: Data("{}".utf8), email: "user@example.com")
+                   == "user@example.com")
+        expect("без обоих подписи нет",
+               CodexProvider.subtitle(from: Data("{}".utf8), email: nil) == nil)
+
+        let stats = CodexProvider.stats(from: Data(payload.utf8))
+        expect("статистики ровно 2", stats.count == 2, "получено \(stats.count)")
+        expect("баланс строкой разобран",
+               stats.first { $0.key == "credits" }?.value == "42")
+        expect("досрочные сбросы показаны",
+               stats.first { $0.key == "resetCredits" }?.value == "1")
+        expect("нулевой баланс не показываем",
+               CodexProvider.stats(from: Data(#"{"credits":{"balance":"0"}}"#.utf8)).isEmpty)
+        expect("безлимит показываем словом",
+               CodexProvider.stats(from: Data(#"{"credits":{"unlimited":true}}"#.utf8))
+                   .first?.value == L.t("stat.unlimited"))
+        expect("мусор не ломает статистику",
+               CodexProvider.stats(from: Data("[]".utf8)).isEmpty)
     }
 
     private static func checkWindowTitles() {
@@ -209,10 +243,23 @@ enum SelfTest {
                                  resetsAt: Date(timeIntervalSince1970: 1_700_000_000))
         let cached = CachedColumn(id: "claude:main", provider: .claude, profileName: "main",
                                   subtitle: nil, windows: [window],
+                                  stats: [UsageStat(key: "credits", label: "Credits", value: "42")],
                                   updatedAt: Date(timeIntervalSince1970: 1_700_000_000))
         let cacheOK = (try? JSONEncoder().encode(cached))
             .flatMap { try? JSONDecoder().decode(CachedColumn.self, from: $0) }
         expect("кэш колонки", cacheOK?.windows.first?.utilization == 42)
+        expect("статистика пережила кэш", cacheOK?.stats?.first?.value == "42")
+
+        // Запись, сохранённая до появления stats, обязана читаться: иначе
+        // обновление приложения молча теряет весь кэш процентов.
+        let legacy = """
+        {"id":"claude:main","provider":"claude","profileName":"main",
+         "windows":[{"key":"five_hour","title":"x","utilization":42}],
+         "updatedAt":721000000}
+        """
+        let legacyOK = try? JSONDecoder().decode(CachedColumn.self, from: Data(legacy.utf8))
+        expect("старый кэш без stats читается", legacyOK?.windows.first?.utilization == 42)
+        expect("у старого кэша статистика пустая", legacyOK?.stats == nil)
 
         let config = HotKeyConfig(keyCode: 35, modifiers: 256, display: "⌘P")
         let configOK = (try? JSONEncoder().encode(config))

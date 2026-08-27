@@ -20,6 +20,7 @@ struct DiscoveredAccount: Identifiable, Equatable {
 struct UsageSnapshot {
     var subtitle: String?
     var windows: [LimitWindow]
+    var stats: [UsageStat] = []
 }
 
 enum FetchOutcome {

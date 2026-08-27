@@ -82,6 +82,12 @@
 "setup.script.hint" = "ログインしたら、このウインドウを閉じてください。";
 "loginItem.failed.title" = "ログイン時の起動を変更できませんでした";
 
+// Статистика под окнами
+"stat.credits" = "クレジット";
+"stat.unlimited" = "無制限";
+"stat.resetCredits" = "早期リセット";
+"stat.extraUsage" = "追加利用";
+
 // Уведомления
 "notification.title" = "%1$@ — %2$d%%";
 "notification.body" = "%1$@: %2$d%%";

@@ -76,6 +76,13 @@ enum Format {
     static func percent(_ value: Double) -> String {
         L.t("format.percent", Int(value.rounded()))
     }
+
+    /// Компактное число для строк статистики: целое без хвоста, дробное — с одним знаком.
+    static func compact(_ value: Double) -> String {
+        value == value.rounded()
+            ? String(Int(value))
+            : String(format: "%.1f", value)
+    }
 }
 /// Высота блока колонок, измеренная SwiftUI: по ней подбирается высота окна.
 struct ColumnsHeightKey: PreferenceKey {

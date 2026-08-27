@@ -82,6 +82,12 @@
 "setup.script.hint" = "로그인한 다음 이 창을 닫으세요.";
 "loginItem.failed.title" = "로그인 시 실행을 변경하지 못했습니다";
 
+// Статистика под окнами
+"stat.credits" = "크레딧";
+"stat.unlimited" = "무제한";
+"stat.resetCredits" = "조기 초기화";
+"stat.extraUsage" = "추가 사용";
+
 // Уведомления
 "notification.title" = "%1$@ — %2$d%%";
 "notification.body" = "%1$@: %2$d%%";

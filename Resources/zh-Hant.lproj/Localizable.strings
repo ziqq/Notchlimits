@@ -82,6 +82,12 @@
 "setup.script.hint" = "登入後請關閉此視窗。";
 "loginItem.failed.title" = "無法更改登入時啟動";
 
+// Статистика под окнами
+"stat.credits" = "額度";
+"stat.unlimited" = "無限制";
+"stat.resetCredits" = "提前重置";
+"stat.extraUsage" = "額外用量";
+
 // Уведомления
 "notification.title" = "%1$@ — %2$d%%";
 "notification.body" = "%1$@：%2$d%%";

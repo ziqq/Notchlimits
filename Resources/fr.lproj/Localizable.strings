@@ -82,6 +82,12 @@
 "setup.script.hint" = "Connectez-vous, puis fermez cette fenetre.";
 "loginItem.failed.title" = "Impossible de modifier le lancement à l’ouverture";
 
+// Статистика под окнами
+"stat.credits" = "Crédits";
+"stat.unlimited" = "illimité";
+"stat.resetCredits" = "Réinit. anticipées";
+"stat.extraUsage" = "Usage supplémentaire";
+
 // Уведомления
 "notification.title" = "%1$@ — %2$d %%";
 "notification.body" = "%1$@ : %2$d %%";
