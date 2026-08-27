@@ -77,6 +77,22 @@ enum Format {
         L.t("format.percent", Int(value.rounded()))
     }
 
+    /// Деньги из минорных единиц: 10308 при places=2 и USD → «$103.08».
+    /// Разделители берёт из текущей локали — там же, где их берёт `L.t`.
+    static func money(minor: Double, places: Int, currency: String) -> String {
+        let digits = max(0, places)
+        let amount = minor / pow(10.0, Double(digits))
+
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = currency
+        formatter.locale = .current
+        formatter.minimumFractionDigits = digits
+        formatter.maximumFractionDigits = digits
+        if let text = formatter.string(from: NSNumber(value: amount)) { return text }
+        return String(format: "%.\(digits)f %@", amount, currency)
+    }
+
     /// Компактное число для строк статистики: целое без хвоста, дробное — с одним знаком.
     static func compact(_ value: Double) -> String {
         value == value.rounded()
