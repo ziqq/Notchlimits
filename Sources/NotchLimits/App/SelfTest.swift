@@ -326,6 +326,9 @@ enum SelfTest {
         expect("дни и часы", Format.reset(inTwoDays, now: now).contains("2"))
         expect("часы и минуты", Format.reset(inThreeHours, now: now).contains("12"))
         expect("прошедшая дата не пустая", !Format.reset(now.addingTimeInterval(-10), now: now).isEmpty)
+        expect("точный момент сброса не пустой и со временем",
+               Format.resetAbsolute(inThreeHours).contains(":"),
+               Format.resetAbsolute(inThreeHours))
         expect("возраст в секундах", Format.age(now.addingTimeInterval(-12), now: now).contains("12"))
         expect("свежие данные — «только что»",
                Format.age(now.addingTimeInterval(-1), now: now) == L.t("age.justNow"))
