@@ -30,17 +30,56 @@ struct ColumnView: View {
                         LimitRowView(window: window)
                     }
                 }
+                if !column.stats.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(column.stats) { stat in
+                            HStack(spacing: 6) {
+                                Text(stat.label)
+                                    .font(.system(size: 9.5))
+                                    .foregroundColor(Theme.tertiary)
+                                    .lineLimit(1)
+                                Spacer(minLength: 4)
+                                Text(stat.value)
+                                    .font(.system(size: 9.5, weight: .medium).monospacedDigit())
+                                    .foregroundColor(Theme.secondary)
+                                    .fixedSize()
+                            }
+                        }
+                    }
+                    .padding(.top, 10)
+                }
+
+                // Причину, по которой данные замерли, показываем прямо над
+                // возрастом: иначе протухший токен выглядит просто как старые
+                // цифры, и непонятно, что надо перелогиниться.
+                if let problem = Self.problem(for: column.status) {
+                    Text(problem.message)
+                        .font(.system(size: 9.5))
+                        .foregroundColor(problem.color)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 8)
+                }
                 if let note = staleNote {
                     Text(note)
                         .font(.system(size: 9))
                         .foregroundColor(Theme.tertiary)
-                        .padding(.top, 8)
+                        .padding(.top, Self.problem(for: column.status) == nil ? 8 : 2)
                 }
             } else {
                 PlaceholderView(status: column.status)
             }
 
             Spacer(minLength: 0)
+        }
+    }
+
+    /// Сообщение о проблеме, которую видно даже поверх кэша.
+    /// 429 сюда не попадает — это ожидание, а не поломка.
+    static func problem(for status: ColumnStatus) -> (message: String, color: Color)? {
+        switch status {
+        case .reauth(let message): return (message, Theme.yellow.opacity(0.9))
+        case .failed(let message): return (message, Theme.red.opacity(0.9))
+        case .ok, .loading, .waiting: return nil
         }
     }
 
@@ -60,8 +99,12 @@ private struct PlaceholderView: View {
     let status: ColumnStatus
 
     var body: some View {
-        switch status {
-        case .loading, .waiting, .ok:
+        if let problem = ColumnView.problem(for: status) {
+            Text(problem.message)
+                .font(.system(size: 10.5))
+                .foregroundColor(problem.color)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
             HStack(spacing: 6) {
                 ProgressView()
                     .controlSize(.small)
@@ -71,16 +114,6 @@ private struct PlaceholderView: View {
                     .font(.system(size: 10))
                     .foregroundColor(Theme.tertiary)
             }
-        case .reauth(let message):
-            Text(message)
-                .font(.system(size: 10.5))
-                .foregroundColor(Theme.yellow.opacity(0.9))
-                .fixedSize(horizontal: false, vertical: true)
-        case .failed(let message):
-            Text(message)
-                .font(.system(size: 10.5))
-                .foregroundColor(Theme.red.opacity(0.9))
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
