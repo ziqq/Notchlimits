@@ -82,6 +82,12 @@
 "setup.script.hint" = "Inicia sesion y cierra esta ventana.";
 "loginItem.failed.title" = "No se ha podido cambiar el inicio de sesión";
 
+// Статистика под окнами
+"stat.credits" = "Créditos";
+"stat.unlimited" = "ilimitado";
+"stat.resetCredits" = "Reinicios anticipados";
+"stat.extraUsage" = "Uso adicional";
+
 // Уведомления
 "notification.title" = "%1$@ — %2$d %%";
 "notification.body" = "%1$@: %2$d %%";

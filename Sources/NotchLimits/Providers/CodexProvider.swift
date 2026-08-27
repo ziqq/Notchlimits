@@ -46,8 +46,10 @@ struct CodexProvider: UsageProvider {
                 guard let windows = Self.parse(response.data) else {
                     return .failure(L.t("error.parse"))
                 }
-                let subtitle = Self.email(from: response.data) ?? auth.email
-                return .success(UsageSnapshot(subtitle: subtitle, windows: windows))
+                let email = Self.email(from: response.data) ?? auth.email
+                return .success(UsageSnapshot(subtitle: Self.subtitle(from: response.data, email: email),
+                                              windows: windows,
+                                              stats: Self.stats(from: response.data)))
             case 401, 403:
                 return .reauth(L.t("column.reauth.codex"))
             case 429:
@@ -95,6 +97,52 @@ struct CodexProvider: UsageProvider {
             return nil
         }
         return root["email"] as? String
+    }
+
+    /// «Pro · user@example.com» — план из ответа, почта из ответа или id_token.
+    static func subtitle(from data: Data, email: String?) -> String? {
+        let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        let plan = (root?["plan_type"] as? String)
+            .flatMap { $0.isEmpty ? nil : ClaudeProvider.humanized($0) }
+        let parts = [plan, email].compactMap { $0 }.filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// Всё, что эндпоинт отдаёт помимо процентов и что стоит показать.
+    static func stats(from data: Data) -> [UsageStat] {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return []
+        }
+        var result: [UsageStat] = []
+
+        if let credits = root["credits"] as? [String: Any] {
+            if credits["unlimited"] as? Bool == true {
+                result.append(UsageStat(key: "credits",
+                                        label: L.t("stat.credits"),
+                                        value: L.t("stat.unlimited")))
+            } else if let balance = number(credits["balance"]), balance > 0 {
+                result.append(UsageStat(key: "credits",
+                                        label: L.t("stat.credits"),
+                                        value: Format.compact(balance)))
+            }
+        }
+
+        // Досрочные сбросы: сколько раз можно обнулить окно, не дожидаясь его конца.
+        if let resets = root["rate_limit_reset_credits"] as? [String: Any],
+           let available = number(resets["available_count"]), available > 0 {
+            result.append(UsageStat(key: "resetCredits",
+                                    label: L.t("stat.resetCredits"),
+                                    value: Format.compact(available)))
+        }
+
+        return result
+    }
+
+    /// Числа в ответе приходят и как number, и как строка («balance»: «0»).
+    private static func number(_ value: Any?) -> Double? {
+        if let number = value as? NSNumber { return number.doubleValue }
+        if let string = value as? String { return Double(string) }
+        return nil
     }
 
     static func parse(_ data: Data) -> [LimitWindow]? {

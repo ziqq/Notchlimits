@@ -82,6 +82,12 @@
 "setup.script.hint" = "Войди в аккаунт, затем закрой это окно.";
 "loginItem.failed.title" = "Не получилось изменить запуск при входе";
 
+// Статистика под окнами
+"stat.credits" = "Кредиты";
+"stat.unlimited" = "без лимита";
+"stat.resetCredits" = "Досрочные сбросы";
+"stat.extraUsage" = "Расход сверх лимита";
+
 // Уведомления
 "notification.title" = "%1$@ — %2$d %%";
 "notification.body" = "%1$@: %2$d %%";

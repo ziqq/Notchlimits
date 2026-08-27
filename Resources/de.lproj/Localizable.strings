@@ -82,6 +82,12 @@
 "setup.script.hint" = "Melde dich an und schliesse dieses Fenster.";
 "loginItem.failed.title" = "Anmeldeobjekt konnte nicht geändert werden";
 
+// Статистика под окнами
+"stat.credits" = "Guthaben";
+"stat.unlimited" = "unbegrenzt";
+"stat.resetCredits" = "Vorzeitige Resets";
+"stat.extraUsage" = "Zusatzverbrauch";
+
 // Уведомления
 "notification.title" = "%1$@ — %2$d %%";
 "notification.body" = "%1$@: %2$d %%";

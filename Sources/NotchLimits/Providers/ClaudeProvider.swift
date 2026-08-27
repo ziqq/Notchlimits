@@ -51,7 +51,9 @@ actor ClaudeProvider: UsageProvider {
                 guard let windows = Self.parse(response.data), !windows.isEmpty else {
                     return .failure(L.t("error.parse"))
                 }
-                return .success(UsageSnapshot(subtitle: subtitle, windows: windows))
+                return .success(UsageSnapshot(subtitle: subtitle,
+                                              windows: windows,
+                                              stats: Self.stats(response.data)))
             case 401, 403:
                 tokens[service] = nil
                 return .reauth(L.t("column.reauth.claude"))
@@ -123,6 +125,24 @@ actor ClaudeProvider: UsageProvider {
             if lhsRank != rhsRank { return lhsRank < rhsRank }
             return lhs.key < rhs.key
         }
+    }
+
+    /// `extra_usage` — расход сверх лимита, оплачиваемый отдельно. В окна он не
+    /// годится (это не процент от квоты), но цифру показать стоит.
+    static func stats(_ data: Data) -> [UsageStat] {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let extra = root["extra_usage"] as? [String: Any]
+        else { return [] }
+
+        // Поле называлось по-разному в разных версиях эндпоинта.
+        let amount = ["used_credits", "credits_used", "amount", "used"]
+            .lazy
+            .compactMap { (extra[$0] as? NSNumber)?.doubleValue }
+            .first
+        guard let amount, amount > 0 else { return [] }
+        return [UsageStat(key: "extraUsage",
+                          label: L.t("stat.extraUsage"),
+                          value: Format.compact(amount))]
     }
 
     private static func rank(_ key: String) -> Int {

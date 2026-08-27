@@ -82,6 +82,12 @@
 "setup.script.hint" = "Accedi, poi chiudi questa finestra.";
 "loginItem.failed.title" = "Impossibile modificare l’avvio all’accesso";
 
+// Статистика под окнами
+"stat.credits" = "Crediti";
+"stat.unlimited" = "illimitato";
+"stat.resetCredits" = "Reset anticipati";
+"stat.extraUsage" = "Uso aggiuntivo";
+
 // Уведомления
 "notification.title" = "%1$@ — %2$d%%";
 "notification.body" = "%1$@: %2$d%%";

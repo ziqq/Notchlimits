@@ -85,6 +85,7 @@ final class UsageStore: ObservableObject {
                 if let cached = cache.load(id: account.id) {
                     column.windows = cached.windows
                     column.subtitle = cached.subtitle
+                    column.stats = cached.stats ?? []
                     column.updatedAt = cached.updatedAt
                     column.fromCache = true
                     column.status = .ok
@@ -189,6 +190,7 @@ final class UsageStore: ObservableObject {
             state.nextDue = Date().addingTimeInterval(Schedule.interval)
             columns[index].windows = snapshot.windows
             columns[index].subtitle = snapshot.subtitle
+            columns[index].stats = snapshot.stats
             columns[index].updatedAt = Date()
             columns[index].status = .ok
             columns[index].fromCache = false

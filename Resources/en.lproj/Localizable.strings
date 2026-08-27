@@ -82,6 +82,12 @@
 "setup.script.hint" = "Sign in, then close this window.";
 "loginItem.failed.title" = "Could not change launch at login";
 
+// Статистика под окнами
+"stat.credits" = "Credits";
+"stat.unlimited" = "unlimited";
+"stat.resetCredits" = "Early resets";
+"stat.extraUsage" = "Extra usage";
+
 // Уведомления
 "notification.title" = "%1$@ — %2$d%%";
 "notification.body" = "%1$@: %2$d%%";

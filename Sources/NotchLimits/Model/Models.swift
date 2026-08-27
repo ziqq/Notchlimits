@@ -36,6 +36,16 @@ enum ColumnStatus: Equatable {
     case failed(String)
 }
 
+/// Строка статистики под окнами: то, что провайдер отдаёт помимо процентов
+/// (баланс кредитов, доступные досрочные сбросы и прочее).
+struct UsageStat: Identifiable, Codable, Equatable {
+    let key: String
+    let label: String
+    let value: String
+
+    var id: String { key }
+}
+
 /// Колонка = один аккаунт одного провайдера.
 struct AccountColumn: Identifiable, Equatable {
     /// Стабильный идентификатор: "claude:<profile>" / "codex:<profile>".
@@ -46,6 +56,8 @@ struct AccountColumn: Identifiable, Equatable {
     /// Подпись (e-mail / план), если провайдер её отдал.
     var subtitle: String?
     var windows: [LimitWindow] = []
+    /// Дополнительные цифры под окнами, если провайдер их отдал.
+    var stats: [UsageStat] = []
     /// Момент последнего успешного ответа.
     var updatedAt: Date?
     var status: ColumnStatus = .loading
@@ -71,5 +83,9 @@ struct CachedColumn: Codable {
     let profileName: String
     let subtitle: String?
     let windows: [LimitWindow]
+    /// Появилось позже кэша, поэтому именно Optional: синтезированный Decodable
+    /// не подставляет значения по умолчанию и на старой записи бросил бы
+    /// keyNotFound, потеряв весь кэш.
+    let stats: [UsageStat]?
     let updatedAt: Date
 }

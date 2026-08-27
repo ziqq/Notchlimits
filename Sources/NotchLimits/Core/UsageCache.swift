@@ -13,6 +13,7 @@ struct UsageCache {
                                    profileName: column.profileName,
                                    subtitle: column.subtitle,
                                    windows: column.windows,
+                                   stats: column.stats,
                                    updatedAt: updatedAt)
         guard let data = try? JSONEncoder().encode(payload) else { return }
         defaults.set(data, forKey: prefix + column.id)

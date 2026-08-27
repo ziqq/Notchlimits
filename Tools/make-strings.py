@@ -52,6 +52,9 @@ ORDER = [
         "setup.missing.title", "setup.missing.body",
         "setup.script.profile", "setup.script.hint", "loginItem.failed.title",
     ]),
+    ("Статистика под окнами", [
+        "stat.credits", "stat.unlimited", "stat.resetCredits", "stat.extraUsage",
+    ]),
     ("Уведомления", ["notification.title", "notification.body",
                      "notification.reset.title", "notification.reset.body"]),
     ("Ошибки в колонке", [
@@ -912,6 +915,31 @@ _RESET = {
 for _lang, (_title, _body) in _RESET.items():
     T[_lang]["notification.reset.title"] = _title
     T[_lang]["notification.reset.body"] = _body
+
+
+# Строки статистики под окнами. Без спецификаторов — подставляется только
+# готовое число, поэтому проверка форматов их не касается.
+_STATS = {
+    "en":      ("Credits", "unlimited", "Early resets", "Extra usage"),
+    "ru":      ("Кредиты", "без лимита", "Досрочные сбросы", "Расход сверх лимита"),
+    "de":      ("Guthaben", "unbegrenzt", "Vorzeitige Resets", "Zusatzverbrauch"),
+    "fr":      ("Crédits", "illimité", "Réinit. anticipées", "Usage supplémentaire"),
+    "es":      ("Créditos", "ilimitado", "Reinicios anticipados", "Uso adicional"),
+    "it":      ("Crediti", "illimitato", "Reset anticipati", "Uso aggiuntivo"),
+    "pt-BR":   ("Créditos", "ilimitado", "Redefinições antecipadas", "Uso adicional"),
+    "uk":      ("Кредити", "без ліміту", "Дострокові скидання", "Витрати понад ліміт"),
+    "pl":      ("Kredyty", "bez limitu", "Wcześniejsze resety", "Zużycie ponad limit"),
+    "tr":      ("Krediler", "sınırsız", "Erken sıfırlamalar", "Ek kullanım"),
+    "ja":      ("クレジット", "無制限", "早期リセット", "追加利用"),
+    "ko":      ("크레딧", "무제한", "조기 초기화", "추가 사용"),
+    "zh-Hans": ("额度", "无限制", "提前重置", "额外用量"),
+    "zh-Hant": ("額度", "無限制", "提前重置", "額外用量"),
+}
+for _lang, (_credits, _unlimited, _resets, _extra) in _STATS.items():
+    T[_lang]["stat.credits"] = _credits
+    T[_lang]["stat.unlimited"] = _unlimited
+    T[_lang]["stat.resetCredits"] = _resets
+    T[_lang]["stat.extraUsage"] = _extra
 
 
 def main():

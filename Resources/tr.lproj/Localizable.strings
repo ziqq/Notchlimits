@@ -82,6 +82,12 @@
 "setup.script.hint" = "Giris yap, sonra bu pencereyi kapat.";
 "loginItem.failed.title" = "Girişte başlatma değiştirilemedi";
 
+// Статистика под окнами
+"stat.credits" = "Krediler";
+"stat.unlimited" = "sınırsız";
+"stat.resetCredits" = "Erken sıfırlamalar";
+"stat.extraUsage" = "Ek kullanım";
+
 // Уведомления
 "notification.title" = "%1$@ — %%%2$d";
 "notification.body" = "%1$@: %%%2$d";

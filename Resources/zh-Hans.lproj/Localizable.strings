@@ -82,6 +82,12 @@
 "setup.script.hint" = "登录后关闭此窗口。";
 "loginItem.failed.title" = "无法更改登录时启动";
 
+// Статистика под окнами
+"stat.credits" = "额度";
+"stat.unlimited" = "无限制";
+"stat.resetCredits" = "提前重置";
+"stat.extraUsage" = "额外用量";
+
 // Уведомления
 "notification.title" = "%1$@ — %2$d%%";
 "notification.body" = "%1$@：%2$d%%";

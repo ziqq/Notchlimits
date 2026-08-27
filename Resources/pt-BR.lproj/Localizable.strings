@@ -82,6 +82,12 @@
 "setup.script.hint" = "Faca login e feche esta janela.";
 "loginItem.failed.title" = "Não foi possível mudar a abertura ao iniciar sessão";
 
+// Статистика под окнами
+"stat.credits" = "Créditos";
+"stat.unlimited" = "ilimitado";
+"stat.resetCredits" = "Redefinições antecipadas";
+"stat.extraUsage" = "Uso adicional";
+
 // Уведомления
 "notification.title" = "%1$@ — %2$d%%";
 "notification.body" = "%1$@: %2$d%%";

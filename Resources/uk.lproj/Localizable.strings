@@ -82,6 +82,12 @@
 "setup.script.hint" = "Увійди в акаунт, потім закрий це вікно.";
 "loginItem.failed.title" = "Не вдалося змінити запуск при вході";
 
+// Статистика под окнами
+"stat.credits" = "Кредити";
+"stat.unlimited" = "без ліміту";
+"stat.resetCredits" = "Дострокові скидання";
+"stat.extraUsage" = "Витрати понад ліміт";
+
 // Уведомления
 "notification.title" = "%1$@ — %2$d %%";
 "notification.body" = "%1$@: %2$d %%";

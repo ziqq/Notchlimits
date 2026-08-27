@@ -93,6 +93,10 @@ Width is 250 pt per column, no less than 500 pt and no wider than the screen min
 - **`data N min ago`** — grey note: no fresh response right now (rate limit, network, just launched); last known values shown.
 - **`updating…`** — no data yet.
 
+A re-auth or error message is shown **on top of** cached numbers, not instead of them — otherwise an expired token just looks like old percentages and there's no hint that you need to log in again.
+
+Below the windows, whatever extra numbers the endpoint returns are listed: credit balance, early resets available, usage billed beyond the plan. Lines with a zero or missing value are omitted.
+
 ## Multiple accounts
 
 Menu → **Add Claude account…** or **Add Codex account…**. The dialog asks for a short profile name and previews the result live (`Folder: ~/.claude-profiles/work`); the Create button stays disabled until the name is valid. The panel then creates `~/.claude-profiles/<name>` (or `~/.codex-profiles/<name>`), drops a `login.command` there and opens it in Terminal.app. Passwords are never seen or asked — the CLI handles login. New profiles are picked up automatically, no restart.
@@ -117,7 +121,7 @@ anthropic-beta: oauth-2025-04-20
 User-Agent: claude-code/<installed CLI version>
 ```
 
-The native `User-Agent` matters — without it the endpoint returns 429 far more often. Any field-object with a numeric `utilization` counts as a window (`extra_usage` ignored), so new windows appear on their own, including internal model code-names like `nimbus_quill`. Titles: `five_hour`/`seven_day` get friendly labels, known prefixes expand (`seven_day_opus` → "Weekly window · Opus"), the rest are shown as words rather than raw snake_case. The subtitle shows the plan (`Pro`, `Max`) from the Keychain entry — Anthropic exposes no email anywhere.
+The native `User-Agent` matters — without it the endpoint returns 429 far more often. Any field-object with a numeric `utilization` counts as a window (`extra_usage` ignored), so new windows appear on their own, including internal model code-names like `nimbus_quill`. Titles: `five_hour`/`seven_day` get friendly labels, known prefixes expand (`seven_day_opus` → "Weekly window · Opus"), the rest are shown as words rather than raw snake_case. The subtitle shows the plan (`Pro`, `Max`) from the Keychain entry — Anthropic exposes no email anywhere. `extra_usage` isn't a window (it's spend, not a share of a quota), so it goes to the stats line instead.
 
 **Codex.** Auth from `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`); `apikey` mode can't reach the usage endpoint — ChatGPT login is required. Token lifetime from the JWT `exp` claim, email for the column subtitle from `id_token`.
 
@@ -128,7 +132,7 @@ ChatGPT-Account-ID: <account_id>
 User-Agent: codex_cli_rs/<version>
 ```
 
-`rate_limit.primary_window`, `secondary_window` and every `additional_rate_limits[]` are drawn — the latter prefixed by `limit_name` or `metered_feature`. Window title derives from `limit_window_seconds`.
+`rate_limit.primary_window`, `secondary_window` and every `additional_rate_limits[]` are drawn — the latter prefixed by `limit_name` or `metered_feature`. Window title derives from `limit_window_seconds`. The subtitle is `plan_type · email`; `credits.balance` and `rate_limit_reset_credits.available_count` become stats lines.
 
 ## Refresh & resilience
 
