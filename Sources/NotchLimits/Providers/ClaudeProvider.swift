@@ -215,10 +215,12 @@ actor ClaudeProvider: UsageProvider {
         }
 
         // Инертные окна-заглушки не показываем: 0 % и без даты сброса — это
-        // внутренние кодовые имена (например `nimbus_quill`), которые сервер
-        // отдаёт про запас. Смотреть там не на что, а строка сбивает с толку.
-        // Оживёт (появится процент или дата сброса) — вернётся само.
-        let active = windows.filter { !($0.utilization == 0 && $0.resetsAt == nil) }
+        // неизвестные кодовые имена (например `nimbus_quill`), которые сервер
+        // отдаёт про запас. Но только неизвестные (rank 4): основные окна
+        // (five_hour, seven_day и их производные) сразу после сброса тоже
+        // приходят как 0 % без даты, и прятать их нельзя — иначе окно «исчезает»
+        // до следующего обращения к Claude.
+        let active = windows.filter { !($0.utilization == 0 && $0.resetsAt == nil && rank($0.key) == 4) }
         let visible = active.isEmpty ? windows : active
 
         return visible.sorted { lhs, rhs in
