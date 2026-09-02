@@ -15,7 +15,7 @@ A panel that slides out of the MacBook notch with **Claude Code** and **Codex** 
 - Lives in the notch — the collapsed panel matches the cutout pixel-for-pixel and stays invisible.
 - Works without a notch too (external display, Mac mini, iMac).
 - Notifications when any window crosses 80 % and 95 %, and when a heavily-used window resets and frees up.
-- A sparkline of the recent trend per window, plus a burn-rate forecast: if the current pace would hit 100 % before the window resets, the row shows when.
+- A burn-rate forecast: if the current pace would hit 100 % before the window resets, the row shows when.
 - Survives restarts: last percentages are cached and shown with an age note.
 - One account's error or rate limit never touches the other columns.
 - UI in 14 languages, picked from the system language.
@@ -98,7 +98,7 @@ Width is 250 pt per column, no less than 500 pt and no wider than the screen min
 
 A re-auth or error message is shown **on top of** cached numbers, not instead of them — otherwise an expired token just looks like old percentages and there's no hint that you need to log in again.
 
-Each row keeps a short local history of its percentage (in `UserDefaults`, no tokens). Once there are a few samples with real movement, a **sparkline** appears next to the percentage — a fixed 0–100 scale, so the slope reflects the true pace rather than an auto-zoom. From the same samples a **burn-rate forecast** is computed by least-squares slope: if the current pace would reach 100 % *before* the window resets, the row adds a caution line — `full ≈ <time>` — in yellow, or red when that's under 45 minutes away. Flat or falling windows, and ones that comfortably reset first, show nothing. Hovering still gives the exact reset time.
+Each row keeps a short local history of its percentage (in `UserDefaults`, no tokens). From those samples a **burn-rate forecast** is computed by least-squares slope: if the current pace would reach 100 % *before* the window resets, that's the more relevant moment, so it takes the timing line — `full ≈ <time>` — in yellow, or red when it's under 45 minutes away. The exact reset time stays on hover. Flat or falling windows, and ones that comfortably reset first, show the normal reset line instead. The forecast needs a few samples spanning at least five minutes, so it appears a little after launch, not immediately.
 
 Below the windows, whatever extra numbers the endpoint returns are listed: credit balance, early resets available, usage billed beyond the plan. Lines with a zero or missing value are omitted.
 

@@ -107,11 +107,9 @@ enum DebugRender {
         main.windows = [
             LimitWindow(key: "five_hour", title: L.t("window.fiveHour"), utilization: 42,
                         resetsAt: Date().addingTimeInterval(2.4 * hour),
-                        trend: [18, 24, 29, 33, 38, 42],
                         exhaustsAt: Date().addingTimeInterval(1.6 * hour)),
             LimitWindow(key: "seven_day", title: L.t("window.week"), utilization: 71,
-                        resetsAt: Date().addingTimeInterval(74 * hour),
-                        trend: [60, 63, 65, 68, 70, 71]),
+                        resetsAt: Date().addingTimeInterval(74 * hour)),
             LimitWindow(key: "seven_day_opus", title: L.t("window.week") + " · Opus", utilization: 93,
                         resetsAt: Date().addingTimeInterval(74 * hour))
         ]

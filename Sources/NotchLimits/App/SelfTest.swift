@@ -373,10 +373,6 @@ enum SelfTest {
         // Уже на 100 % — прогнозировать нечего.
         expect("на 100 % прогноза нет",
                UsageHistory.projection(samples: rising, current: 100, resetsAt: soonReset, now: now) == nil)
-
-        // Спарклайн: жёсткая шкала 0–100, точки в пределах прямоугольника.
-        let path = Sparkline(values: [0, 50, 100]).path(in: CGRect(x: 0, y: 0, width: 30, height: 10))
-        expect("спарклайн строит путь", !path.isEmpty)
     }
 
     private static func checkFormatting() {
