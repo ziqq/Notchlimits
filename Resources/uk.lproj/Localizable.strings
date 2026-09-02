@@ -88,6 +88,9 @@
 "stat.resetCredits" = "Дострокові скидання";
 "stat.extraUsage" = "Витрати понад ліміт";
 
+// Прогноз исчерпания
+"burn.limitAt" = "межа ≈ %@";
+
 // Уведомления
 "notification.title" = "%1$@ — %2$d %%";
 "notification.body" = "%1$@: %2$d %%";

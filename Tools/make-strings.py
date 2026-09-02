@@ -55,6 +55,7 @@ ORDER = [
     ("Статистика под окнами", [
         "stat.credits", "stat.unlimited", "stat.resetCredits", "stat.extraUsage",
     ]),
+    ("Прогноз исчерпания", ["burn.limitAt"]),
     ("Уведомления", ["notification.title", "notification.body",
                      "notification.reset.title", "notification.reset.body"]),
     ("Ошибки в колонке", [
@@ -940,6 +941,28 @@ for _lang, (_credits, _unlimited, _resets, _extra) in _STATS.items():
     T[_lang]["stat.unlimited"] = _unlimited
     T[_lang]["stat.resetCredits"] = _resets
     T[_lang]["stat.extraUsage"] = _extra
+
+
+# Прогноз исчерпания: «упрёшься в 100 % примерно тогда-то». Один «%@» —
+# готовая строка времени (Format.resetAbsolute), спецификатор совпадает везде.
+_BURN = {
+    "en":      "full ≈ %@",
+    "ru":      "предел ≈ %@",
+    "de":      "voll ≈ %@",
+    "fr":      "plein ≈ %@",
+    "es":      "lleno ≈ %@",
+    "it":      "pieno ≈ %@",
+    "pt-BR":   "cheio ≈ %@",
+    "uk":      "межа ≈ %@",
+    "pl":      "limit ≈ %@",
+    "tr":      "dolum ≈ %@",
+    "ja":      "上限 ≈ %@",
+    "ko":      "한도 ≈ %@",
+    "zh-Hans": "上限 ≈ %@",
+    "zh-Hant": "上限 ≈ %@",
+}
+for _lang, _text in _BURN.items():
+    T[_lang]["burn.limitAt"] = _text
 
 
 def main():

@@ -19,6 +19,13 @@ struct LimitWindow: Identifiable, Codable, Equatable {
     /// 0...100
     let utilization: Double
     let resetsAt: Date?
+    /// Недавние замеры процента для спарклайна. Optional — иначе старый кэш
+    /// без этого поля не декодировался бы (synthesized Decodable кинул бы
+    /// keyNotFound). Заполняется при отдаче в UI, не приходит от провайдера.
+    var trend: [Double]?
+    /// Прогноз: когда окно упрётся в 100 % при текущем темпе — если это
+    /// случится раньше сброса. nil — темп нулевой/падает или запаса хватает.
+    var exhaustsAt: Date?
 
     var id: String { key }
 }

@@ -88,6 +88,9 @@
 "stat.resetCredits" = "Erken sıfırlamalar";
 "stat.extraUsage" = "Ek kullanım";
 
+// Прогноз исчерпания
+"burn.limitAt" = "dolum ≈ %@";
+
 // Уведомления
 "notification.title" = "%1$@ — %%%2$d";
 "notification.body" = "%1$@: %%%2$d";
