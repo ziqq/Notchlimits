@@ -88,6 +88,9 @@
 "stat.resetCredits" = "Wcześniejsze resety";
 "stat.extraUsage" = "Zużycie ponad limit";
 
+// Прогноз исчерпания
+"burn.limitAt" = "limit ≈ %@";
+
 // Уведомления
 "notification.title" = "%1$@ — %2$d%%";
 "notification.body" = "%1$@: %2$d%%";

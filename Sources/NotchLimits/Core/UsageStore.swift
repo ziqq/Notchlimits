@@ -25,6 +25,7 @@ final class UsageStore: ObservableObject {
     private var tick: Timer?
     private var lastDiscovery: Date?
     private let cache = UsageCache()
+    private let history = UsageHistory()
     private let notifier = ThresholdNotifier()
     private let providers: [Provider: UsageProvider]
     private let discovery: AccountDiscovery
@@ -188,10 +189,20 @@ final class UsageStore: ObservableObject {
         case .success(let snapshot):
             state.backoffStep = 0
             state.nextDue = Date().addingTimeInterval(Schedule.interval)
-            columns[index].windows = snapshot.windows
+            let now = Date()
+            // Дописываем историю и считаем тренд/прогноз для каждого окна.
+            columns[index].windows = snapshot.windows.map { window in
+                let samples = history.record(columnID: id, window: window, now: now)
+                var enriched = window
+                enriched.trend = samples.map(\.u)
+                enriched.exhaustsAt = UsageHistory.projection(samples: samples,
+                                                              current: window.utilization,
+                                                              resetsAt: window.resetsAt, now: now)
+                return enriched
+            }
             columns[index].subtitle = snapshot.subtitle
             columns[index].stats = snapshot.stats
-            columns[index].updatedAt = Date()
+            columns[index].updatedAt = now
             columns[index].status = .ok
             columns[index].fromCache = false
             cache.save(columns[index])

@@ -88,6 +88,9 @@
 "stat.resetCredits" = "Reset anticipati";
 "stat.extraUsage" = "Uso aggiuntivo";
 
+// Прогноз исчерпания
+"burn.limitAt" = "pieno ≈ %@";
+
 // Уведомления
 "notification.title" = "%1$@ — %2$d%%";
 "notification.body" = "%1$@: %2$d%%";

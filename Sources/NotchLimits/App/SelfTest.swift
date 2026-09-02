@@ -21,6 +21,7 @@ enum SelfTest {
         checkJWT()
         checkClaudeAuth()
         checkNotifications()
+        checkBurnRate()
         checkFormatting()
         checkCodableRoundTrips()
         checkLocalizations()
@@ -328,6 +329,54 @@ enum SelfTest {
         // Старый формат состояния без поля пика читается и не ломает разбор.
         let legacy = decide("100@80,95", "200", 3)
         expect("старый формат: пик отсутствует → не шумим", legacy.postReset == false)
+    }
+
+    private static func checkBurnRate() {
+        section("Прогноз исчерпания (burn-rate)")
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        func sample(_ minutes: Double, _ u: Double) -> UsageHistory.Sample {
+            UsageHistory.Sample(t: t0.addingTimeInterval(minutes * 60).timeIntervalSince1970, u: u)
+        }
+
+        // Ровный рост 10 % за 30 мин (по 5 % каждые 15 мин): к 100 % ещё далеко,
+        // но сброс близко — упрёмся раньше сброса.
+        let rising = [sample(0, 80), sample(15, 85), sample(30, 90)]
+        let now = t0.addingTimeInterval(30 * 60)
+        let soonReset = now.addingTimeInterval(60 * 60)   // сброс через час
+        let eta = UsageHistory.projection(samples: rising, current: 90,
+                                          resetsAt: soonReset, now: now)
+        expect("растущее окно даёт прогноз", eta != nil)
+        // 90→100 при 5 % / 15 мин = 10 % за 30 мин ⇒ ~30 мин.
+        if let eta {
+            let minutes = eta.timeIntervalSince(now) / 60
+            expect("оценка ~30 мин", abs(minutes - 30) < 3, "\(Int(minutes)) мин")
+        }
+
+        // Тот же рост, но сброс раньше предела — беспокоиться не о чем.
+        expect("если сброс раньше предела — прогноза нет",
+               UsageHistory.projection(samples: rising, current: 90,
+                                       resetsAt: now.addingTimeInterval(10 * 60), now: now) == nil)
+
+        // Плоское окно — предел не наступит.
+        let flat = [sample(0, 40), sample(15, 40), sample(30, 40)]
+        expect("плоское окно без прогноза",
+               UsageHistory.projection(samples: flat, current: 40,
+                                       resetsAt: soonReset, now: now) == nil)
+
+        // Меньше трёх замеров или слишком короткий разброс — не гадаем.
+        expect("двух точек мало", UsageHistory.projection(samples: [sample(0, 10), sample(15, 50)],
+                                                          current: 50, resetsAt: soonReset, now: now) == nil)
+        let tooShort = [sample(0, 10), sample(1, 20), sample(2, 30)]  // разброс 2 мин < 5
+        expect("слишком короткий интервал — не гадаем",
+               UsageHistory.projection(samples: tooShort, current: 30, resetsAt: soonReset, now: now) == nil)
+
+        // Уже на 100 % — прогнозировать нечего.
+        expect("на 100 % прогноза нет",
+               UsageHistory.projection(samples: rising, current: 100, resetsAt: soonReset, now: now) == nil)
+
+        // Спарклайн: жёсткая шкала 0–100, точки в пределах прямоугольника.
+        let path = Sparkline(values: [0, 50, 100]).path(in: CGRect(x: 0, y: 0, width: 30, height: 10))
+        expect("спарклайн строит путь", !path.isEmpty)
     }
 
     private static func checkFormatting() {

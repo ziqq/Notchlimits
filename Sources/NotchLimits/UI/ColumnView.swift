@@ -124,6 +124,14 @@ struct LimitRowView: View {
     private var fraction: Double { min(max(window.utilization / 100, 0), 1) }
     private var color: Color { Theme.color(for: window.utilization) }
 
+    /// Спарклайн показываем, только когда есть что показывать: хотя бы три
+    /// замера и заметное движение, иначе это просто плоская линия-шум.
+    private var trend: [Double]? {
+        guard let trend = window.trend, trend.count >= 3,
+              let lo = trend.min(), let hi = trend.max(), hi - lo > 1 else { return nil }
+        return trend
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -135,6 +143,13 @@ struct LimitRowView: View {
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 4)
+                if let trend {
+                    Sparkline(values: trend)
+                        .stroke(color.opacity(0.7), style: StrokeStyle(lineWidth: 1.3,
+                                                                       lineCap: .round, lineJoin: .round))
+                        .frame(width: 34, height: 12)
+                        .layoutPriority(1)
+                }
                 Text(Format.percent(window.utilization))
                     .font(.system(size: 11, weight: .semibold).monospacedDigit())
                     .foregroundColor(color)
@@ -158,8 +173,36 @@ struct LimitRowView: View {
                     .font(.system(size: 9.5))
                     .foregroundColor(Theme.tertiary)
             }
+            // Прогноз: упрёмся в предел раньше сброса — предупреждаем.
+            // Цвет тревожный независимо от текущего процента (в том и смысл:
+            // сейчас мало, но при таком темпе не хватит). Совсем скоро — красный.
+            if let exhaustsAt = window.exhaustsAt {
+                Text(L.t("burn.limitAt", Format.resetAbsolute(exhaustsAt)))
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundColor(exhaustsAt.timeIntervalSinceNow < 45 * 60 ? Theme.red : Theme.yellow)
+            }
         }
         // При наведении — точный момент сброса: «сегодня, 13:30».
         .help(window.resetsAt.map(Format.resetAbsolute) ?? "")
+    }
+}
+
+/// Спарклайн процентов. Шкала жёстко 0–100, чтобы крутизна линии отражала
+/// реальный темп, а не автомасштаб: 2 %→3 % должно выглядеть почти плоско.
+struct Sparkline: Shape {
+    let values: [Double]
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        guard values.count >= 2 else { return path }
+        let stepX = rect.width / CGFloat(values.count - 1)
+        func point(_ index: Int) -> CGPoint {
+            let clamped = min(max(values[index], 0), 100) / 100
+            return CGPoint(x: rect.minX + CGFloat(index) * stepX,
+                           y: rect.maxY - CGFloat(clamped) * rect.height)
+        }
+        path.move(to: point(0))
+        for index in 1..<values.count { path.addLine(to: point(index)) }
+        return path
     }
 }
