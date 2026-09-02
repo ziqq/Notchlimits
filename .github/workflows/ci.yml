@@ -58,6 +58,7 @@ jobs:
           plutil -lint "$APP/Contents/Info.plist"
           codesign --verify --deep --strict "$APP"
           test "$(plutil -extract LSUIElement raw "$APP/Contents/Info.plist")" = "true"
+          test "$(plutil -extract CFBundleDisplayName raw "$APP/Contents/Info.plist")" = "Notch Limits"
           test -f "$APP/Contents/Resources/AppIcon.icns"
           LOCALES=$(find "$APP/Contents/Resources" -maxdepth 1 -name '*.lproj' | wc -l | tr -d ' ')
           echo "локализаций в бандле: $LOCALES"
