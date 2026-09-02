@@ -190,11 +190,10 @@ final class UsageStore: ObservableObject {
             state.backoffStep = 0
             state.nextDue = Date().addingTimeInterval(Schedule.interval)
             let now = Date()
-            // Дописываем историю и считаем тренд/прогноз для каждого окна.
+            // Дописываем историю и считаем прогноз исчерпания для каждого окна.
             columns[index].windows = snapshot.windows.map { window in
                 let samples = history.record(columnID: id, window: window, now: now)
                 var enriched = window
-                enriched.trend = samples.map(\.u)
                 enriched.exhaustsAt = UsageHistory.projection(samples: samples,
                                                               current: window.utilization,
                                                               resetsAt: window.resetsAt, now: now)
