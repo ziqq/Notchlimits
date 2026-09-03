@@ -172,9 +172,9 @@ struct LimitRowView: View {
         let reset = Text(Format.reset(resetsAt)).foregroundColor(Theme.tertiary)
         guard let exhaustsAt = window.exhaustsAt else { return reset }
         let soon = exhaustsAt.timeIntervalSinceNow < 45 * 60
+        // Отличаем только цветом — начертание и размер как у строки сброса.
         let forecast = Text("  ·  " + L.t("burn.limitAt", Format.clock(exhaustsAt)))
             .foregroundColor(soon ? Theme.red : Theme.yellow)
-            .fontWeight(.semibold)
         return reset + forecast
     }
 }
