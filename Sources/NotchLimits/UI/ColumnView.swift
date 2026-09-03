@@ -153,21 +153,28 @@ struct LimitRowView: View {
             }
             .frame(height: 5)
 
-            // Прогноз важнее времени сброса: если при текущем темпе упрёмся в
-            // предел раньше, чем окно сбросится, он занимает эту же строку —
-            // тревожным цветом (совсем скоро — красным). Точное время сброса
-            // остаётся по наведению. Иначе — обычная строка сброса.
-            if let exhaustsAt = window.exhaustsAt {
-                Text(L.t("burn.limitAt", Format.resetAbsolute(exhaustsAt)))
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .foregroundColor(exhaustsAt.timeIntervalSinceNow < 45 * 60 ? Theme.red : Theme.yellow)
-            } else if let resetsAt = window.resetsAt {
-                Text(Format.reset(resetsAt))
+            // Время сброса видно всегда. Если при текущем темпе упрёмся в предел
+            // раньше сброса — дописываем прогноз к той же строке тревожным цветом
+            // (совсем скоро — красным). Точная дата предела — в тултипе.
+            if let resetsAt = window.resetsAt {
+                timingLine(resetsAt: resetsAt)
                     .font(.system(size: 9.5))
-                    .foregroundColor(Theme.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         // При наведении — точный момент сброса: «сегодня, 13:30».
         .help(window.resetsAt.map(Format.resetAbsolute) ?? "")
+    }
+
+    /// Строка тайминга: «Сброс через 2 ч 23 мин» плюс, если есть прогноз,
+    /// «· предел ≈ 19:40» тем же размером, но тревожным цветом.
+    private func timingLine(resetsAt: Date) -> Text {
+        let reset = Text(Format.reset(resetsAt)).foregroundColor(Theme.tertiary)
+        guard let exhaustsAt = window.exhaustsAt else { return reset }
+        let soon = exhaustsAt.timeIntervalSinceNow < 45 * 60
+        let forecast = Text("  ·  " + L.t("burn.limitAt", Format.clock(exhaustsAt)))
+            .foregroundColor(soon ? Theme.red : Theme.yellow)
+            .fontWeight(.semibold)
+        return reset + forecast
     }
 }

@@ -98,7 +98,7 @@ Width is 250 pt per column, no less than 500 pt and no wider than the screen min
 
 A re-auth or error message is shown **on top of** cached numbers, not instead of them — otherwise an expired token just looks like old percentages and there's no hint that you need to log in again.
 
-Each row keeps a short local history of its percentage (in `UserDefaults`, no tokens). From those samples a **burn-rate forecast** is computed by least-squares slope: if the current pace would reach 100 % *before* the window resets, that's the more relevant moment, so it takes the timing line — `full ≈ <time>` — in yellow, or red when it's under 45 minutes away. The exact reset time stays on hover. Flat or falling windows, and ones that comfortably reset first, show the normal reset line instead. The forecast needs a few samples spanning at least five minutes, so it appears a little after launch, not immediately.
+Each row keeps a short local history of its percentage (in `UserDefaults`, no tokens). From those samples a **burn-rate forecast** is computed by least-squares slope: if the current pace would reach 100 % *before* the window resets, the reset line gains a `· full ≈ <time>` suffix — yellow, or red when it's under 45 minutes away. The reset countdown itself stays visible, and hovering gives the exact reset time. Flat or falling windows, and ones that comfortably reset first, show just the reset line. The forecast needs a few samples spanning at least five minutes, so it appears a little after launch, not immediately.
 
 Below the windows, whatever extra numbers the endpoint returns are listed: credit balance, early resets available, usage billed beyond the plan. Lines with a zero or missing value are omitted.
 

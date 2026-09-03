@@ -74,6 +74,16 @@ enum Format {
         return formatter.string(from: date)
     }
 
+    /// Только время, без даты: «19:40». Для компактной пометки прогноза рядом
+    /// со строкой сброса; полная дата остаётся в тултипе.
+    static func clock(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
     /// Возраст данных: «12 с назад», «3 мин назад», «2 ч назад».
     static func age(_ date: Date, now: Date = Date()) -> String {
         let seconds = max(0, Int(now.timeIntervalSince(date)))
