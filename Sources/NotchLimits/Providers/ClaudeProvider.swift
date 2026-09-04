@@ -99,25 +99,15 @@ actor ClaudeProvider: UsageProvider {
         // продлеваем сами — CLI мог не запускаться сутками.
         guard credentials.isRefreshable, let refreshToken = credentials.refreshToken else { return nil }
 
-        // Убеждаемся, что запись нам поддаётся, до обращения к серверу: иначе
-        // ротация отзовёт refresh-токен, а записать новый будет некуда.
-        let writable = await Task.detached(priority: .utility) {
-            ClaudeKeychain.isWritable(service: service)
-        }.value
-        guard writable else { return nil }
-
         switch await ClaudeOAuth.refresh(refreshToken: refreshToken, scopes: credentials.scopes) {
         case .success(let fresh):
-            // Запись обязательна: при ротации прежний refresh-токен уже отозван,
-            // и без записи вход сломается у самого CLI.
-            // Если запись не удалась, работать всё равно можем — токен есть в
-            // памяти. Но при ротации это значит, что CLI остался со старым
-            // refresh-токеном, поэтому пробуем записать ещё раз.
-            var saved = await Task.detached(priority: .utility) {
-                ClaudeKeychain.save(service: service, tokens: fresh)
-            }.value
-            if !saved {
-                saved = await Task.detached(priority: .utility) {
+            // В Keychain пишем ТОЛЬКО когда сервер сменил refresh-токен: старый
+            // тогда отозван, и без записи сломался бы вход CLI. Если ротации не
+            // было — новый refresh-токен не выдан, старый ещё годен, писать
+            // незачем. Это важно: каждая запись дёргает диалог Keychain, а
+            // access-токен и так живёт в памяти до следующего обновления.
+            if fresh.refreshToken != nil {
+                _ = await Task.detached(priority: .utility) {
                     ClaudeKeychain.save(service: service, tokens: fresh)
                 }.value
             }

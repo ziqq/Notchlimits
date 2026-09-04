@@ -99,23 +99,6 @@ enum ClaudeKeychain {
         return Date(timeIntervalSince1970: millis / 1000)
     }
 
-    /// Можно ли вообще писать в эту запись: пишем в неё же то, что там лежит.
-    ///
-    /// Нужно до обновления, а не после: сервер вправе ротировать refresh-токен,
-    /// и если записать новый мы не сможем, прежний окажется отозван, а CLI
-    /// останется с мёртвым токеном. Проще не обновляться вовсе.
-    static func isWritable(service: String) -> Bool {
-        guard let json = rawItem(service: service),
-              let data = try? JSONSerialization.data(withJSONObject: json)
-        else { return false }
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service
-        ]
-        return SecItemUpdate(query as CFDictionary,
-                             [kSecValueData as String: data] as CFDictionary) == errSecSuccess
-    }
-
     /// Записать обновлённые токены обратно в запись CLI.
     ///
     /// Читаем прямо перед записью и накладываем изменения на свежий JSON:
