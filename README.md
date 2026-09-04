@@ -146,8 +146,8 @@ Content-Type: application/json
 
 Three details that matter:
 
-- **The refresh token rotates.** The response usually carries a new one, and the old one stops working the moment it does. So the result is written back to the Keychain entry — not writing it back would break the CLI's own login. The write merges into a *freshly read* entry, preserving `subscriptionType`, `rateLimitTier` and every field the panel doesn't know about.
-- **Writability is checked before the request**, by writing the entry back unchanged. If the Keychain won't let us write, no refresh is attempted at all — otherwise rotation would revoke the old token with nowhere to store the new one.
+- **The refresh token rotates.** When the response carries a new one, the old one stops working, so the result is written back to the Keychain entry — not writing it back would break the CLI's own login. The write merges into a *freshly read* entry, preserving `subscriptionType`, `rateLimitTier` and every field the panel doesn't know about.
+- **The Keychain is written only when the refresh token actually rotated.** If the server didn't issue a new refresh token, the old one is still valid and nothing is written — the new access token just lives in memory until the next refresh. This matters because every Keychain write pops a macOS authorization prompt; skipping the needless ones keeps them rare (grant it once with **Always Allow**).
 - **A 401 marks that exact token as rejected**, so the next cycle renews instead of re-reading the same dead token from the Keychain. If the entry meanwhile holds a different token, the CLI refreshed first and that one is used.
 
 Renewal happens only on expiry, never preemptively, which keeps the window for racing the CLI small.
