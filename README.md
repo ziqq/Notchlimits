@@ -161,7 +161,7 @@ ChatGPT-Account-ID: <account_id>
 User-Agent: codex_cli_rs/<version>
 ```
 
-`rate_limit.primary_window`, `secondary_window` and every `additional_rate_limits[]` are drawn — the latter prefixed by `limit_name` or `metered_feature`. Those extra entries are per-model buckets the API reports separately from the main quota (e.g. `GPT-5.3-Codex-Spark`, a specific model tier); the app shows whatever names come back, so the list tracks OpenAI's without code changes. Window title derives from `limit_window_seconds` (`18000` → 5-hour, `604800` → weekly). The subtitle is `plan_type · email`; `credits.balance` and `rate_limit_reset_credits.available_count` become stats lines.
+`rate_limit.primary_window`, `secondary_window` and every `additional_rate_limits[]` are drawn — the latter prefixed by `limit_name` or `metered_feature`. Those extra entries are per-model buckets the API reports separately from the main quota (e.g. `GPT-5.3-Codex-Spark`, a specific model tier); the app shows whatever names come back, so the list tracks OpenAI's without code changes. Window title derives from `limit_window_seconds` (`18000` → 5-hour, `604800` → weekly). The subtitle is `plan_type · email`; `credits.balance` and `rate_limit_reset_credits` become stats lines — the latter as `applicable / available` (usable right now / banked) when they differ, since a credit is only applicable while a window is actually maxed. The endpoint returns no timestamp for when the next one becomes usable, so none is shown.
 
 ## Refresh & resilience
 
