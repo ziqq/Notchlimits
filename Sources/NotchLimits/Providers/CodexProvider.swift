@@ -127,12 +127,19 @@ struct CodexProvider: UsageProvider {
             }
         }
 
-        // Досрочные сбросы: сколько раз можно обнулить окно, не дожидаясь его конца.
+        // Досрочные сбросы: сколько раз можно обнулить окно, не дожидаясь конца.
+        // Времени «когда станет доступен» эндпоинт не отдаёт — только два числа.
+        // Показываем «применимо сейчас / всего в запасе», когда они расходятся:
+        // applicable_available_count > 0 обычно лишь когда окно упёрлось в лимит.
         if let resets = root["rate_limit_reset_credits"] as? [String: Any],
            let available = number(resets["available_count"]), available > 0 {
+            let applicable = number(resets["applicable_available_count"]) ?? available
+            let value = applicable < available
+                ? "\(Format.compact(applicable)) / \(Format.compact(available))"
+                : Format.compact(available)
             result.append(UsageStat(key: "resetCredits",
                                     label: L.t("stat.resetCredits"),
-                                    value: Format.compact(available)))
+                                    value: value))
         }
 
         return result
