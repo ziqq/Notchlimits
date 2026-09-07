@@ -128,7 +128,7 @@ User-Agent: claude-code/<installed CLI version>
 
 The native `User-Agent` matters — without it the endpoint returns 429 far more often. Any field-object with a numeric `utilization` counts as a window, so new windows appear on their own, including internal model code-names. Windows that are inert — `0 %` **and** no reset date, like the `nimbus_quill` placeholder the endpoint returns in reserve — are hidden until they come alive, so they don't clutter the column with a row you can't act on. Titles: `five_hour`/`seven_day` get friendly labels, known prefixes expand (`seven_day_opus` → "Weekly window · Opus", shown to Max/Opus accounts), the rest are shown as words rather than raw snake_case. `extra_usage` (pay-as-you-go beyond the plan) is not a window — it's spend, not a share of a quota — so it goes to the stats line, but **only while `is_enabled` is true**: `used_credits` is then a live spend meter (shown as money, since the amount is minor units — `10308` at `decimal_places: 2` is `$103.08`, plus the `monthly_limit` cap when set). When extra usage is off (`out_of_credits`), the same number is just historical depleted credits and would read as an active charge, so it's hidden.
 
-The subtitle is `plan · email`, matching Codex. The plan (`Pro`, `Max`) comes from the Keychain entry; the email isn't in either endpoint, so it's read from `claude auth status --json` — the CLI is run once per profile as a subprocess (with `CLAUDE_CONFIG_DIR` set for extra profiles) and the result cached.
+The subtitle is `plan · email`, matching Codex. The plan (`Pro`, `Max`) comes from the Keychain entry; the email isn't in either endpoint, so it's read straight from the CLI's config file — `~/.claude.json` (or `<CLAUDE_CONFIG_DIR>/.claude.json` for extra profiles), field `oauthAccount.emailAddress`. That's a plain file read, no Keychain and no subprocess, so it never triggers a password prompt.
 
 ### Token refresh
 
@@ -181,7 +181,7 @@ User-Agent: codex_cli_rs/<version>
 
 ## Privacy
 
-The app talks to three official endpoints and nowhere else: the two usage endpoints above, plus Anthropic's OAuth token endpoint when a Claude access token has expired (see [Token refresh](#token-refresh)). Tokens are never logged and never written to a plain file; the only thing written back is the refreshed Claude token, into the same Keychain entry the CLI already owns. The `claude` binary is run locally as a subprocess for its version string and for `auth status` (the account email) — output stays on the machine, and no credential is passed on the command line. Only settings and last percentages (with reset times) go to `UserDefaults`, without a single token. `URLSession` runs ephemeral, no cookies, no disk cache.
+The app talks to three official endpoints and nowhere else: the two usage endpoints above, plus Anthropic's OAuth token endpoint when a Claude access token has expired (see [Token refresh](#token-refresh)). Tokens are never logged and never written to a plain file; the only thing written back is the refreshed Claude token, into the same Keychain entry the CLI already owns. The `claude` binary is run locally once for its `--version` string (used in the User-Agent); the account email is read from the CLI's `~/.claude.json`, not fetched. Only settings and last percentages (with reset times) go to `UserDefaults`, without a single token. `URLSession` runs ephemeral, no cookies, no disk cache.
 
 ## CI & releases
 

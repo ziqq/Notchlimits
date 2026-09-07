@@ -131,14 +131,15 @@ enum SelfTest {
         expect("без обоих подписи нет",
                ClaudeProvider.subtitle(plan: nil, email: nil) == nil)
 
-        // Разбор `claude auth status --json`.
-        expect("почта из auth status вынута",
-               BinaryLocator.parseAuthEmail(#"{"loggedIn":true,"email":"u@e.com"}"#) == "u@e.com")
-        expect("не залогинен — почты нет",
-               BinaryLocator.parseAuthEmail(#"{"loggedIn":false,"email":"u@e.com"}"#) == nil)
-        expect("посторонние строки вокруг JSON не мешают",
-               BinaryLocator.parseAuthEmail("note\n{\"loggedIn\":true,\"email\":\"u@e.com\"}\n") == "u@e.com")
-        expect("мусор не ломает разбор почты", BinaryLocator.parseAuthEmail("не json") == nil)
+        // Почта из конфига ~/.claude.json (oauthAccount.emailAddress).
+        expect("почта из конфига вынута",
+               ClaudeProvider.parseEmail(fromConfig: Data(#"{"oauthAccount":{"emailAddress":"u@e.com"}}"#.utf8)) == "u@e.com")
+        expect("без oauthAccount почты нет",
+               ClaudeProvider.parseEmail(fromConfig: Data(#"{"other":1}"#.utf8)) == nil)
+        expect("пустая почта — nil",
+               ClaudeProvider.parseEmail(fromConfig: Data(#"{"oauthAccount":{"emailAddress":""}}"#.utf8)) == nil)
+        expect("мусор не ломает разбор почты",
+               ClaudeProvider.parseEmail(fromConfig: Data("не json".utf8)) == nil)
     }
 
     private static func checkCodexParser() {

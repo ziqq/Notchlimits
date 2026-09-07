@@ -148,15 +148,33 @@ actor ClaudeProvider: UsageProvider {
 
     // MARK: - Почта из CLI
 
-    /// Почта профиля. Спрашиваем `claude auth status` один раз за запуск:
-    /// раз получив, держим в памяти; неудачу тоже запоминаем (пустой строкой),
-    /// чтобы не запускать подпроцесс каждые три минуты ради подписи.
+    /// Почта профиля. Читаем из конфига CLI `~/.claude.json`
+    /// (`oauthAccount.emailAddress`) — обычный файл, без Keychain и подпроцессов,
+    /// поэтому никаких диалогов пароля. Раз прочитав, держим в памяти.
     private func email(for service: String, configDir: URL?) async -> String? {
         if let cached = emails[service] { return cached.isEmpty ? nil : cached }
         let email = await Task.detached(priority: .utility) {
-            BinaryLocator.claudeEmail(configDir: configDir)
+            Self.email(configDir: configDir)
         }.value
         emails[service] = email ?? ""
+        return email
+    }
+
+    /// Конфиг основного профиля — `~/.claude.json`; доп. профиля —
+    /// `<CLAUDE_CONFIG_DIR>/.claude.json`.
+    static func email(configDir: URL?) -> String? {
+        let base = configDir ?? FileManager.default.homeDirectoryForCurrentUser
+        let url = base.appendingPathComponent(".claude.json")
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return parseEmail(fromConfig: data)
+    }
+
+    /// Разбор конфига. Чистый — покрыт самопроверкой без файловой системы.
+    static func parseEmail(fromConfig data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let account = root["oauthAccount"] as? [String: Any],
+              let email = account["emailAddress"] as? String, !email.isEmpty
+        else { return nil }
         return email
     }
 
