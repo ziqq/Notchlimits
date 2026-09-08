@@ -140,6 +140,16 @@ enum SelfTest {
                ClaudeProvider.parseEmail(fromConfig: Data(#"{"oauthAccount":{"emailAddress":""}}"#.utf8)) == nil)
         expect("мусор не ломает разбор почты",
                ClaudeProvider.parseEmail(fromConfig: Data("не json".utf8)) == nil)
+
+        // Версия Claude — из пути, без запуска бинаря (иначе диалог Keychain).
+        expect("версия из каталога расширения VS Code",
+               BinaryLocator.version(fromPath: URL(fileURLWithPath:
+                   "/Users/x/.vscode/extensions/anthropic.claude-code-1.4.2/resources/native-binary/claude")) == "1.4.2")
+        expect("версия из имени бинаря в versions/",
+               BinaryLocator.version(fromPath: URL(fileURLWithPath:
+                   "/Users/x/.local/share/claude/versions/2.1.245")) == "2.1.245")
+        expect("без версии в пути — nil",
+               BinaryLocator.version(fromPath: URL(fileURLWithPath: "/opt/homebrew/bin/claude")) == nil)
     }
 
     private static func checkCodexParser() {

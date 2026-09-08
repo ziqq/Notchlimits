@@ -36,7 +36,8 @@ enum DebugProbe {
     /// Где нашлись CLI и какой User-Agent из них получился.
     private static func checkBinaries() {
         if let claude = BinaryLocator.claude() {
-            print("claude: \(claude.path) → UA claude-code/\(BinaryLocator.version(of: claude, fallback: "?"))")
+            // Версию из пути, не запуская claude (иначе диалог Keychain).
+            print("claude: \(claude.path) → UA claude-code/\(BinaryLocator.claudeVersion(fallback: "?"))")
         } else {
             print("claude: НЕ НАЙДЕН")
         }

@@ -189,10 +189,9 @@ actor ClaudeProvider: UsageProvider {
 
     /// Считается один раз за запуск: `static let` инициализируется лениво и потокобезопасно.
     private static let cachedUserAgent: String = {
-        let version = BinaryLocator.claude().map {
-            BinaryLocator.version(of: $0, fallback: "2.0.0")
-        } ?? "2.0.0"
-        return "claude-code/\(version)"
+        // Версию берём из пути, НЕ запуская `claude`: его запуск читает креды
+        // через `security` и вызывает диалог Keychain на каждом старте.
+        "claude-code/\(BinaryLocator.claudeVersion(fallback: "2.0.0"))"
     }()
 
     private static func userAgent() -> String { cachedUserAgent }
