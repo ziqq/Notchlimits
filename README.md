@@ -123,7 +123,7 @@ Binaries are found not via `PATH` (nearly empty for a GUI app) but at known inst
 GET https://api.anthropic.com/api/oauth/usage
 Authorization: Bearer <accessToken>
 anthropic-beta: oauth-2025-04-20
-User-Agent: claude-code/<installed CLI version>
+User-Agent: claude-code/<CLI version from the install path>
 ```
 
 The native `User-Agent` matters — without it the endpoint returns 429 far more often. Any field-object with a numeric `utilization` counts as a window, so new windows appear on their own, including internal model code-names. Windows that are inert — `0 %` **and** no reset date, like the `nimbus_quill` placeholder the endpoint returns in reserve — are hidden until they come alive, so they don't clutter the column with a row you can't act on. Titles: `five_hour`/`seven_day` get friendly labels, known prefixes expand (`seven_day_opus` → "Weekly window · Opus", shown to Max/Opus accounts), the rest are shown as words rather than raw snake_case. `extra_usage` (pay-as-you-go beyond the plan) is not a window — it's spend, not a share of a quota — so it goes to the stats line, but **only while `is_enabled` is true**: `used_credits` is then a live spend meter (shown as money, since the amount is minor units — `10308` at `decimal_places: 2` is `$103.08`, plus the `monthly_limit` cap when set). When extra usage is off (`out_of_credits`), the same number is just historical depleted credits and would read as an active charge, so it's hidden.
@@ -181,7 +181,7 @@ User-Agent: codex_cli_rs/<version>
 
 ## Privacy
 
-The app talks to three official endpoints and nowhere else: the two usage endpoints above, plus Anthropic's OAuth token endpoint when a Claude access token has expired (see [Token refresh](#token-refresh)). Tokens are never logged and never written to a plain file; the only thing written back is the refreshed Claude token, into the same Keychain entry the CLI already owns. The `claude` binary is run locally once for its `--version` string (used in the User-Agent); the account email is read from the CLI's `~/.claude.json`, not fetched. Only settings and last percentages (with reset times) go to `UserDefaults`, without a single token. `URLSession` runs ephemeral, no cookies, no disk cache.
+The app talks to three official endpoints and nowhere else: the two usage endpoints above, plus Anthropic's OAuth token endpoint when a Claude access token has expired (see [Token refresh](#token-refresh)). Tokens are never logged and never written to a plain file; the only thing written back is the refreshed Claude token, into the same Keychain entry the CLI already owns. The `claude` binary is never run (running it makes the CLI read its credentials via `/usr/bin/security`, popping a Keychain prompt) — its version for the User-Agent comes from the install path, and the account email from the CLI's `~/.claude.json`. Only `codex --version` is executed, and Codex keeps its auth in a file, not the Keychain. Only settings and last percentages (with reset times) go to `UserDefaults`, without a single token. `URLSession` runs ephemeral, no cookies, no disk cache.
 
 ## CI & releases
 
