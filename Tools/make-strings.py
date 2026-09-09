@@ -34,9 +34,12 @@ ORDER = [
     ]),
     ("Контекстное меню", [
         "menu.refresh", "menu.addClaude", "menu.addCodex", "menu.hideColumn",
-        "menu.noColumns", "menu.renameColumn", "menu.showHidden", "menu.hotKey",
-        "menu.hotKey.change", "menu.hotKey.standard", "menu.hotKey.disable",
+        "menu.noColumns", "menu.renameColumn", "menu.removeColumn", "menu.showHidden",
+        "menu.hotKey", "menu.hotKey.change", "menu.hotKey.standard", "menu.hotKey.disable",
         "menu.loginItem", "menu.quit",
+    ]),
+    ("Удаление аккаунта", [
+        "remove.title", "remove.body", "remove.delete", "remove.failed.title",
     ]),
     ("Горячая клавиша", [
         "hotkey.disabled", "hotkey.recorder.title", "hotkey.recorder.hint",
@@ -963,6 +966,60 @@ _BURN = {
 }
 for _lang, _text in _BURN.items():
     T[_lang]["burn.limitAt"] = _text
+
+
+# Удаление аккаунта. menu.removeColumn кладём в общий блок меню отдельно ниже,
+# здесь — подтверждение. remove.title несёт один «%@» (заголовок колонки).
+_REMOVE = {
+    "en":      ("Remove account…",   "Remove %@?",
+                "The account's credentials will be deleted permanently. Sign in again with claude or codex to bring it back.",
+                "Delete", "Couldn't remove the account"),
+    "ru":      ("Удалить аккаунт…",   "Удалить %@?",
+                "Учётные данные аккаунта будут удалены без возможности отмены. Чтобы вернуть его, войдите заново через claude или codex.",
+                "Удалить", "Не удалось удалить аккаунт"),
+    "de":      ("Konto entfernen…",   "%@ entfernen?",
+                "Die Zugangsdaten des Kontos werden endgültig gelöscht. Melde dich mit claude oder codex erneut an, um es zurückzuholen.",
+                "Löschen", "Konto konnte nicht entfernt werden"),
+    "fr":      ("Supprimer le compte…", "Supprimer %@ ?",
+                "Les identifiants du compte seront supprimés définitivement. Reconnecte-toi avec claude ou codex pour le récupérer.",
+                "Supprimer", "Impossible de supprimer le compte"),
+    "es":      ("Eliminar cuenta…",   "¿Eliminar %@?",
+                "Las credenciales de la cuenta se eliminarán de forma permanente. Vuelve a iniciar sesión con claude o codex para recuperarla.",
+                "Eliminar", "No se pudo eliminar la cuenta"),
+    "it":      ("Rimuovi account…",   "Rimuovere %@?",
+                "Le credenziali dell'account verranno eliminate definitivamente. Accedi di nuovo con claude o codex per ripristinarlo.",
+                "Elimina", "Impossibile rimuovere l'account"),
+    "pt-BR":   ("Remover conta…",     "Remover %@?",
+                "As credenciais da conta serão excluídas permanentemente. Entre novamente com claude ou codex para recuperá-la.",
+                "Excluir", "Não foi possível remover a conta"),
+    "uk":      ("Видалити акаунт…",   "Видалити %@?",
+                "Облікові дані акаунта буде видалено безповоротно. Щоб повернути його, увійдіть знову через claude або codex.",
+                "Видалити", "Не вдалося видалити акаунт"),
+    "pl":      ("Usuń konto…",        "Usunąć %@?",
+                "Dane logowania konta zostaną trwale usunięte. Zaloguj się ponownie przez claude lub codex, aby je przywrócić.",
+                "Usuń", "Nie udało się usunąć konta"),
+    "tr":      ("Hesabı kaldır…",     "%@ kaldırılsın mı?",
+                "Hesabın kimlik bilgileri kalıcı olarak silinecek. Geri getirmek için claude veya codex ile yeniden giriş yap.",
+                "Sil", "Hesap kaldırılamadı"),
+    "ja":      ("アカウントを削除…",   "%@ を削除しますか？",
+                "アカウントの認証情報は完全に削除されます。元に戻すには claude か codex で再度サインインしてください。",
+                "削除", "アカウントを削除できませんでした"),
+    "ko":      ("계정 삭제…",          "%@ 삭제할까요?",
+                "계정 자격 증명이 영구적으로 삭제됩니다. 되돌리려면 claude 또는 codex로 다시 로그인하세요.",
+                "삭제", "계정을 삭제하지 못했습니다"),
+    "zh-Hans": ("移除账号…",          "移除 %@？",
+                "该账号的登录凭据将被永久删除。用 claude 或 codex 重新登录即可恢复。",
+                "删除", "无法移除账号"),
+    "zh-Hant": ("移除帳號…",          "移除 %@？",
+                "該帳號的登入憑證將被永久刪除。用 claude 或 codex 重新登入即可復原。",
+                "刪除", "無法移除帳號"),
+}
+for _lang, (_menu, _title, _body, _delete, _failed) in _REMOVE.items():
+    T[_lang]["menu.removeColumn"] = _menu
+    T[_lang]["remove.title"] = _title
+    T[_lang]["remove.body"] = _body
+    T[_lang]["remove.delete"] = _delete
+    T[_lang]["remove.failed.title"] = _failed
 
 
 def main():

@@ -39,6 +39,7 @@
 "menu.hideColumn" = "隱藏欄";
 "menu.noColumns" = "沒有欄";
 "menu.renameColumn" = "重新命名欄";
+"menu.removeColumn" = "移除帳號…";
 "menu.showHidden" = "顯示隱藏的欄";
 "menu.hotKey" = "快速鍵：%@";
 "menu.hotKey.change" = "更改…";
@@ -46,6 +47,12 @@
 "menu.hotKey.disable" = "關閉";
 "menu.loginItem" = "登入時啟動";
 "menu.quit" = "結束";
+
+// Удаление аккаунта
+"remove.title" = "移除 %@？";
+"remove.body" = "該帳號的登入憑證將被永久刪除。用 claude 或 codex 重新登入即可復原。";
+"remove.delete" = "刪除";
+"remove.failed.title" = "無法移除帳號";
 
 // Горячая клавиша
 "hotkey.disabled" = "已關閉";

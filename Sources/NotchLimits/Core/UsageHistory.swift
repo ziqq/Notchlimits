@@ -68,6 +68,13 @@ struct UsageHistory {
         return eta
     }
 
+    /// Забыть историю удалённого аккаунта (ключи «<id>|<окно>»).
+    func purge(columnID: String) {
+        let all = load()
+        let kept = all.filter { !$0.key.hasPrefix(columnID + "|") }
+        if kept.count != all.count { save(kept) }
+    }
+
     private func load() -> [String: [Sample]] {
         guard let data = defaults.data(forKey: storeKey),
               let dict = try? JSONDecoder().decode([String: [Sample]].self, from: data)

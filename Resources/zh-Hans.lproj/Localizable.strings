@@ -39,6 +39,7 @@
 "menu.hideColumn" = "隐藏列";
 "menu.noColumns" = "没有列";
 "menu.renameColumn" = "重命名列";
+"menu.removeColumn" = "移除账号…";
 "menu.showHidden" = "显示隐藏的列";
 "menu.hotKey" = "快捷键：%@";
 "menu.hotKey.change" = "更改…";
@@ -46,6 +47,12 @@
 "menu.hotKey.disable" = "关闭";
 "menu.loginItem" = "登录时启动";
 "menu.quit" = "退出";
+
+// Удаление аккаунта
+"remove.title" = "移除 %@？";
+"remove.body" = "该账号的登录凭据将被永久删除。用 claude 或 codex 重新登录即可恢复。";
+"remove.delete" = "删除";
+"remove.failed.title" = "无法移除账号";
 
 // Горячая клавиша
 "hotkey.disabled" = "已关闭";

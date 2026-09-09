@@ -39,6 +39,7 @@
 "menu.hideColumn" = "Sütunu gizle";
 "menu.noColumns" = "Sütun yok";
 "menu.renameColumn" = "Sütunu yeniden adlandır";
+"menu.removeColumn" = "Hesabı kaldır…";
 "menu.showHidden" = "Gizli sütunları göster";
 "menu.hotKey" = "Kısayol: %@";
 "menu.hotKey.change" = "Değiştir…";
@@ -46,6 +47,12 @@
 "menu.hotKey.disable" = "Kapat";
 "menu.loginItem" = "Girişte başlat";
 "menu.quit" = "Çık";
+
+// Удаление аккаунта
+"remove.title" = "%@ kaldırılsın mı?";
+"remove.body" = "Hesabın kimlik bilgileri kalıcı olarak silinecek. Geri getirmek için claude veya codex ile yeniden giriş yap.";
+"remove.delete" = "Sil";
+"remove.failed.title" = "Hesap kaldırılamadı";
 
 // Горячая клавиша
 "hotkey.disabled" = "kapalı";

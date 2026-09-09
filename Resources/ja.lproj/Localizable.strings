@@ -39,6 +39,7 @@
 "menu.hideColumn" = "列を非表示";
 "menu.noColumns" = "列がありません";
 "menu.renameColumn" = "列の名前を変更";
+"menu.removeColumn" = "アカウントを削除…";
 "menu.showHidden" = "非表示の列を表示";
 "menu.hotKey" = "ショートカット: %@";
 "menu.hotKey.change" = "変更…";
@@ -46,6 +47,12 @@
 "menu.hotKey.disable" = "オフにする";
 "menu.loginItem" = "ログイン時に起動";
 "menu.quit" = "終了";
+
+// Удаление аккаунта
+"remove.title" = "%@ を削除しますか？";
+"remove.body" = "アカウントの認証情報は完全に削除されます。元に戻すには claude か codex で再度サインインしてください。";
+"remove.delete" = "削除";
+"remove.failed.title" = "アカウントを削除できませんでした";
 
 // Горячая клавиша
 "hotkey.disabled" = "オフ";
