@@ -14,6 +14,13 @@ final class ThresholdNotifier {
     /// Ниже этого пика сброс окна не заслуживает пуша — окно почти не трогали.
     private let resetFloor: Double = 50
 
+    /// Забыть состояние порогов удалённого аккаунта (ключи «<id>|<окно>»).
+    func purge(columnID: String) {
+        let state = defaults.dictionary(forKey: key) as? [String: String] ?? [:]
+        let kept = state.filter { !$0.key.hasPrefix(columnID + "|") }
+        if kept.count != state.count { defaults.set(kept, forKey: key) }
+    }
+
     static func requestAuthorization() {
         UNUserNotificationCenter.current()
             .requestAuthorization(options: [.alert, .sound]) { _, _ in }

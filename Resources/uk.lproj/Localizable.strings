@@ -39,6 +39,7 @@
 "menu.hideColumn" = "Приховати колонку";
 "menu.noColumns" = "Немає колонок";
 "menu.renameColumn" = "Перейменувати колонку";
+"menu.removeColumn" = "Видалити акаунт…";
 "menu.showHidden" = "Показати приховані колонки";
 "menu.hotKey" = "Гаряча клавіша: %@";
 "menu.hotKey.change" = "Змінити…";
@@ -46,6 +47,12 @@
 "menu.hotKey.disable" = "Вимкнути";
 "menu.loginItem" = "Запуск при вході";
 "menu.quit" = "Вихід";
+
+// Удаление аккаунта
+"remove.title" = "Видалити %@?";
+"remove.body" = "Облікові дані акаунта буде видалено безповоротно. Щоб повернути його, увійдіть знову через claude або codex.";
+"remove.delete" = "Видалити";
+"remove.failed.title" = "Не вдалося видалити акаунт";
 
 // Горячая клавиша
 "hotkey.disabled" = "вимкнено";

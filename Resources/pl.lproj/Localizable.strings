@@ -39,6 +39,7 @@
 "menu.hideColumn" = "Ukryj kolumnę";
 "menu.noColumns" = "Brak kolumn";
 "menu.renameColumn" = "Zmień nazwę kolumny";
+"menu.removeColumn" = "Usuń konto…";
 "menu.showHidden" = "Pokaż ukryte kolumny";
 "menu.hotKey" = "Skrót: %@";
 "menu.hotKey.change" = "Zmień…";
@@ -46,6 +47,12 @@
 "menu.hotKey.disable" = "Wyłącz";
 "menu.loginItem" = "Uruchamiaj przy logowaniu";
 "menu.quit" = "Zakończ";
+
+// Удаление аккаунта
+"remove.title" = "Usunąć %@?";
+"remove.body" = "Dane logowania konta zostaną trwale usunięte. Zaloguj się ponownie przez claude lub codex, aby je przywrócić.";
+"remove.delete" = "Usuń";
+"remove.failed.title" = "Nie udało się usunąć konta";
 
 // Горячая клавиша
 "hotkey.disabled" = "wyłączony";

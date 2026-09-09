@@ -23,4 +23,8 @@ struct UsageCache {
         guard let data = defaults.data(forKey: prefix + id) else { return nil }
         return try? JSONDecoder().decode(CachedColumn.self, from: data)
     }
+
+    func remove(id: String) {
+        defaults.removeObject(forKey: prefix + id)
+    }
 }

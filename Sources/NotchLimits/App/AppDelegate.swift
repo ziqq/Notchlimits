@@ -103,6 +103,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showAll.isEnabled = store.hasHiddenColumns
         menu.addItem(showAll)
 
+        // Удаление доступно и для скрытых колонок, поэтому список — по всем.
+        let removeItem = NSMenuItem(title: L.t("menu.removeColumn"), action: nil, keyEquivalent: "")
+        let removeSubmenu = NSMenu()
+        let allColumns = store.columns
+        if allColumns.isEmpty {
+            let empty = NSMenuItem(title: L.t("menu.noColumns"), action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            removeSubmenu.addItem(empty)
+        } else {
+            for column in allColumns {
+                let entry = item(column.header, #selector(removeColumn(_:)))
+                entry.representedObject = column.id
+                removeSubmenu.addItem(entry)
+            }
+        }
+        removeItem.submenu = removeSubmenu
+        removeItem.isEnabled = !allColumns.isEmpty
+        menu.addItem(removeItem)
+
         menu.addItem(.separator())
 
         let hotKeyItem = NSMenuItem(title: L.t("menu.hotKey", hotKeys.displayName),
@@ -179,6 +198,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showAllColumns() {
         store.showAllColumns()
+    }
+
+    @objc private func removeColumn(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let column = store.columns.first(where: { $0.id == id }) else { return }
+
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = L.t("remove.title", column.header)
+        alert.informativeText = L.t("remove.body")
+        let deleteButton = alert.addButton(withTitle: L.t("remove.delete"))
+        let cancelButton = alert.addButton(withTitle: L.t("common.cancel"))
+        deleteButton.hasDestructiveAction = true
+        // Отмена — действие по умолчанию (Enter), чтобы не удалить случайно.
+        deleteButton.keyEquivalent = ""
+        cancelButton.keyEquivalent = "\r"
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        do {
+            try store.removeAccount(id: id)
+        } catch {
+            let failure = NSAlert()
+            failure.messageText = L.t("remove.failed.title")
+            failure.informativeText = error.localizedDescription
+            failure.addButton(withTitle: L.t("common.ok"))
+            failure.runModal()
+        }
     }
 
     @objc private func changeHotKey() {

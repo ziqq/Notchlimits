@@ -166,6 +166,33 @@ final class UsageStore: ObservableObject {
         onColumnsChanged?()
     }
 
+    /// Обнаруженный аккаунт по id колонки — для меню удаления и подтверждения.
+    func account(for id: String) -> DiscoveredAccount? {
+        accounts.first { $0.id == id }
+    }
+
+    /// Удалить аккаунт целиком: учётные данные (Keychain-запись / папку профиля)
+    /// и весь локальный след — кэш, своё имя, скрытие, историю, состояние
+    /// уведомлений. После удаления колонка исчезает и сама не возвращается.
+    func removeAccount(id: String) throws {
+        guard let account = accounts.first(where: { $0.id == id }) else { return }
+        try AccountRemoval.remove(account)
+
+        cache.remove(id: id)
+        history.purge(columnID: id)
+        notifier.purge(columnID: id)
+        runtime[id] = nil
+        if customNames[id] != nil {
+            customNames[id] = nil
+            UserDefaults.standard.set(customNames, forKey: "columnNames")
+        }
+        if hidden.remove(id) != nil {
+            UserDefaults.standard.set(Array(hidden), forKey: "hiddenColumns")
+        }
+
+        rediscover(force: true)
+    }
+
     // MARK: - Опрос
 
     private func fetch(_ account: DiscoveredAccount) async {
