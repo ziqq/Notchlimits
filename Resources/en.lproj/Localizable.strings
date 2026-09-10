@@ -55,7 +55,7 @@
 "remove.failed.title" = "Couldn't remove the account";
 
 // Обновления
-"menu.checkUpdates" = "Check for updates";
+"menu.checkUpdates" = "Check for updates…";
 "update.available" = "Version %@ is available";
 "update.availableBody" = "Open the release page to download it.";
 "update.open" = "Open release";

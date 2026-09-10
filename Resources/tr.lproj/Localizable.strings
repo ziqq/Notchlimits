@@ -55,7 +55,7 @@
 "remove.failed.title" = "Hesap kaldırılamadı";
 
 // Обновления
-"menu.checkUpdates" = "Güncellemeleri denetle";
+"menu.checkUpdates" = "Güncellemeleri denetle…";
 "update.available" = "%@ sürümü mevcut";
 "update.availableBody" = "İndirmek için sürüm sayfasını aç.";
 "update.open" = "Sürümü aç";

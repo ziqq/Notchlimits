@@ -55,7 +55,7 @@
 "remove.failed.title" = "Não foi possível remover a conta";
 
 // Обновления
-"menu.checkUpdates" = "Procurar atualizações";
+"menu.checkUpdates" = "Procurar atualizações…";
 "update.available" = "A versão %@ está disponível";
 "update.availableBody" = "Abra a página da versão para baixar.";
 "update.open" = "Abrir versão";

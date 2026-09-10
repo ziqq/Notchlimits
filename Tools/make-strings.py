@@ -1031,7 +1031,7 @@ for _lang, (_menu, _title, _body, _delete, _failed) in _REMOVE.items():
 _UPDATE = {
     "en":      ("Check for updates", "Version %@ is available", "Open the release page to download it.",
                 "Open release", "You're on the latest version (%@)", "Checking…", "Couldn't check for updates"),
-    "ru":      ("Проверить обновления", "Доступна версия %@", "Откройте страницу релиза, чтобы скачать.",
+    "ru":      ("Проверить наличие обновлений", "Доступна версия %@", "Откройте страницу релиза, чтобы скачать.",
                 "Открыть релиз", "Установлена последняя версия (%@)", "Проверяю…", "Не удалось проверить обновления"),
     "de":      ("Nach Updates suchen", "Version %@ ist verfügbar", "Öffne die Release-Seite zum Download.",
                 "Release öffnen", "Du hast die neueste Version (%@)", "Prüfe…", "Update-Prüfung fehlgeschlagen"),
@@ -1059,7 +1059,8 @@ _UPDATE = {
                 "開啟發布頁", "已是最新版本 (%@)", "檢查中…", "無法檢查更新"),
 }
 for _lang, (_menu, _avail, _availBody, _open, _upToDate, _checking, _failed) in _UPDATE.items():
-    T[_lang]["menu.checkUpdates"] = _menu
+    # Многоточие — действие ведёт к проверке/диалогу, а не выполняется сразу.
+    T[_lang]["menu.checkUpdates"] = _menu + "…"
     T[_lang]["update.available"] = _avail
     T[_lang]["update.availableBody"] = _availBody
     T[_lang]["update.open"] = _open

@@ -55,7 +55,7 @@
 "remove.failed.title" = "계정을 삭제하지 못했습니다";
 
 // Обновления
-"menu.checkUpdates" = "업데이트 확인";
+"menu.checkUpdates" = "업데이트 확인…";
 "update.available" = "버전 %@ 사용 가능";
 "update.availableBody" = "다운로드하려면 릴리스 페이지를 여세요.";
 "update.open" = "릴리스 열기";

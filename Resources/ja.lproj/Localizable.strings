@@ -55,7 +55,7 @@
 "remove.failed.title" = "アカウントを削除できませんでした";
 
 // Обновления
-"menu.checkUpdates" = "アップデートを確認";
+"menu.checkUpdates" = "アップデートを確認…";
 "update.available" = "バージョン %@ が利用可能です";
 "update.availableBody" = "リリースページを開いてダウンロードしてください。";
 "update.open" = "リリースを開く";

@@ -55,7 +55,7 @@
 "remove.failed.title" = "Не вдалося видалити акаунт";
 
 // Обновления
-"menu.checkUpdates" = "Перевірити оновлення";
+"menu.checkUpdates" = "Перевірити оновлення…";
 "update.available" = "Доступна версія %@";
 "update.availableBody" = "Відкрийте сторінку релізу, щоб завантажити.";
 "update.open" = "Відкрити реліз";
