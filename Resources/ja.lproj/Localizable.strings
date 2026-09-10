@@ -39,7 +39,7 @@
 "menu.hideColumn" = "列を非表示";
 "menu.noColumns" = "列がありません";
 "menu.renameColumn" = "列の名前を変更";
-"menu.removeColumn" = "アカウントを削除…";
+"menu.removeColumn" = "アカウントを削除";
 "menu.showHidden" = "非表示の列を表示";
 "menu.hotKey" = "ショートカット: %@";
 "menu.hotKey.change" = "変更…";
@@ -53,6 +53,15 @@
 "remove.body" = "アカウントの認証情報は完全に削除されます。元に戻すには claude か codex で再度サインインしてください。";
 "remove.delete" = "削除";
 "remove.failed.title" = "アカウントを削除できませんでした";
+
+// Обновления
+"menu.checkUpdates" = "アップデートを確認";
+"update.available" = "バージョン %@ が利用可能です";
+"update.availableBody" = "リリースページを開いてダウンロードしてください。";
+"update.open" = "リリースを開く";
+"update.upToDate" = "最新バージョンです (%@)";
+"update.checking" = "確認中…";
+"update.failed" = "アップデートを確認できませんでした";
 
 // Горячая клавиша
 "hotkey.disabled" = "オフ";

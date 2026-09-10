@@ -39,7 +39,7 @@
 "menu.hideColumn" = "Masquer une colonne";
 "menu.noColumns" = "Aucune colonne";
 "menu.renameColumn" = "Renommer la colonne";
-"menu.removeColumn" = "Supprimer le compte…";
+"menu.removeColumn" = "Supprimer le compte";
 "menu.showHidden" = "Afficher les colonnes masquées";
 "menu.hotKey" = "Raccourci : %@";
 "menu.hotKey.change" = "Modifier…";
@@ -53,6 +53,15 @@
 "remove.body" = "Les identifiants du compte seront supprimés définitivement. Reconnecte-toi avec claude ou codex pour le récupérer.";
 "remove.delete" = "Supprimer";
 "remove.failed.title" = "Impossible de supprimer le compte";
+
+// Обновления
+"menu.checkUpdates" = "Rechercher des mises à jour";
+"update.available" = "La version %@ est disponible";
+"update.availableBody" = "Ouvre la page de release pour la télécharger.";
+"update.open" = "Ouvrir la release";
+"update.upToDate" = "Tu as la dernière version (%@)";
+"update.checking" = "Vérification…";
+"update.failed" = "Échec de la vérification des mises à jour";
 
 // Горячая клавиша
 "hotkey.disabled" = "désactivé";

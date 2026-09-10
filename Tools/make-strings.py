@@ -41,6 +41,10 @@ ORDER = [
     ("Удаление аккаунта", [
         "remove.title", "remove.body", "remove.delete", "remove.failed.title",
     ]),
+    ("Обновления", [
+        "menu.checkUpdates", "update.available", "update.availableBody",
+        "update.open", "update.upToDate", "update.checking", "update.failed",
+    ]),
     ("Горячая клавиша", [
         "hotkey.disabled", "hotkey.recorder.title", "hotkey.recorder.hint",
         "hotkey.recorder.save", "hotkey.taken.title", "hotkey.taken.body",
@@ -971,46 +975,46 @@ for _lang, _text in _BURN.items():
 # Удаление аккаунта. menu.removeColumn кладём в общий блок меню отдельно ниже,
 # здесь — подтверждение. remove.title несёт один «%@» (заголовок колонки).
 _REMOVE = {
-    "en":      ("Remove account…",   "Remove %@?",
+    "en":      ("Remove account",   "Remove %@?",
                 "The account's credentials will be deleted permanently. Sign in again with claude or codex to bring it back.",
                 "Delete", "Couldn't remove the account"),
-    "ru":      ("Удалить аккаунт…",   "Удалить %@?",
+    "ru":      ("Удалить аккаунт",   "Удалить %@?",
                 "Учётные данные аккаунта будут удалены без возможности отмены. Чтобы вернуть его, войдите заново через claude или codex.",
                 "Удалить", "Не удалось удалить аккаунт"),
-    "de":      ("Konto entfernen…",   "%@ entfernen?",
+    "de":      ("Konto entfernen",   "%@ entfernen?",
                 "Die Zugangsdaten des Kontos werden endgültig gelöscht. Melde dich mit claude oder codex erneut an, um es zurückzuholen.",
                 "Löschen", "Konto konnte nicht entfernt werden"),
-    "fr":      ("Supprimer le compte…", "Supprimer %@ ?",
+    "fr":      ("Supprimer le compte", "Supprimer %@ ?",
                 "Les identifiants du compte seront supprimés définitivement. Reconnecte-toi avec claude ou codex pour le récupérer.",
                 "Supprimer", "Impossible de supprimer le compte"),
-    "es":      ("Eliminar cuenta…",   "¿Eliminar %@?",
+    "es":      ("Eliminar cuenta",   "¿Eliminar %@?",
                 "Las credenciales de la cuenta se eliminarán de forma permanente. Vuelve a iniciar sesión con claude o codex para recuperarla.",
                 "Eliminar", "No se pudo eliminar la cuenta"),
-    "it":      ("Rimuovi account…",   "Rimuovere %@?",
+    "it":      ("Rimuovi account",   "Rimuovere %@?",
                 "Le credenziali dell'account verranno eliminate definitivamente. Accedi di nuovo con claude o codex per ripristinarlo.",
                 "Elimina", "Impossibile rimuovere l'account"),
-    "pt-BR":   ("Remover conta…",     "Remover %@?",
+    "pt-BR":   ("Remover conta",     "Remover %@?",
                 "As credenciais da conta serão excluídas permanentemente. Entre novamente com claude ou codex para recuperá-la.",
                 "Excluir", "Não foi possível remover a conta"),
-    "uk":      ("Видалити акаунт…",   "Видалити %@?",
+    "uk":      ("Видалити акаунт",   "Видалити %@?",
                 "Облікові дані акаунта буде видалено безповоротно. Щоб повернути його, увійдіть знову через claude або codex.",
                 "Видалити", "Не вдалося видалити акаунт"),
-    "pl":      ("Usuń konto…",        "Usunąć %@?",
+    "pl":      ("Usuń konto",        "Usunąć %@?",
                 "Dane logowania konta zostaną trwale usunięte. Zaloguj się ponownie przez claude lub codex, aby je przywrócić.",
                 "Usuń", "Nie udało się usunąć konta"),
-    "tr":      ("Hesabı kaldır…",     "%@ kaldırılsın mı?",
+    "tr":      ("Hesabı kaldır",     "%@ kaldırılsın mı?",
                 "Hesabın kimlik bilgileri kalıcı olarak silinecek. Geri getirmek için claude veya codex ile yeniden giriş yap.",
                 "Sil", "Hesap kaldırılamadı"),
-    "ja":      ("アカウントを削除…",   "%@ を削除しますか？",
+    "ja":      ("アカウントを削除",   "%@ を削除しますか？",
                 "アカウントの認証情報は完全に削除されます。元に戻すには claude か codex で再度サインインしてください。",
                 "削除", "アカウントを削除できませんでした"),
-    "ko":      ("계정 삭제…",          "%@ 삭제할까요?",
+    "ko":      ("계정 삭제",          "%@ 삭제할까요?",
                 "계정 자격 증명이 영구적으로 삭제됩니다. 되돌리려면 claude 또는 codex로 다시 로그인하세요.",
                 "삭제", "계정을 삭제하지 못했습니다"),
-    "zh-Hans": ("移除账号…",          "移除 %@？",
+    "zh-Hans": ("移除账号",          "移除 %@？",
                 "该账号的登录凭据将被永久删除。用 claude 或 codex 重新登录即可恢复。",
                 "删除", "无法移除账号"),
-    "zh-Hant": ("移除帳號…",          "移除 %@？",
+    "zh-Hant": ("移除帳號",          "移除 %@？",
                 "該帳號的登入憑證將被永久刪除。用 claude 或 codex 重新登入即可復原。",
                 "刪除", "無法移除帳號"),
 }
@@ -1020,6 +1024,48 @@ for _lang, (_menu, _title, _body, _delete, _failed) in _REMOVE.items():
     T[_lang]["remove.body"] = _body
     T[_lang]["remove.delete"] = _delete
     T[_lang]["remove.failed.title"] = _failed
+
+
+# Проверка обновлений. update.available и update.upToDate несут один «%@»
+# (номер версии), остальные — без подстановок.
+_UPDATE = {
+    "en":      ("Check for updates", "Version %@ is available", "Open the release page to download it.",
+                "Open release", "You're on the latest version (%@)", "Checking…", "Couldn't check for updates"),
+    "ru":      ("Проверить обновления", "Доступна версия %@", "Откройте страницу релиза, чтобы скачать.",
+                "Открыть релиз", "Установлена последняя версия (%@)", "Проверяю…", "Не удалось проверить обновления"),
+    "de":      ("Nach Updates suchen", "Version %@ ist verfügbar", "Öffne die Release-Seite zum Download.",
+                "Release öffnen", "Du hast die neueste Version (%@)", "Prüfe…", "Update-Prüfung fehlgeschlagen"),
+    "fr":      ("Rechercher des mises à jour", "La version %@ est disponible", "Ouvre la page de release pour la télécharger.",
+                "Ouvrir la release", "Tu as la dernière version (%@)", "Vérification…", "Échec de la vérification des mises à jour"),
+    "es":      ("Buscar actualizaciones", "La versión %@ está disponible", "Abre la página de la versión para descargarla.",
+                "Abrir versión", "Tienes la última versión (%@)", "Comprobando…", "No se pudo buscar actualizaciones"),
+    "it":      ("Cerca aggiornamenti", "La versione %@ è disponibile", "Apri la pagina della release per scaricarla.",
+                "Apri release", "Hai l'ultima versione (%@)", "Controllo…", "Impossibile cercare aggiornamenti"),
+    "pt-BR":   ("Procurar atualizações", "A versão %@ está disponível", "Abra a página da versão para baixar.",
+                "Abrir versão", "Você está na versão mais recente (%@)", "Verificando…", "Não foi possível procurar atualizações"),
+    "uk":      ("Перевірити оновлення", "Доступна версія %@", "Відкрийте сторінку релізу, щоб завантажити.",
+                "Відкрити реліз", "Встановлено найновішу версію (%@)", "Перевіряю…", "Не вдалося перевірити оновлення"),
+    "pl":      ("Sprawdź aktualizacje", "Dostępna jest wersja %@", "Otwórz stronę wydania, aby pobrać.",
+                "Otwórz wydanie", "Masz najnowszą wersję (%@)", "Sprawdzam…", "Nie udało się sprawdzić aktualizacji"),
+    "tr":      ("Güncellemeleri denetle", "%@ sürümü mevcut", "İndirmek için sürüm sayfasını aç.",
+                "Sürümü aç", "En son sürümü kullanıyorsun (%@)", "Denetleniyor…", "Güncellemeler denetlenemedi"),
+    "ja":      ("アップデートを確認", "バージョン %@ が利用可能です", "リリースページを開いてダウンロードしてください。",
+                "リリースを開く", "最新バージョンです (%@)", "確認中…", "アップデートを確認できませんでした"),
+    "ko":      ("업데이트 확인", "버전 %@ 사용 가능", "다운로드하려면 릴리스 페이지를 여세요.",
+                "릴리스 열기", "최신 버전입니다 (%@)", "확인 중…", "업데이트를 확인하지 못했습니다"),
+    "zh-Hans": ("检查更新", "有新版本 %@", "打开发布页面即可下载。",
+                "打开发布页", "已是最新版本 (%@)", "检查中…", "无法检查更新"),
+    "zh-Hant": ("檢查更新", "有新版本 %@", "開啟發布頁面即可下載。",
+                "開啟發布頁", "已是最新版本 (%@)", "檢查中…", "無法檢查更新"),
+}
+for _lang, (_menu, _avail, _availBody, _open, _upToDate, _checking, _failed) in _UPDATE.items():
+    T[_lang]["menu.checkUpdates"] = _menu
+    T[_lang]["update.available"] = _avail
+    T[_lang]["update.availableBody"] = _availBody
+    T[_lang]["update.open"] = _open
+    T[_lang]["update.upToDate"] = _upToDate
+    T[_lang]["update.checking"] = _checking
+    T[_lang]["update.failed"] = _failed
 
 
 def main():
