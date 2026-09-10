@@ -55,7 +55,7 @@
 "remove.failed.title" = "無法移除帳號";
 
 // Обновления
-"menu.checkUpdates" = "檢查更新";
+"menu.checkUpdates" = "檢查更新…";
 "update.available" = "有新版本 %@";
 "update.availableBody" = "開啟發布頁面即可下載。";
 "update.open" = "開啟發布頁";

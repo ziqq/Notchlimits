@@ -55,7 +55,7 @@
 "remove.failed.title" = "无法移除账号";
 
 // Обновления
-"menu.checkUpdates" = "检查更新";
+"menu.checkUpdates" = "检查更新…";
 "update.available" = "有新版本 %@";
 "update.availableBody" = "打开发布页面即可下载。";
 "update.open" = "打开发布页";

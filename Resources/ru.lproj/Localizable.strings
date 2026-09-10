@@ -55,7 +55,7 @@
 "remove.failed.title" = "Не удалось удалить аккаунт";
 
 // Обновления
-"menu.checkUpdates" = "Проверить обновления";
+"menu.checkUpdates" = "Проверить наличие обновлений…";
 "update.available" = "Доступна версия %@";
 "update.availableBody" = "Откройте страницу релиза, чтобы скачать.";
 "update.open" = "Открыть релиз";
