@@ -22,6 +22,7 @@ enum SelfTest {
         checkClaudeAuth()
         checkNotifications()
         checkBurnRate()
+        checkUpdateCheck()
         checkFormatting()
         checkCodableRoundTrips()
         checkLocalizations()
@@ -347,6 +348,23 @@ enum SelfTest {
         // Старый формат состояния без поля пика читается и не ломает разбор.
         let legacy = decide("100@80,95", "200", 3)
         expect("старый формат: пик отсутствует → не шумим", legacy.postReset == false)
+    }
+
+    private static func checkUpdateCheck() {
+        section("Проверка обновлений")
+        expect("тег без v нормализуется", UpdateCheck.normalize("v1.2.3") == "1.2.3")
+        expect("тег без префикса не трогаем", UpdateCheck.normalize("1.2.3") == "1.2.3")
+        expect("новее по патчу", UpdateCheck.isNewer("1.2.4", than: "1.2.3"))
+        expect("новее по минору численно (10 > 9)", UpdateCheck.isNewer("1.10.0", than: "1.9.9"))
+        expect("равные — не новее", !UpdateCheck.isNewer("1.2.3", than: "1.2.3"))
+        expect("старее — не новее", !UpdateCheck.isNewer("1.2.2", than: "1.2.3"))
+        expect("предрелиз/суффикс не ломает", UpdateCheck.isNewer("1.2.0", than: "1.2.0-beta.1") == false)
+
+        let json = #"{"tag_name":"v2.0.1","html_url":"https://example.com/r"}"#
+        let release = UpdateCheck.parse(Data(json.utf8))
+        expect("релиз разобран", release?.version == "2.0.1")
+        expect("ссылка на релиз взята", release?.url.absoluteString == "https://example.com/r")
+        expect("мусор не ломает", UpdateCheck.parse(Data("[]".utf8)) == nil)
     }
 
     private static func checkBurnRate() {

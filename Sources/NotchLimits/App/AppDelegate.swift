@@ -139,6 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(item(L.t("menu.loginItem"), #selector(toggleLoginItem),
                           state: LoginItem.isEnabled ? .on : .off))
+        menu.addItem(item(L.t("menu.checkUpdates"), #selector(checkForUpdates)))
         menu.addItem(.separator())
         menu.addItem(item(L.t("menu.quit"), #selector(quit)))
 
@@ -252,6 +253,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleLoginItem() {
         LoginItem.toggle()
+    }
+
+    @objc private func checkForUpdates() {
+        Task { @MainActor in
+            let outcome = await UpdateCheck.check()
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            switch outcome {
+            case .upToDate(let current):
+                alert.messageText = L.t("update.upToDate", current)
+                alert.addButton(withTitle: L.t("common.ok"))
+                alert.runModal()
+
+            case .available(let release):
+                alert.messageText = L.t("update.available", release.version)
+                alert.informativeText = L.t("update.availableBody")
+                alert.addButton(withTitle: L.t("update.open"))
+                alert.addButton(withTitle: L.t("common.cancel"))
+                if alert.runModal() == .alertFirstButtonReturn {
+                    NSWorkspace.shared.open(release.url)
+                }
+
+            case .failed(let message):
+                alert.messageText = L.t("update.failed")
+                alert.informativeText = message
+                alert.addButton(withTitle: L.t("common.ok"))
+                alert.runModal()
+            }
+        }
     }
 
     @objc private func quit() {

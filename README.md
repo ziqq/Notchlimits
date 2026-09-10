@@ -56,7 +56,7 @@ On a notch-less screen the panel sits top-center; collapsed, it's a small pill w
 
 ![Collapsed panel](docs/collapsed.png)
 
-The context menu covers: **Refresh** (force-poll, bypassing timers and backoff), **Add Claude / Codex account…**, **Hide** / **Rename column** submenus, **Show hidden columns**, **Hotkey** submenu, **Launch at login** (`SMAppService`), and **Quit**.
+The context menu covers: **Refresh** (force-poll, bypassing timers and backoff), **Add Claude / Codex account…**, **Hide** / **Rename column** submenus, **Show hidden columns**, **Remove account** (with a confirmation — deletes the account's login and profile), **Hotkey** submenu, **Launch at login** (`SMAppService`), **Check for updates**, and **Quit**.
 
 ## Column names
 
@@ -181,7 +181,7 @@ User-Agent: codex_cli_rs/<version>
 
 ## Privacy
 
-The app talks to three official endpoints and nowhere else: the two usage endpoints above, plus Anthropic's OAuth token endpoint when a Claude access token has expired (see [Token refresh](#token-refresh)). Tokens are never logged and never written to a plain file; the only thing written back is the refreshed Claude token, into the same Keychain entry the CLI already owns. The `claude` binary is never run (running it makes the CLI read its credentials via `/usr/bin/security`, popping a Keychain prompt) — its version for the User-Agent comes from the install path, and the account email from the CLI's `~/.claude.json`. Only `codex --version` is executed, and Codex keeps its auth in a file, not the Keychain. Only settings and last percentages (with reset times) go to `UserDefaults`, without a single token. `URLSession` runs ephemeral, no cookies, no disk cache.
+The app makes no automatic request beyond the two usage endpoints above and Anthropic's OAuth token endpoint when a Claude access token has expired (see [Token refresh](#token-refresh)). The only other request is **manual**: **Check for updates** in the menu hits GitHub's releases API (`api.github.com`) once, on click — never on its own. Tokens are never logged and never written to a plain file; the only thing written back is the refreshed Claude token, into the same Keychain entry the CLI already owns. The `claude` binary is never run (running it makes the CLI read its credentials via `/usr/bin/security`, popping a Keychain prompt) — its version for the User-Agent comes from the install path, and the account email from the CLI's `~/.claude.json`. Only `codex --version` is executed, and Codex keeps its auth in a file, not the Keychain. Only settings and last percentages (with reset times) go to `UserDefaults`, without a single token. `URLSession` runs ephemeral, no cookies, no disk cache.
 
 ## CI & releases
 

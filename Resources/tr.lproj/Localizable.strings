@@ -39,7 +39,7 @@
 "menu.hideColumn" = "Sütunu gizle";
 "menu.noColumns" = "Sütun yok";
 "menu.renameColumn" = "Sütunu yeniden adlandır";
-"menu.removeColumn" = "Hesabı kaldır…";
+"menu.removeColumn" = "Hesabı kaldır";
 "menu.showHidden" = "Gizli sütunları göster";
 "menu.hotKey" = "Kısayol: %@";
 "menu.hotKey.change" = "Değiştir…";
@@ -53,6 +53,15 @@
 "remove.body" = "Hesabın kimlik bilgileri kalıcı olarak silinecek. Geri getirmek için claude veya codex ile yeniden giriş yap.";
 "remove.delete" = "Sil";
 "remove.failed.title" = "Hesap kaldırılamadı";
+
+// Обновления
+"menu.checkUpdates" = "Güncellemeleri denetle";
+"update.available" = "%@ sürümü mevcut";
+"update.availableBody" = "İndirmek için sürüm sayfasını aç.";
+"update.open" = "Sürümü aç";
+"update.upToDate" = "En son sürümü kullanıyorsun (%@)";
+"update.checking" = "Denetleniyor…";
+"update.failed" = "Güncellemeler denetlenemedi";
 
 // Горячая клавиша
 "hotkey.disabled" = "kapalı";
