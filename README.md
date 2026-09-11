@@ -16,6 +16,7 @@ A panel that slides out of the MacBook notch with **Claude Code** and **Codex** 
 - Works without a notch too (external display, Mac mini, iMac).
 - Notifications when any window crosses 80 % and 95 %, and when a heavily-used window resets and frees up.
 - A burn-rate forecast: if the current pace would hit 100 % before the window resets, the row shows when.
+- One-click self-update from GitHub releases: **Check for updates** downloads the new build, verifies its SHA-256, swaps the bundle and relaunches — no browser needed (opening the release page stays as a fallback).
 - Survives restarts: last percentages are cached and shown with an age note.
 - One account's error or rate limit never touches the other columns.
 - UI in 14 languages, picked from the system language.
@@ -56,7 +57,7 @@ On a notch-less screen the panel sits top-center; collapsed, it's a small pill w
 
 ![Collapsed panel](docs/collapsed.png)
 
-The context menu covers: **Refresh** (force-poll, bypassing timers and backoff), **Add Claude / Codex account…**, **Hide** / **Rename column** submenus, **Show hidden columns**, **Remove account** (with a confirmation — deletes the account's login and profile), **Hotkey** submenu, **Launch at login** (`SMAppService`), **Check for updates**, and **Quit**.
+The context menu covers: **Refresh** (force-poll, bypassing timers and backoff), **Add Claude / Codex account…**, **Hide** / **Rename column** submenus, **Show hidden columns**, **Remove account** (with a confirmation — deletes the account's login and profile), **Hotkey** submenu, **Launch at login** (`SMAppService`), **Check for updates…** (offers **Update now** — a SHA-256-verified in-place update — or opens the release page), and **Quit**.
 
 ## Column names
 
@@ -181,7 +182,7 @@ User-Agent: codex_cli_rs/<version>
 
 ## Privacy
 
-The app makes no automatic request beyond the two usage endpoints above and Anthropic's OAuth token endpoint when a Claude access token has expired (see [Token refresh](#token-refresh)). The only other request is **manual**: **Check for updates** in the menu hits GitHub's releases API (`api.github.com`) once, on click — never on its own. Tokens are never logged and never written to a plain file; the only thing written back is the refreshed Claude token, into the same Keychain entry the CLI already owns. The `claude` binary is never run (running it makes the CLI read its credentials via `/usr/bin/security`, popping a Keychain prompt) — its version for the User-Agent comes from the install path, and the account email from the CLI's `~/.claude.json`. Only `codex --version` is executed, and Codex keeps its auth in a file, not the Keychain. Only settings and last percentages (with reset times) go to `UserDefaults`, without a single token. `URLSession` runs ephemeral, no cookies, no disk cache.
+The app makes no automatic request beyond the two usage endpoints above and Anthropic's OAuth token endpoint when a Claude access token has expired (see [Token refresh](#token-refresh)). The only other requests are **manual**: **Check for updates** hits GitHub's releases API (`api.github.com`) on click — never on its own — and, if you choose **Update now**, downloads that release's `.zip` and `SHA256SUMS.txt` from GitHub, installing only if the checksum matches. Because CI releases are ad-hoc signed, an in-app update changes the code identity, so macOS asks once more to allow Keychain access after it (a one-time **Always Allow**); a Developer ID signature in CI would remove even that. Tokens are never logged and never written to a plain file; the only thing written back is the refreshed Claude token, into the same Keychain entry the CLI already owns. The `claude` binary is never run (running it makes the CLI read its credentials via `/usr/bin/security`, popping a Keychain prompt) — its version for the User-Agent comes from the install path, and the account email from the CLI's `~/.claude.json`. Only `codex --version` is executed, and Codex keeps its auth in a file, not the Keychain. Only settings and last percentages (with reset times) go to `UserDefaults`, without a single token. `URLSession` runs ephemeral, no cookies, no disk cache.
 
 ## CI & releases
 

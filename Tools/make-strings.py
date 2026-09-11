@@ -44,6 +44,9 @@ ORDER = [
     ("Обновления", [
         "menu.checkUpdates", "update.available", "update.availableBody",
         "update.open", "update.upToDate", "update.checking", "update.failed",
+        "update.install", "update.installing", "update.installFailed",
+        "update.err.noAsset", "update.err.download", "update.err.checksum",
+        "update.err.unpack", "update.err.notWritable",
     ]),
     ("Горячая клавиша", [
         "hotkey.disabled", "hotkey.recorder.title", "hotkey.recorder.hint",
@@ -1061,6 +1064,76 @@ _UPDATE = {
 for _lang, (_menu, _avail, _availBody, _open, _upToDate, _checking, _failed) in _UPDATE.items():
     # Многоточие — действие ведёт к проверке/диалогу, а не выполняется сразу.
     T[_lang]["menu.checkUpdates"] = _menu + "…"
+
+
+# Установка обновления в один клик. Без спецификаторов.
+_INSTALL = {
+    "en":      ("Update now", "Downloading the update…", "Couldn't install the update",
+                "The release has no downloadable build.", "Download failed.",
+                "Checksum didn't match — download not trusted.", "Couldn't unpack the update.",
+                "No permission to replace the app here."),
+    "ru":      ("Обновить сейчас", "Загружаю обновление…", "Не удалось установить обновление",
+                "В релизе нет сборки для скачивания.", "Не удалось скачать.",
+                "Контрольная сумма не совпала — загрузке нельзя доверять.", "Не удалось распаковать обновление.",
+                "Нет прав заменить приложение здесь."),
+    "de":      ("Jetzt aktualisieren", "Update wird geladen…", "Update konnte nicht installiert werden",
+                "Das Release hat keinen ladbaren Build.", "Download fehlgeschlagen.",
+                "Prüfsumme stimmt nicht — Download nicht vertrauenswürdig.", "Update konnte nicht entpackt werden.",
+                "Keine Berechtigung, die App hier zu ersetzen."),
+    "fr":      ("Mettre à jour", "Téléchargement de la mise à jour…", "Impossible d'installer la mise à jour",
+                "La release n'a pas de build téléchargeable.", "Échec du téléchargement.",
+                "La somme de contrôle ne correspond pas — téléchargement non fiable.", "Impossible de décompresser la mise à jour.",
+                "Pas la permission de remplacer l'app ici."),
+    "es":      ("Actualizar ahora", "Descargando la actualización…", "No se pudo instalar la actualización",
+                "La versión no tiene una compilación descargable.", "Error de descarga.",
+                "La suma de verificación no coincide — descarga no confiable.", "No se pudo descomprimir la actualización.",
+                "Sin permiso para reemplazar la app aquí."),
+    "it":      ("Aggiorna ora", "Download dell'aggiornamento…", "Impossibile installare l'aggiornamento",
+                "La release non ha una build scaricabile.", "Download non riuscito.",
+                "Checksum non corrispondente — download non attendibile.", "Impossibile decomprimere l'aggiornamento.",
+                "Nessun permesso per sostituire l'app qui."),
+    "pt-BR":   ("Atualizar agora", "Baixando a atualização…", "Não foi possível instalar a atualização",
+                "A versão não tem um build para baixar.", "Falha no download.",
+                "A soma de verificação não confere — download não confiável.", "Não foi possível descompactar a atualização.",
+                "Sem permissão para substituir o app aqui."),
+    "uk":      ("Оновити зараз", "Завантажую оновлення…", "Не вдалося встановити оновлення",
+                "У релізі немає збірки для завантаження.", "Не вдалося завантажити.",
+                "Контрольна сума не збіглася — завантаженню не можна довіряти.", "Не вдалося розпакувати оновлення.",
+                "Немає прав замінити застосунок тут."),
+    "pl":      ("Zaktualizuj teraz", "Pobieranie aktualizacji…", "Nie udało się zainstalować aktualizacji",
+                "Wydanie nie ma pliku do pobrania.", "Pobieranie nie powiodło się.",
+                "Suma kontrolna się nie zgadza — pobranie niewiarygodne.", "Nie udało się rozpakować aktualizacji.",
+                "Brak uprawnień do zastąpienia aplikacji tutaj."),
+    "tr":      ("Şimdi güncelle", "Güncelleme indiriliyor…", "Güncelleme yüklenemedi",
+                "Sürümde indirilebilir derleme yok.", "İndirme başarısız.",
+                "Sağlama toplamı uyuşmadı — indirme güvenilir değil.", "Güncelleme açılamadı.",
+                "Uygulamayı burada değiştirme izni yok."),
+    "ja":      ("今すぐ更新", "アップデートをダウンロード中…", "アップデートを適用できませんでした",
+                "リリースにダウンロード可能なビルドがありません。", "ダウンロードに失敗しました。",
+                "チェックサムが一致しません — ダウンロードは信頼できません。", "アップデートを展開できませんでした。",
+                "ここでアプリを置き換える権限がありません。"),
+    "ko":      ("지금 업데이트", "업데이트 다운로드 중…", "업데이트를 설치하지 못했습니다",
+                "릴리스에 다운로드할 빌드가 없습니다.", "다운로드에 실패했습니다.",
+                "체크섬이 일치하지 않습니다 — 다운로드를 신뢰할 수 없습니다.", "업데이트의 압축을 풀지 못했습니다.",
+                "여기에서 앱을 교체할 권한이 없습니다."),
+    "zh-Hans": ("立即更新", "正在下载更新…", "无法安装更新",
+                "该发布没有可下载的构建。", "下载失败。",
+                "校验和不匹配——下载不可信。", "无法解压更新。",
+                "没有权限在此替换应用。"),
+    "zh-Hant": ("立即更新", "正在下載更新…", "無法安裝更新",
+                "此發布沒有可下載的建置。", "下載失敗。",
+                "校驗碼不符——下載不可信。", "無法解壓更新。",
+                "沒有權限在此替換應用程式。"),
+}
+for _lang, (_install, _installing, _installFailed, _noAsset, _dl, _checksum, _unpack, _notWritable) in _INSTALL.items():
+    T[_lang]["update.install"] = _install
+    T[_lang]["update.installing"] = _installing
+    T[_lang]["update.installFailed"] = _installFailed
+    T[_lang]["update.err.noAsset"] = _noAsset
+    T[_lang]["update.err.download"] = _dl
+    T[_lang]["update.err.checksum"] = _checksum
+    T[_lang]["update.err.unpack"] = _unpack
+    T[_lang]["update.err.notWritable"] = _notWritable
     T[_lang]["update.available"] = _avail
     T[_lang]["update.availableBody"] = _availBody
     T[_lang]["update.open"] = _open

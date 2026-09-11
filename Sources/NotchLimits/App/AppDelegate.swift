@@ -269,9 +269,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .available(let release):
                 alert.messageText = L.t("update.available", release.version)
                 alert.informativeText = L.t("update.availableBody")
+                // «Обновить сейчас» — только если можем заменить бандл на месте.
+                let canInstall = release.downloadURL != nil && UpdateInstaller.canInstallInPlace()
+                if canInstall { alert.addButton(withTitle: L.t("update.install")) }
                 alert.addButton(withTitle: L.t("update.open"))
                 alert.addButton(withTitle: L.t("common.cancel"))
-                if alert.runModal() == .alertFirstButtonReturn {
+
+                let response = alert.runModal()
+                if canInstall && response == .alertFirstButtonReturn {
+                    installUpdate(release)
+                } else if response == (canInstall ? .alertSecondButtonReturn : .alertFirstButtonReturn) {
                     NSWorkspace.shared.open(release.url)
                 }
 
@@ -280,6 +287,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 alert.informativeText = message
                 alert.addButton(withTitle: L.t("common.ok"))
                 alert.runModal()
+            }
+        }
+    }
+
+    private func installUpdate(_ release: UpdateCheck.Release) {
+        let hud = ProgressHUD(message: L.t("update.installing"))
+        hud.show()
+        Task { @MainActor in
+            do {
+                try await UpdateInstaller.install(release)
+                // Бандл заменит и перезапустит скрипт — нам остаётся выйти.
+                NSApp.terminate(nil)
+            } catch {
+                hud.close()
+                NSApp.activate(ignoringOtherApps: true)
+                let alert = NSAlert()
+                alert.messageText = L.t("update.installFailed")
+                alert.informativeText = error.localizedDescription
+                alert.addButton(withTitle: L.t("update.open"))
+                alert.addButton(withTitle: L.t("common.ok"))
+                if alert.runModal() == .alertFirstButtonReturn {
+                    NSWorkspace.shared.open(release.url)
+                }
             }
         }
     }

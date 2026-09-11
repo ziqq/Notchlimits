@@ -62,6 +62,14 @@
 "update.upToDate" = "已是最新版本 (%@)";
 "update.checking" = "檢查中…";
 "update.failed" = "無法檢查更新";
+"update.install" = "立即更新";
+"update.installing" = "正在下載更新…";
+"update.installFailed" = "無法安裝更新";
+"update.err.noAsset" = "此發布沒有可下載的建置。";
+"update.err.download" = "下載失敗。";
+"update.err.checksum" = "校驗碼不符——下載不可信。";
+"update.err.unpack" = "無法解壓更新。";
+"update.err.notWritable" = "沒有權限在此替換應用程式。";
 
 // Горячая клавиша
 "hotkey.disabled" = "已關閉";

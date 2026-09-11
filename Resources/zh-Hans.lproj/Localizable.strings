@@ -57,11 +57,19 @@
 // Обновления
 "menu.checkUpdates" = "检查更新…";
 "update.available" = "有新版本 %@";
-"update.availableBody" = "打开发布页面即可下载。";
-"update.open" = "打开发布页";
+"update.availableBody" = "開啟發布頁面即可下載。";
+"update.open" = "開啟發布頁";
 "update.upToDate" = "已是最新版本 (%@)";
-"update.checking" = "检查中…";
-"update.failed" = "无法检查更新";
+"update.checking" = "檢查中…";
+"update.failed" = "無法檢查更新";
+"update.install" = "立即更新";
+"update.installing" = "正在下载更新…";
+"update.installFailed" = "无法安装更新";
+"update.err.noAsset" = "该发布没有可下载的构建。";
+"update.err.download" = "下载失败。";
+"update.err.checksum" = "校验和不匹配——下载不可信。";
+"update.err.unpack" = "无法解压更新。";
+"update.err.notWritable" = "没有权限在此替换应用。";
 
 // Горячая клавиша
 "hotkey.disabled" = "已关闭";
