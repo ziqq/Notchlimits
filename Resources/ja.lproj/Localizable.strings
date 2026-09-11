@@ -56,12 +56,12 @@
 
 // Обновления
 "menu.checkUpdates" = "アップデートを確認…";
-"update.available" = "有新版本 %@";
-"update.availableBody" = "開啟發布頁面即可下載。";
-"update.open" = "開啟發布頁";
-"update.upToDate" = "已是最新版本 (%@)";
-"update.checking" = "檢查中…";
-"update.failed" = "無法檢查更新";
+"update.available" = "バージョン %@ が利用可能です";
+"update.availableBody" = "リリースページを開いてダウンロードしてください。";
+"update.open" = "リリースを開く";
+"update.upToDate" = "最新バージョンです (%@)";
+"update.checking" = "確認中…";
+"update.failed" = "アップデートを確認できませんでした";
 "update.install" = "今すぐ更新";
 "update.installing" = "アップデートをダウンロード中…";
 "update.installFailed" = "アップデートを適用できませんでした";

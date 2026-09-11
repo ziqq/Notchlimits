@@ -56,12 +56,12 @@
 
 // Обновления
 "menu.checkUpdates" = "Nach Updates suchen…";
-"update.available" = "有新版本 %@";
-"update.availableBody" = "開啟發布頁面即可下載。";
-"update.open" = "開啟發布頁";
-"update.upToDate" = "已是最新版本 (%@)";
-"update.checking" = "檢查中…";
-"update.failed" = "無法檢查更新";
+"update.available" = "Version %@ ist verfügbar";
+"update.availableBody" = "Öffne die Release-Seite zum Download.";
+"update.open" = "Release öffnen";
+"update.upToDate" = "Du hast die neueste Version (%@)";
+"update.checking" = "Prüfe…";
+"update.failed" = "Update-Prüfung fehlgeschlagen";
 "update.install" = "Jetzt aktualisieren";
 "update.installing" = "Update wird geladen…";
 "update.installFailed" = "Update konnte nicht installiert werden";

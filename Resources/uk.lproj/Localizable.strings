@@ -56,12 +56,12 @@
 
 // Обновления
 "menu.checkUpdates" = "Перевірити оновлення…";
-"update.available" = "有新版本 %@";
-"update.availableBody" = "開啟發布頁面即可下載。";
-"update.open" = "開啟發布頁";
-"update.upToDate" = "已是最新版本 (%@)";
-"update.checking" = "檢查中…";
-"update.failed" = "無法檢查更新";
+"update.available" = "Доступна версія %@";
+"update.availableBody" = "Відкрийте сторінку релізу, щоб завантажити.";
+"update.open" = "Відкрити реліз";
+"update.upToDate" = "Встановлено найновішу версію (%@)";
+"update.checking" = "Перевіряю…";
+"update.failed" = "Не вдалося перевірити оновлення";
 "update.install" = "Оновити зараз";
 "update.installing" = "Завантажую оновлення…";
 "update.installFailed" = "Не вдалося встановити оновлення";
