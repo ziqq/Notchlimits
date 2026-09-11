@@ -56,12 +56,20 @@
 
 // Обновления
 "menu.checkUpdates" = "アップデートを確認…";
-"update.available" = "バージョン %@ が利用可能です";
-"update.availableBody" = "リリースページを開いてダウンロードしてください。";
-"update.open" = "リリースを開く";
-"update.upToDate" = "最新バージョンです (%@)";
-"update.checking" = "確認中…";
-"update.failed" = "アップデートを確認できませんでした";
+"update.available" = "有新版本 %@";
+"update.availableBody" = "開啟發布頁面即可下載。";
+"update.open" = "開啟發布頁";
+"update.upToDate" = "已是最新版本 (%@)";
+"update.checking" = "檢查中…";
+"update.failed" = "無法檢查更新";
+"update.install" = "今すぐ更新";
+"update.installing" = "アップデートをダウンロード中…";
+"update.installFailed" = "アップデートを適用できませんでした";
+"update.err.noAsset" = "リリースにダウンロード可能なビルドがありません。";
+"update.err.download" = "ダウンロードに失敗しました。";
+"update.err.checksum" = "チェックサムが一致しません — ダウンロードは信頼できません。";
+"update.err.unpack" = "アップデートを展開できませんでした。";
+"update.err.notWritable" = "ここでアプリを置き換える権限がありません。";
 
 // Горячая клавиша
 "hotkey.disabled" = "オフ";

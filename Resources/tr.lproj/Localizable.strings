@@ -56,12 +56,20 @@
 
 // Обновления
 "menu.checkUpdates" = "Güncellemeleri denetle…";
-"update.available" = "%@ sürümü mevcut";
-"update.availableBody" = "İndirmek için sürüm sayfasını aç.";
-"update.open" = "Sürümü aç";
-"update.upToDate" = "En son sürümü kullanıyorsun (%@)";
-"update.checking" = "Denetleniyor…";
-"update.failed" = "Güncellemeler denetlenemedi";
+"update.available" = "有新版本 %@";
+"update.availableBody" = "開啟發布頁面即可下載。";
+"update.open" = "開啟發布頁";
+"update.upToDate" = "已是最新版本 (%@)";
+"update.checking" = "檢查中…";
+"update.failed" = "無法檢查更新";
+"update.install" = "Şimdi güncelle";
+"update.installing" = "Güncelleme indiriliyor…";
+"update.installFailed" = "Güncelleme yüklenemedi";
+"update.err.noAsset" = "Sürümde indirilebilir derleme yok.";
+"update.err.download" = "İndirme başarısız.";
+"update.err.checksum" = "Sağlama toplamı uyuşmadı — indirme güvenilir değil.";
+"update.err.unpack" = "Güncelleme açılamadı.";
+"update.err.notWritable" = "Uygulamayı burada değiştirme izni yok.";
 
 // Горячая клавиша
 "hotkey.disabled" = "kapalı";

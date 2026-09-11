@@ -360,11 +360,24 @@ enum SelfTest {
         expect("старее — не новее", !UpdateCheck.isNewer("1.2.2", than: "1.2.3"))
         expect("предрелиз/суффикс не ломает", UpdateCheck.isNewer("1.2.0", than: "1.2.0-beta.1") == false)
 
-        let json = #"{"tag_name":"v2.0.1","html_url":"https://example.com/r"}"#
+        let json = """
+        {"tag_name":"v2.0.1","html_url":"https://example.com/r","assets":[
+          {"name":"NotchLimits-2.0.1.zip","browser_download_url":"https://example.com/a.zip"},
+          {"name":"SHA256SUMS.txt","browser_download_url":"https://example.com/s.txt"}
+        ]}
+        """
         let release = UpdateCheck.parse(Data(json.utf8))
         expect("релиз разобран", release?.version == "2.0.1")
         expect("ссылка на релиз взята", release?.url.absoluteString == "https://example.com/r")
+        expect("ссылка на .zip найдена", release?.downloadURL?.absoluteString == "https://example.com/a.zip")
+        expect("ссылка на суммы найдена", release?.checksumURL?.absoluteString == "https://example.com/s.txt")
         expect("мусор не ломает", UpdateCheck.parse(Data("[]".utf8)) == nil)
+
+        let sums = "abc123  NotchLimits-2.0.1.zip\ndef456  other.txt\n"
+        expect("сумма для файла вынута",
+               UpdateCheck.expectedSum(from: sums, zipName: "NotchLimits-2.0.1.zip") == "abc123")
+        expect("для чужого файла суммы нет",
+               UpdateCheck.expectedSum(from: sums, zipName: "nope.zip") == nil)
     }
 
     private static func checkBurnRate() {

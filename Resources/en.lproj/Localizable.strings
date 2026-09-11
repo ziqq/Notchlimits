@@ -56,12 +56,20 @@
 
 // Обновления
 "menu.checkUpdates" = "Check for updates…";
-"update.available" = "Version %@ is available";
-"update.availableBody" = "Open the release page to download it.";
-"update.open" = "Open release";
-"update.upToDate" = "You're on the latest version (%@)";
-"update.checking" = "Checking…";
-"update.failed" = "Couldn't check for updates";
+"update.available" = "有新版本 %@";
+"update.availableBody" = "開啟發布頁面即可下載。";
+"update.open" = "開啟發布頁";
+"update.upToDate" = "已是最新版本 (%@)";
+"update.checking" = "檢查中…";
+"update.failed" = "無法檢查更新";
+"update.install" = "Update now";
+"update.installing" = "Downloading the update…";
+"update.installFailed" = "Couldn't install the update";
+"update.err.noAsset" = "The release has no downloadable build.";
+"update.err.download" = "Download failed.";
+"update.err.checksum" = "Checksum didn't match — download not trusted.";
+"update.err.unpack" = "Couldn't unpack the update.";
+"update.err.notWritable" = "No permission to replace the app here.";
 
 // Горячая клавиша
 "hotkey.disabled" = "off";

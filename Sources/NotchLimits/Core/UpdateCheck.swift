@@ -13,7 +13,9 @@ enum UpdateCheck {
 
     struct Release: Equatable {
         let version: String
-        let url: URL
+        let url: URL            // страница релиза
+        let downloadURL: URL?   // .zip с приложением
+        let checksumURL: URL?   // SHA256SUMS.txt для проверки
     }
 
     enum Outcome: Equatable {
@@ -54,7 +56,32 @@ enum UpdateCheck {
               let tag = root["tag_name"] as? String, !tag.isEmpty
         else { return nil }
         let url = (root["html_url"] as? String).flatMap(URL.init(string:)) ?? releasesPage
-        return Release(version: normalize(tag), url: url)
+
+        let assets = (root["assets"] as? [[String: Any]]) ?? []
+        func asset(where match: (String) -> Bool) -> URL? {
+            for entry in assets {
+                if let name = entry["name"] as? String, match(name),
+                   let link = (entry["browser_download_url"] as? String).flatMap(URL.init(string:)) {
+                    return link
+                }
+            }
+            return nil
+        }
+        let download = asset { $0.hasSuffix(".zip") }
+        let checksum = asset { $0.caseInsensitiveCompare("SHA256SUMS.txt") == .orderedSame }
+
+        return Release(version: normalize(tag), url: url,
+                       downloadURL: download, checksumURL: checksum)
+    }
+
+    /// Ожидаемая сумма для файла из SHA256SUMS.txt («<sha>  имя.zip»).
+    static func expectedSum(from sums: String, zipName: String) -> String? {
+        for line in sums.split(whereSeparator: \.isNewline) {
+            let parts = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+            guard parts.count >= 2 else { continue }
+            if parts.last == zipName { return parts.first?.lowercased() }
+        }
+        return nil
     }
 
     /// «v1.2.0» → «1.2.0».
