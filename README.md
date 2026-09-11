@@ -57,7 +57,7 @@ On a notch-less screen the panel sits top-center; collapsed, it's a small pill w
 
 ![Collapsed panel](docs/collapsed.png)
 
-The context menu covers: **Refresh** (force-poll, bypassing timers and backoff), **Add Claude / Codex account…**, **Hide** / **Rename column** submenus, **Show hidden columns**, **Remove account** (with a confirmation — deletes the account's login and profile), **Hotkey** submenu, **Launch at login** (`SMAppService`), **Check for updates…** (offers **Update now** — a SHA-256-verified in-place update — or opens the release page), and **Quit**.
+The context menu covers: **Refresh** (force-poll, bypassing timers and backoff), **Add Claude / Codex account…**, **Hide** / **Rename column** submenus, **Show hidden columns**, **Remove account** (with a confirmation — deletes the account's login and profile), **Hotkey** submenu, **Launch at login** (`SMAppService`), **Check for updates…** (offers **Update now** — a SHA-256-verified in-place update — or opens the release page), **About Notch Limits** (native panel with the running version), and **Quit**.
 
 ## Column names
 

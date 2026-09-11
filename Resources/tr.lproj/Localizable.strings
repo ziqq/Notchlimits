@@ -46,6 +46,7 @@
 "menu.hotKey.standard" = "Varsayılan (⌘P)";
 "menu.hotKey.disable" = "Kapat";
 "menu.loginItem" = "Girişte başlat";
+"menu.about" = "Notch Limits hakkında";
 "menu.quit" = "Çık";
 
 // Удаление аккаунта

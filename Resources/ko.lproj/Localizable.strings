@@ -46,6 +46,7 @@
 "menu.hotKey.standard" = "기본값 (⌘P)";
 "menu.hotKey.disable" = "끄기";
 "menu.loginItem" = "로그인 시 실행";
+"menu.about" = "Notch Limits 정보";
 "menu.quit" = "종료";
 
 // Удаление аккаунта

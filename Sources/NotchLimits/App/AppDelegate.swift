@@ -140,6 +140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(item(L.t("menu.loginItem"), #selector(toggleLoginItem),
                           state: LoginItem.isEnabled ? .on : .off))
         menu.addItem(item(L.t("menu.checkUpdates"), #selector(checkForUpdates)))
+        menu.addItem(item(L.t("menu.about"), #selector(showAbout)))
         menu.addItem(.separator())
         menu.addItem(item(L.t("menu.quit"), #selector(quit)))
 
@@ -312,6 +313,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+    }
+
+    @objc private func showAbout() {
+        // Нативная панель About: сама берёт иконку, имя и версию из бандла.
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(options: [
+            NSApplication.AboutPanelOptionKey.applicationName: "Notch Limits"
+        ])
     }
 
     @objc private func quit() {

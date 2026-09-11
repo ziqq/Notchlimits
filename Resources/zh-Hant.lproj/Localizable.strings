@@ -46,6 +46,7 @@
 "menu.hotKey.standard" = "預設 (⌘P)";
 "menu.hotKey.disable" = "關閉";
 "menu.loginItem" = "登入時啟動";
+"menu.about" = "關於 Notch Limits";
 "menu.quit" = "結束";
 
 // Удаление аккаунта
