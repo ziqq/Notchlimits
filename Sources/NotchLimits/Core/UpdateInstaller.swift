@@ -34,7 +34,11 @@ enum UpdateInstaller {
     /// Скачать, проверить, распаковать и запустить подмену. Приложение должно
     /// завершиться сразу после — дальше работает скрипт.
     static func install(_ release: UpdateCheck.Release) async throws {
-        guard let zipURL = release.downloadURL else { throw Failure.noAsset }
+        guard let zipURL = release.downloadURL, isHTTPS(zipURL) else { throw Failure.noAsset }
+        // Контрольная сумма обязательна: ставить бинарь без проверки нельзя.
+        guard let checksumURL = release.checksumURL, isHTTPS(checksumURL) else {
+            throw Failure.checksumMissing
+        }
         guard canInstallInPlace() else { throw Failure.notWritable }
 
         let fileManager = FileManager.default
@@ -48,14 +52,13 @@ enum UpdateInstaller {
         let zip = work.appendingPathComponent(zipURL.lastPathComponent)
         try fileManager.moveItem(at: tempZip, to: zip)
 
-        // 2. Сверяем SHA-256 — качаем бинарь только доверяя контрольной сумме.
-        if let checksumURL = release.checksumURL {
-            let (sumsData, _) = try await URLSession.shared.data(from: checksumURL)
-            let sums = String(decoding: sumsData, as: UTF8.self)
-            guard let expected = UpdateCheck.expectedSum(from: sums, zipName: zipURL.lastPathComponent)
-            else { throw Failure.checksumMissing }
-            guard sha256(of: zip) == expected else { throw Failure.checksumMismatch }
-        }
+        // 2. Сверяем SHA-256 — ставим только то, что совпало с суммой из релиза.
+        let (sumsData, sumsResponse) = try await URLSession.shared.data(from: checksumURL)
+        guard (sumsResponse as? HTTPURLResponse)?.statusCode == 200 else { throw Failure.download }
+        let sums = String(decoding: sumsData, as: UTF8.self)
+        guard let expected = UpdateCheck.expectedSum(from: sums, zipName: zipURL.lastPathComponent)
+        else { throw Failure.checksumMissing }
+        guard sha256(of: zip) == expected else { throw Failure.checksumMismatch }
 
         // 3. Распаковываем (ditto сохраняет подпись и атрибуты).
         let unpacked = work.appendingPathComponent("unpacked")
@@ -79,6 +82,10 @@ enum UpdateInstaller {
     }
 
     // MARK: - Детали
+
+    private static func isHTTPS(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "https"
+    }
 
     private static func sha256(of file: URL) -> String {
         guard let data = try? Data(contentsOf: file) else { return "" }
