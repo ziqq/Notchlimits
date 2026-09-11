@@ -36,7 +36,7 @@ ORDER = [
         "menu.refresh", "menu.addClaude", "menu.addCodex", "menu.hideColumn",
         "menu.noColumns", "menu.renameColumn", "menu.removeColumn", "menu.showHidden",
         "menu.hotKey", "menu.hotKey.change", "menu.hotKey.standard", "menu.hotKey.disable",
-        "menu.loginItem", "menu.quit",
+        "menu.loginItem", "menu.about", "menu.quit",
     ]),
     ("Удаление аккаунта", [
         "remove.title", "remove.body", "remove.delete", "remove.failed.title",
@@ -1131,6 +1131,19 @@ _INSTALL = {
                 "校驗碼不符——下載不可信。", "無法解壓更新。",
                 "沒有權限在此替換應用程式。"),
 }
+_ABOUT = {
+    "en": "About Notch Limits",          "ru": "О программе Notch Limits",
+    "de": "Über Notch Limits",           "fr": "À propos de Notch Limits",
+    "es": "Acerca de Notch Limits",      "it": "Informazioni su Notch Limits",
+    "pt-BR": "Sobre o Notch Limits",     "uk": "Про Notch Limits",
+    "pl": "O programie Notch Limits",    "tr": "Notch Limits hakkında",
+    "ja": "Notch Limits について",        "ko": "Notch Limits 정보",
+    "zh-Hans": "关于 Notch Limits",       "zh-Hant": "關於 Notch Limits",
+}
+for _lang, _about in _ABOUT.items():
+    T[_lang]["menu.about"] = _about
+
+
 for _lang, (_install, _installing, _installFailed, _noAsset, _dl, _checksum, _unpack, _notWritable) in _INSTALL.items():
     T[_lang]["update.install"] = _install
     T[_lang]["update.installing"] = _installing

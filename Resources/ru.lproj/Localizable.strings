@@ -46,6 +46,7 @@
 "menu.hotKey.standard" = "Стандартная (⌘P)";
 "menu.hotKey.disable" = "Выключить";
 "menu.loginItem" = "Запуск при входе";
+"menu.about" = "О программе Notch Limits";
 "menu.quit" = "Выход";
 
 // Удаление аккаунта
