@@ -1064,6 +1064,12 @@ _UPDATE = {
 for _lang, (_menu, _avail, _availBody, _open, _upToDate, _checking, _failed) in _UPDATE.items():
     # Многоточие — действие ведёт к проверке/диалогу, а не выполняется сразу.
     T[_lang]["menu.checkUpdates"] = _menu + "…"
+    T[_lang]["update.available"] = _avail
+    T[_lang]["update.availableBody"] = _availBody
+    T[_lang]["update.open"] = _open
+    T[_lang]["update.upToDate"] = _upToDate
+    T[_lang]["update.checking"] = _checking
+    T[_lang]["update.failed"] = _failed
 
 
 # Установка обновления в один клик. Без спецификаторов.
@@ -1134,12 +1140,6 @@ for _lang, (_install, _installing, _installFailed, _noAsset, _dl, _checksum, _un
     T[_lang]["update.err.checksum"] = _checksum
     T[_lang]["update.err.unpack"] = _unpack
     T[_lang]["update.err.notWritable"] = _notWritable
-    T[_lang]["update.available"] = _avail
-    T[_lang]["update.availableBody"] = _availBody
-    T[_lang]["update.open"] = _open
-    T[_lang]["update.upToDate"] = _upToDate
-    T[_lang]["update.checking"] = _checking
-    T[_lang]["update.failed"] = _failed
 
 
 def main():
