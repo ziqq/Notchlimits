@@ -86,6 +86,7 @@
 "switch.err.noActive" = "没有活动账号";
 "switch.err.notFound" = "未找到已保存的账号";
 "switch.err.io" = "读写错误";
+"switch.running" = "当前有 %d 个会话在运行——切换可能会中断它们。";
 
 // Горячая клавиша
 "hotkey.disabled" = "已关闭";

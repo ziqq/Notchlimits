@@ -32,6 +32,30 @@ enum AccountSwitcher {
         var display: String { email ?? slug }
     }
 
+    // MARK: - Активные сессии
+
+    /// Сколько процессов `claude` запущено. Обычно ≥ 1 — это и есть текущая
+    /// сессия Claude Code, поэтому переключение Claude только предупреждаем.
+    /// Для Codex счётчик не показываем: `pgrep -x codex` ловит десятки фоновых
+    /// хелперов приложения ChatGPT (не «сессии»), да и подмена файла auth.json
+    /// не ломает уже запущенные процессы — они читают его лишь при старте.
+    static func runningClaudeSessions() -> Int { runningProcesses(named: "claude") }
+
+    private static func runningProcesses(named name: String) -> Int {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        process.arguments = ["-x", name]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return 0 }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(decoding: data, as: UTF8.self)
+            .split(whereSeparator: \.isNewline)
+            .filter { !$0.isEmpty }.count
+    }
+
     // MARK: - Общее
 
     static func slug(_ email: String?) -> String {

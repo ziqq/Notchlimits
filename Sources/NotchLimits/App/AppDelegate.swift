@@ -362,22 +362,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func switchCodexAccount(_ sender: NSMenuItem) {
         guard let slug = sender.representedObject as? String else { return }
-        switchAccount(body: L.t("switch.confirm.codex")) { try AccountSwitcher.switchCodex(toSlug: slug) }
+        let target = AccountSwitcher.codexAccounts().first { $0.slug == slug }?.display ?? slug
+        // У Codex счётчик сессий не показываем (см. AccountSwitcher): подмена
+        // файла не ломает запущенные процессы.
+        switchAccount(provider: "Codex", target: target, body: L.t("switch.confirm.codex"),
+                      running: 0) {
+            try AccountSwitcher.switchCodex(toSlug: slug)
+        }
     }
 
     @objc private func switchClaudeAccount(_ sender: NSMenuItem) {
         guard let slug = sender.representedObject as? String else { return }
+        let target = AccountSwitcher.claudeAccounts().first { $0.slug == slug }?.display ?? slug
         // У Claude предупреждаем сильнее: активную запись читает и текущая сессия.
-        switchAccount(body: L.t("switch.confirm.claude")) { try AccountSwitcher.switchClaude(toSlug: slug) }
+        switchAccount(provider: "Claude", target: target, body: L.t("switch.confirm.claude"),
+                      running: AccountSwitcher.runningClaudeSessions()) {
+            try AccountSwitcher.switchClaude(toSlug: slug)
+        }
     }
 
-    private func switchAccount(body: String, _ work: @escaping () throws -> Void) {
+    private func switchAccount(provider: String, target: String, body: String,
+                               running: Int, _ work: @escaping () throws -> Void) {
         NSApp.activate(ignoringOtherApps: true)
         let confirm = NSAlert()
         confirm.messageText = L.t("switch.confirm.title")
-        confirm.informativeText = body
-        confirm.addButton(withTitle: L.t("switch.confirm.do"))
-        confirm.addButton(withTitle: L.t("common.cancel"))
+        var text = "\(provider) → \(target)\n\n\(body)"
+        // Есть запущенные сессии — предупреждаем и делаем «Отмену» по умолчанию.
+        if running > 0 { text += "\n\n⚠️ " + L.t("switch.running", running) }
+        confirm.informativeText = text
+        confirm.alertStyle = running > 0 ? .critical : .warning
+
+        let doButton = confirm.addButton(withTitle: L.t("switch.confirm.do"))
+        let cancelButton = confirm.addButton(withTitle: L.t("common.cancel"))
+        if running > 0 {
+            doButton.keyEquivalent = ""
+            cancelButton.keyEquivalent = "\r"
+        }
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
 
         Task { @MainActor in

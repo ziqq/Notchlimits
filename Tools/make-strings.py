@@ -53,6 +53,7 @@ ORDER = [
         "switch.saveFailed", "switch.confirm.title", "switch.confirm.do",
         "switch.confirm.codex", "switch.confirm.claude", "switch.failed",
         "switch.err.noActive", "switch.err.notFound", "switch.err.io",
+        "switch.running",
     ]),
     ("Горячая клавиша", [
         "hotkey.disabled", "hotkey.recorder.title", "hotkey.recorder.hint",
@@ -1279,6 +1280,26 @@ _SWITCH = {
 for _lang, _pairs in _SWITCH.items():
     for _k, _v in _pairs.items():
         T[_lang][_k] = _v
+
+# Предупреждение о запущенных сессиях. Один «%d» — их число.
+_RUNNING = {
+    "en": "%d session(s) running right now — switching may break them.",
+    "ru": "Сейчас запущено сессий: %d — переключение может их сломать.",
+    "de": "%d laufende Sitzung(en) — ein Wechsel kann sie stören.",
+    "fr": "%d session(s) en cours — changer peut les casser.",
+    "es": "%d sesión(es) en ejecución: cambiar puede romperlas.",
+    "it": "%d sessione/i in corso: il cambio può interromperle.",
+    "pt-BR": "%d sessão(ões) em execução — trocar pode quebrá-las.",
+    "uk": "Зараз запущено сесій: %d — перемикання може їх зламати.",
+    "pl": "Uruchomionych sesji: %d — przełączenie może je przerwać.",
+    "tr": "Şu anda %d oturum açık — değiştirmek onları bozabilir.",
+    "ja": "実行中のセッション: %d 件 — 切り替えると壊れる可能性があります。",
+    "ko": "실행 중인 세션 %d개 — 전환하면 중단될 수 있습니다.",
+    "zh-Hans": "当前有 %d 个会话在运行——切换可能会中断它们。",
+    "zh-Hant": "目前有 %d 個工作階段在執行——切換可能會中斷它們。",
+}
+for _lang, _text in _RUNNING.items():
+    T[_lang]["switch.running"] = _text
 
 
 def main():

@@ -110,7 +110,7 @@ Beyond monitoring several accounts as columns, the panel can switch which accoun
 - **Save current** snapshots the active account into a local library.
 - Picking a saved account (checkmark marks the active one) confirms, then makes it active. The current account is always saved first, so nothing is lost.
 
-**Codex** swaps `~/.codex/auth.json` (file-based, reversible). **Claude** copies between Keychain entries (keychain→keychain, no tokens on disk) and updates the email in `~/.claude.json`; switching there prompts for Keychain access once. Heads-up: the active Claude credential is read by any running Claude Code session, so don't switch the account you're using in a live session.
+**Codex** swaps `~/.codex/auth.json` (file-based, reversible). **Claude** copies between Keychain entries (keychain→keychain, no tokens on disk) and updates the email in `~/.claude.json`; switching there prompts for Keychain access once. Heads-up: the active Claude credential is read by any running Claude Code session, so don't switch the account you're using in a live session — if any `claude` process is running, the confirmation flags the count and defaults to Cancel.
 
 ## Multiple accounts
 
