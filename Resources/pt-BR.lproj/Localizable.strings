@@ -72,6 +72,21 @@
 "update.err.unpack" = "Não foi possível descompactar a atualização.";
 "update.err.notWritable" = "Sem permissão para substituir o app aqui.";
 
+// Переключение аккаунтов
+"switch.codex" = "Conta Codex ativa";
+"switch.claude" = "Conta Claude ativa";
+"switch.saveCurrent" = "Salvar a atual";
+"switch.saved" = "Salva: %@";
+"switch.saveFailed" = "Não foi possível salvar a conta";
+"switch.confirm.title" = "Trocar a conta ativa?";
+"switch.confirm.do" = "Trocar";
+"switch.confirm.codex" = "O comando codex passará a usar a conta escolhida. A atual é salva antes na lista.";
+"switch.confirm.claude" = "O comando claude passará a usar a conta escolhida; a atual é salva antes. Não troque a conta que você está usando em uma sessão ativa do Claude.";
+"switch.failed" = "Não foi possível trocar a conta";
+"switch.err.noActive" = "Nenhuma conta ativa";
+"switch.err.notFound" = "Conta salva não encontrada";
+"switch.err.io" = "Erro de leitura/gravação";
+
 // Горячая клавиша
 "hotkey.disabled" = "desativado";
 "hotkey.recorder.title" = "Atalho";

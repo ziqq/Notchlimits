@@ -72,6 +72,21 @@
 "update.err.unpack" = "Не вдалося розпакувати оновлення.";
 "update.err.notWritable" = "Немає прав замінити застосунок тут.";
 
+// Переключение аккаунтов
+"switch.codex" = "Активний акаунт Codex";
+"switch.claude" = "Активний акаунт Claude";
+"switch.saveCurrent" = "Зберегти поточний";
+"switch.saved" = "Збережено: %@";
+"switch.saveFailed" = "Не вдалося зберегти акаунт";
+"switch.confirm.title" = "Перемкнути активний акаунт?";
+"switch.confirm.do" = "Перемкнути";
+"switch.confirm.codex" = "Команда codex використовуватиме обраний акаунт. Поточний спершу збережеться у список.";
+"switch.confirm.claude" = "Команда claude використовуватиме обраний акаунт; поточний спершу збережеться. Не перемикай акаунт, яким зараз користуєшся в активній сесії Claude.";
+"switch.failed" = "Не вдалося перемкнути акаунт";
+"switch.err.noActive" = "Немає активного акаунта";
+"switch.err.notFound" = "Збережений акаунт не знайдено";
+"switch.err.io" = "Помилка читання/запису";
+
 // Горячая клавиша
 "hotkey.disabled" = "вимкнено";
 "hotkey.recorder.title" = "Гаряча клавіша";

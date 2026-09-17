@@ -72,6 +72,21 @@
 "update.err.unpack" = "无法解压更新。";
 "update.err.notWritable" = "没有权限在此替换应用。";
 
+// Переключение аккаунтов
+"switch.codex" = "当前 Codex 账号";
+"switch.claude" = "当前 Claude 账号";
+"switch.saveCurrent" = "保存当前";
+"switch.saved" = "已保存：%@";
+"switch.saveFailed" = "无法保存账号";
+"switch.confirm.title" = "切换当前账号？";
+"switch.confirm.do" = "切换";
+"switch.confirm.codex" = "codex 命令将使用所选账号。当前账号会先保存到列表。";
+"switch.confirm.claude" = "claude 命令将使用所选账号；当前账号会先保存。不要切换你正在活动的 Claude 会话中使用的账号。";
+"switch.failed" = "无法切换账号";
+"switch.err.noActive" = "没有活动账号";
+"switch.err.notFound" = "未找到已保存的账号";
+"switch.err.io" = "读写错误";
+
 // Горячая клавиша
 "hotkey.disabled" = "已关闭";
 "hotkey.recorder.title" = "快捷键";

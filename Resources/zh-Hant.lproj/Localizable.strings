@@ -72,6 +72,21 @@
 "update.err.unpack" = "無法解壓更新。";
 "update.err.notWritable" = "沒有權限在此替換應用程式。";
 
+// Переключение аккаунтов
+"switch.codex" = "目前 Codex 帳號";
+"switch.claude" = "目前 Claude 帳號";
+"switch.saveCurrent" = "儲存目前";
+"switch.saved" = "已儲存：%@";
+"switch.saveFailed" = "無法儲存帳號";
+"switch.confirm.title" = "切換目前帳號？";
+"switch.confirm.do" = "切換";
+"switch.confirm.codex" = "codex 指令將使用所選帳號。目前帳號會先儲存到清單。";
+"switch.confirm.claude" = "claude 指令將使用所選帳號；目前帳號會先儲存。不要切換你正在使用中的 Claude 工作階段的帳號。";
+"switch.failed" = "無法切換帳號";
+"switch.err.noActive" = "沒有作用中的帳號";
+"switch.err.notFound" = "找不到已儲存的帳號";
+"switch.err.io" = "讀寫錯誤";
+
 // Горячая клавиша
 "hotkey.disabled" = "已關閉";
 "hotkey.recorder.title" = "快速鍵";

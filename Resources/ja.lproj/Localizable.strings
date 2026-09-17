@@ -72,6 +72,21 @@
 "update.err.unpack" = "アップデートを展開できませんでした。";
 "update.err.notWritable" = "ここでアプリを置き換える権限がありません。";
 
+// Переключение аккаунтов
+"switch.codex" = "アクティブな Codex アカウント";
+"switch.claude" = "アクティブな Claude アカウント";
+"switch.saveCurrent" = "現在のを保存";
+"switch.saved" = "保存しました: %@";
+"switch.saveFailed" = "アカウントを保存できませんでした";
+"switch.confirm.title" = "アクティブなアカウントを切り替えますか？";
+"switch.confirm.do" = "切り替える";
+"switch.confirm.codex" = "codex コマンドは選択したアカウントを使います。現在のアカウントは先に一覧へ保存されます。";
+"switch.confirm.claude" = "claude コマンドは選択したアカウントを使います。現在のアカウントは先に保存されます。アクティブな Claude セッションで使用中のアカウントは切り替えないでください。";
+"switch.failed" = "アカウントを切り替えできませんでした";
+"switch.err.noActive" = "アクティブなアカウントがありません";
+"switch.err.notFound" = "保存済みアカウントが見つかりません";
+"switch.err.io" = "読み書きエラー";
+
 // Горячая клавиша
 "hotkey.disabled" = "オフ";
 "hotkey.recorder.title" = "ショートカット";
