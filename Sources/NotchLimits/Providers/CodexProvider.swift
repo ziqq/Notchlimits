@@ -127,19 +127,17 @@ struct CodexProvider: UsageProvider {
             }
         }
 
-        // Досрочные сбросы: сколько раз можно обнулить окно, не дожидаясь конца.
-        // Времени «когда станет доступен» эндпоинт не отдаёт — только два числа.
-        // Показываем «применимо сейчас / всего в запасе», когда они расходятся:
-        // applicable_available_count > 0 обычно лишь когда окно упёрлось в лимит.
+        // Досрочные сбросы: сколько «полных сбросов» доступно (их можно применить
+        // к упершемуся окну). Признак доступности — `available_count` (совпадает
+        // со `status: "available"` в детальном эндпоинте и с тем, что показывает
+        // само приложение ChatGPT). `applicable_available_count` тут не подходит:
+        // он равен 0, даже когда все кредиты доступны, — на нём мы ошибочно
+        // рисовали «0 / 3».
         if let resets = root["rate_limit_reset_credits"] as? [String: Any],
            let available = number(resets["available_count"]), available > 0 {
-            let applicable = number(resets["applicable_available_count"]) ?? available
-            let value = applicable < available
-                ? "\(Format.compact(applicable)) / \(Format.compact(available))"
-                : Format.compact(available)
             result.append(UsageStat(key: "resetCredits",
                                     label: L.t("stat.resetCredits"),
-                                    value: value))
+                                    value: Format.compact(available)))
         }
 
         return result

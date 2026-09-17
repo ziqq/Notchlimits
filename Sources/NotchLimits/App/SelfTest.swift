@@ -206,15 +206,15 @@ enum SelfTest {
         expect("статистики ровно 2", stats.count == 2, "получено \(stats.count)")
         expect("баланс строкой разобран",
                stats.first { $0.key == "credits" }?.value == "42")
-        // applicable(0) < available(1) ⇒ «применимо / всего».
-        expect("досрочные сбросы: применимо / всего",
-               stats.first { $0.key == "resetCredits" }?.value == "0 / 1")
-        expect("если применимы все — показываем одно число",
-               CodexProvider.stats(from: Data(#"{"rate_limit_reset_credits":{"available_count":2,"applicable_available_count":2}}"#.utf8))
-                   .first { $0.key == "resetCredits" }?.value == "2")
-        expect("без applicable_available_count — одно число",
-               CodexProvider.stats(from: Data(#"{"rate_limit_reset_credits":{"available_count":3}}"#.utf8))
+        // Показываем число доступных сбросов (available_count), не applicable.
+        expect("досрочные сбросы = available_count",
+               stats.first { $0.key == "resetCredits" }?.value == "1")
+        expect("applicable_available_count игнорируем",
+               CodexProvider.stats(from: Data(#"{"rate_limit_reset_credits":{"available_count":3,"applicable_available_count":0}}"#.utf8))
                    .first { $0.key == "resetCredits" }?.value == "3")
+        expect("ноль доступных — строки нет",
+               CodexProvider.stats(from: Data(#"{"rate_limit_reset_credits":{"available_count":0}}"#.utf8))
+                   .first { $0.key == "resetCredits" } == nil)
         expect("нулевой баланс не показываем",
                CodexProvider.stats(from: Data(#"{"credits":{"balance":"0"}}"#.utf8)).isEmpty)
         expect("безлимит показываем словом",
