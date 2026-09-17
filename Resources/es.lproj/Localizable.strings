@@ -87,6 +87,7 @@
 "switch.err.notFound" = "Cuenta guardada no encontrada";
 "switch.err.io" = "Error de lectura/escritura";
 "switch.running" = "%d sesión(es) en ejecución: cambiar puede romperlas.";
+"switch.saved.hint" = "Añadida a la lista: elígela en este menú para cambiar.";
 
 // Горячая клавиша
 "hotkey.disabled" = "desactivado";

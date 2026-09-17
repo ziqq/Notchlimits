@@ -87,6 +87,7 @@
 "switch.err.notFound" = "Nie znaleziono zapisanego konta";
 "switch.err.io" = "Błąd odczytu/zapisu";
 "switch.running" = "Uruchomionych sesji: %d — przełączenie może je przerwać.";
+"switch.saved.hint" = "Dodano do listy — wybierz je w tym menu, aby przełączyć.";
 
 // Горячая клавиша
 "hotkey.disabled" = "wyłączony";

@@ -87,6 +87,7 @@
 "switch.err.notFound" = "Saved account not found";
 "switch.err.io" = "Read/write error";
 "switch.running" = "%d session(s) running right now — switching may break them.";
+"switch.saved.hint" = "Added to the list — pick it in this menu to switch.";
 
 // Горячая клавиша
 "hotkey.disabled" = "off";

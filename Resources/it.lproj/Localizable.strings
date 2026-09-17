@@ -87,6 +87,7 @@
 "switch.err.notFound" = "Account salvato non trovato";
 "switch.err.io" = "Errore di lettura/scrittura";
 "switch.running" = "%d sessione/i in corso: il cambio può interromperle.";
+"switch.saved.hint" = "Aggiunto all'elenco: sceglilo in questo menu per cambiare.";
 
 // Горячая клавиша
 "hotkey.disabled" = "disattivata";

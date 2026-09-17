@@ -87,6 +87,7 @@
 "switch.err.notFound" = "Kayıtlı hesap bulunamadı";
 "switch.err.io" = "Okuma/yazma hatası";
 "switch.running" = "Şu anda %d oturum açık — değiştirmek onları bozabilir.";
+"switch.saved.hint" = "Listeye eklendi — geçmek için bu menüden seç.";
 
 // Горячая клавиша
 "hotkey.disabled" = "kapalı";

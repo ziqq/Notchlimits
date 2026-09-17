@@ -87,6 +87,7 @@
 "switch.err.notFound" = "保存済みアカウントが見つかりません";
 "switch.err.io" = "読み書きエラー";
 "switch.running" = "実行中のセッション: %d 件 — 切り替えると壊れる可能性があります。";
+"switch.saved.hint" = "一覧に追加しました。このメニューで選ぶと切り替わります。";
 
 // Горячая клавиша
 "hotkey.disabled" = "オフ";
