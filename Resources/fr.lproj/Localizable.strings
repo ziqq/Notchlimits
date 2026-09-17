@@ -87,6 +87,7 @@
 "switch.err.notFound" = "Compte enregistré introuvable";
 "switch.err.io" = "Erreur de lecture/écriture";
 "switch.running" = "%d session(s) en cours — changer peut les casser.";
+"switch.saved.hint" = "Ajouté à la liste — choisis-le dans ce menu pour changer.";
 
 // Горячая клавиша
 "hotkey.disabled" = "désactivé";

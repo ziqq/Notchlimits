@@ -53,7 +53,7 @@ ORDER = [
         "switch.saveFailed", "switch.confirm.title", "switch.confirm.do",
         "switch.confirm.codex", "switch.confirm.claude", "switch.failed",
         "switch.err.noActive", "switch.err.notFound", "switch.err.io",
-        "switch.running",
+        "switch.running", "switch.saved.hint",
     ]),
     ("Горячая клавиша", [
         "hotkey.disabled", "hotkey.recorder.title", "hotkey.recorder.hint",
@@ -1300,6 +1300,26 @@ _RUNNING = {
 }
 for _lang, _text in _RUNNING.items():
     T[_lang]["switch.running"] = _text
+
+# Пояснение после сохранения аккаунта в библиотеку (без спецификаторов).
+_SAVED_HINT = {
+    "en": "Added to the list — pick it in this menu to switch.",
+    "ru": "Добавлен в список — выбери его в этом меню, чтобы переключиться.",
+    "de": "Zur Liste hinzugefügt — in diesem Menü auswählen, um zu wechseln.",
+    "fr": "Ajouté à la liste — choisis-le dans ce menu pour changer.",
+    "es": "Añadida a la lista: elígela en este menú para cambiar.",
+    "it": "Aggiunto all'elenco: sceglilo in questo menu per cambiare.",
+    "pt-BR": "Adicionada à lista — escolha-a neste menu para trocar.",
+    "uk": "Додано до списку — вибери його в цьому меню, щоб перемкнутися.",
+    "pl": "Dodano do listy — wybierz je w tym menu, aby przełączyć.",
+    "tr": "Listeye eklendi — geçmek için bu menüden seç.",
+    "ja": "一覧に追加しました。このメニューで選ぶと切り替わります。",
+    "ko": "목록에 추가됨 — 이 메뉴에서 선택하면 전환됩니다.",
+    "zh-Hans": "已加入列表——在此菜单中选择即可切换。",
+    "zh-Hant": "已加入清單——在此選單中選擇即可切換。",
+}
+for _lang, _text in _SAVED_HINT.items():
+    T[_lang]["switch.saved.hint"] = _text
 
 
 def main():

@@ -210,7 +210,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let id = sender.representedObject as? String,
               let column = store.columns.first(where: { $0.id == id }) else { return }
 
-        NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = L.t("rename.title")
         alert.informativeText = L.t("rename.hint", column.profileName)
@@ -223,7 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.accessoryView = field
         alert.window.initialFirstResponder = field
 
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard runModalAbovePanel(alert) == .alertFirstButtonReturn else { return }
         store.setCustomName(field.stringValue, for: id)
     }
 
@@ -235,7 +234,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let id = sender.representedObject as? String,
               let column = store.columns.first(where: { $0.id == id }) else { return }
 
-        NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = L.t("remove.title", column.header)
@@ -247,28 +245,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         deleteButton.keyEquivalent = ""
         cancelButton.keyEquivalent = "\r"
 
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard runModalAbovePanel(alert) == .alertFirstButtonReturn else { return }
 
         do {
             try store.removeAccount(id: id)
         } catch {
-            let failure = NSAlert()
-            failure.messageText = L.t("remove.failed.title")
-            failure.informativeText = error.localizedDescription
-            failure.addButton(withTitle: L.t("common.ok"))
-            failure.runModal()
+            errorAlert(L.t("remove.failed.title"), error)
         }
     }
 
     @objc private func changeHotKey() {
         guard let config = HotKeyRecorder.record(current: hotKeys.config) else { return }
         guard hotKeys.apply(config) else {
-            NSApp.activate(ignoringOtherApps: true)
             let alert = NSAlert()
             alert.messageText = L.t("hotkey.taken.title", config.display)
             alert.informativeText = L.t("hotkey.taken.body")
             alert.addButton(withTitle: L.t("common.ok"))
-            alert.runModal()
+            runModalAbovePanel(alert)
             return
         }
     }
@@ -288,13 +281,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func checkForUpdates() {
         Task { @MainActor in
             let outcome = await UpdateCheck.check()
-            NSApp.activate(ignoringOtherApps: true)
             let alert = NSAlert()
             switch outcome {
             case .upToDate(let current):
                 alert.messageText = L.t("update.upToDate", current)
                 alert.addButton(withTitle: L.t("common.ok"))
-                alert.runModal()
+                runModalAbovePanel(alert)
 
             case .available(let release):
                 alert.messageText = L.t("update.available", release.version)
@@ -305,7 +297,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 alert.addButton(withTitle: L.t("update.open"))
                 alert.addButton(withTitle: L.t("common.cancel"))
 
-                let response = alert.runModal()
+                let response = runModalAbovePanel(alert)
                 if canInstall && response == .alertFirstButtonReturn {
                     installUpdate(release)
                 } else if response == (canInstall ? .alertSecondButtonReturn : .alertFirstButtonReturn) {
@@ -316,7 +308,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 alert.messageText = L.t("update.failed")
                 alert.informativeText = message
                 alert.addButton(withTitle: L.t("common.ok"))
-                alert.runModal()
+                runModalAbovePanel(alert)
             }
         }
     }
@@ -331,13 +323,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.terminate(nil)
             } catch {
                 hud.close()
-                NSApp.activate(ignoringOtherApps: true)
                 let alert = NSAlert()
                 alert.messageText = L.t("update.installFailed")
                 alert.informativeText = error.localizedDescription
                 alert.addButton(withTitle: L.t("update.open"))
                 alert.addButton(withTitle: L.t("common.ok"))
-                if alert.runModal() == .alertFirstButtonReturn {
+                if runModalAbovePanel(alert) == .alertFirstButtonReturn {
                     NSWorkspace.shared.open(release.url)
                 }
             }
@@ -353,7 +344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             do {
                 let account = try await Task.detached(priority: .userInitiated) { try work() }.value
-                infoAlert(L.t("switch.saved", account.display))
+                infoAlert(L.t("switch.saved", account.display), info: L.t("switch.saved.hint"))
             } catch {
                 errorAlert(L.t("switch.saveFailed"), error)
             }
@@ -383,7 +374,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func switchAccount(provider: String, target: String, body: String,
                                running: Int, _ work: @escaping () throws -> Void) {
-        NSApp.activate(ignoringOtherApps: true)
         let confirm = NSAlert()
         confirm.messageText = L.t("switch.confirm.title")
         var text = "\(provider) → \(target)\n\n\(body)"
@@ -398,7 +388,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             doButton.keyEquivalent = ""
             cancelButton.keyEquivalent = "\r"
         }
-        guard confirm.runModal() == .alertFirstButtonReturn else { return }
+        guard runModalAbovePanel(confirm) == .alertFirstButtonReturn else { return }
 
         Task { @MainActor in
             do {
@@ -411,21 +401,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func infoAlert(_ message: String) {
-        NSApp.activate(ignoringOtherApps: true)
+    private func infoAlert(_ message: String, info: String = "") {
         let alert = NSAlert()
         alert.messageText = message
+        if !info.isEmpty { alert.informativeText = info }
         alert.addButton(withTitle: L.t("common.ok"))
-        alert.runModal()
+        runModalAbovePanel(alert)
     }
 
     private func errorAlert(_ title: String, _ error: Error) {
-        NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = error.localizedDescription
         alert.addButton(withTitle: L.t("common.ok"))
-        alert.runModal()
+        runModalAbovePanel(alert)
+    }
+
+    /// Модальный диалог поверх панели. Панель у чёлки живёт на уровне
+    /// `.popUpMenu`, и обычное окно алерта вылезает ПОД ней — «Ок» не виден.
+    /// Поднимаем окно алерта выше панели.
+    @discardableResult
+    private func runModalAbovePanel(_ alert: NSAlert) -> NSApplication.ModalResponse {
+        NSApp.activate(ignoringOtherApps: true)
+        alert.window.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 1)
+        return alert.runModal()
     }
 
     @objc private func showAbout() {

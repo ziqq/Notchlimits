@@ -87,6 +87,7 @@
 "switch.err.notFound" = "找不到已儲存的帳號";
 "switch.err.io" = "讀寫錯誤";
 "switch.running" = "目前有 %d 個工作階段在執行——切換可能會中斷它們。";
+"switch.saved.hint" = "已加入清單——在此選單中選擇即可切換。";
 
 // Горячая клавиша
 "hotkey.disabled" = "已關閉";
