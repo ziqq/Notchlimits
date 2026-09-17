@@ -23,6 +23,7 @@ enum SelfTest {
         checkNotifications()
         checkBurnRate()
         checkUpdateCheck()
+        checkAccountSwitcher()
         checkFormatting()
         checkCodableRoundTrips()
         checkLocalizations()
@@ -378,6 +379,15 @@ enum SelfTest {
                UpdateCheck.expectedSum(from: sums, zipName: "NotchLimits-2.0.1.zip") == "abc123")
         expect("для чужого файла суммы нет",
                UpdateCheck.expectedSum(from: sums, zipName: "nope.zip") == nil)
+    }
+
+    private static func checkAccountSwitcher() {
+        section("Свитчер аккаунтов: slug")
+        expect("почта → безопасный slug",
+               AccountSwitcher.slug("Alex.Marabidis@Gmail.com") == "alex-marabidis-gmail-com")
+        expect("пустая почта → account", AccountSwitcher.slug(nil) == "account")
+        expect("slug без крайних дефисов", !AccountSwitcher.slug("@@@a@@@").hasPrefix("-"))
+        expect("slug ограничен по длине", AccountSwitcher.slug(String(repeating: "a", count: 100)).count <= 48)
     }
 
     private static func checkBurnRate() {

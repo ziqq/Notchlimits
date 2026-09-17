@@ -122,6 +122,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         removeItem.isEnabled = !allColumns.isEmpty
         menu.addItem(removeItem)
 
+        // Переключение активного аккаунта для обычных команд codex/claude.
+        menu.addItem(switchSubmenu(title: L.t("switch.codex"),
+                                   accounts: AccountSwitcher.codexAccounts(),
+                                   save: #selector(saveCodexAccount),
+                                   pick: #selector(switchCodexAccount(_:))))
+        menu.addItem(switchSubmenu(title: L.t("switch.claude"),
+                                   accounts: AccountSwitcher.claudeAccounts(),
+                                   save: #selector(saveClaudeAccount),
+                                   pick: #selector(switchClaudeAccount(_:))))
+
         menu.addItem(.separator())
 
         let hotKeyItem = NSMenuItem(title: L.t("menu.hotKey", hotKeys.displayName),
@@ -155,6 +165,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuItem.state = state
         menuItem.isEnabled = true
         return menuItem
+    }
+
+    /// Подменю переключения активного аккаунта: «Сохранить текущий» + список
+    /// сохранённых с галочкой на активном.
+    private func switchSubmenu(title: String, accounts: [AccountSwitcher.Account],
+                               save: Selector, pick: Selector) -> NSMenuItem {
+        let root = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        submenu.addItem(item(L.t("switch.saveCurrent"), save))
+        if !accounts.isEmpty {
+            submenu.addItem(.separator())
+            for account in accounts {
+                let entry = item(account.display, pick, state: account.isActive ? .on : .off)
+                entry.representedObject = account.slug
+                submenu.addItem(entry)
+            }
+        }
+        root.submenu = submenu
+        return root
     }
 
     // MARK: - Действия
@@ -313,6 +342,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+    }
+
+    // MARK: - Переключение аккаунтов
+
+    @objc private func saveCodexAccount() { saveAccount { try AccountSwitcher.saveCurrentCodex() } }
+    @objc private func saveClaudeAccount() { saveAccount { try AccountSwitcher.saveCurrentClaude() } }
+
+    private func saveAccount(_ work: @escaping () throws -> AccountSwitcher.Account) {
+        Task { @MainActor in
+            do {
+                let account = try await Task.detached(priority: .userInitiated) { try work() }.value
+                infoAlert(L.t("switch.saved", account.display))
+            } catch {
+                errorAlert(L.t("switch.saveFailed"), error)
+            }
+        }
+    }
+
+    @objc private func switchCodexAccount(_ sender: NSMenuItem) {
+        guard let slug = sender.representedObject as? String else { return }
+        switchAccount(body: L.t("switch.confirm.codex")) { try AccountSwitcher.switchCodex(toSlug: slug) }
+    }
+
+    @objc private func switchClaudeAccount(_ sender: NSMenuItem) {
+        guard let slug = sender.representedObject as? String else { return }
+        // У Claude предупреждаем сильнее: активную запись читает и текущая сессия.
+        switchAccount(body: L.t("switch.confirm.claude")) { try AccountSwitcher.switchClaude(toSlug: slug) }
+    }
+
+    private func switchAccount(body: String, _ work: @escaping () throws -> Void) {
+        NSApp.activate(ignoringOtherApps: true)
+        let confirm = NSAlert()
+        confirm.messageText = L.t("switch.confirm.title")
+        confirm.informativeText = body
+        confirm.addButton(withTitle: L.t("switch.confirm.do"))
+        confirm.addButton(withTitle: L.t("common.cancel"))
+        guard confirm.runModal() == .alertFirstButtonReturn else { return }
+
+        Task { @MainActor in
+            do {
+                try await Task.detached(priority: .userInitiated) { try work() }.value
+                store.rediscover(force: true)
+                store.refreshAll(force: true)
+            } catch {
+                errorAlert(L.t("switch.failed"), error)
+            }
+        }
+    }
+
+    private func infoAlert(_ message: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.addButton(withTitle: L.t("common.ok"))
+        alert.runModal()
+    }
+
+    private func errorAlert(_ title: String, _ error: Error) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: L.t("common.ok"))
+        alert.runModal()
     }
 
     @objc private func showAbout() {

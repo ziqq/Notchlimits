@@ -72,6 +72,21 @@
 "update.err.unpack" = "Nie udało się rozpakować aktualizacji.";
 "update.err.notWritable" = "Brak uprawnień do zastąpienia aplikacji tutaj.";
 
+// Переключение аккаунтов
+"switch.codex" = "Aktywne konto Codex";
+"switch.claude" = "Aktywne konto Claude";
+"switch.saveCurrent" = "Zapisz bieżące";
+"switch.saved" = "Zapisano: %@";
+"switch.saveFailed" = "Nie udało się zapisać konta";
+"switch.confirm.title" = "Przełączyć aktywne konto?";
+"switch.confirm.do" = "Przełącz";
+"switch.confirm.codex" = "Polecenie codex użyje wybranego konta. Bieżące zostanie najpierw zapisane na liście.";
+"switch.confirm.claude" = "Polecenie claude użyje wybranego konta; bieżące zostanie najpierw zapisane. Nie przełączaj konta, którego używasz w aktywnej sesji Claude.";
+"switch.failed" = "Nie udało się przełączyć konta";
+"switch.err.noActive" = "Brak aktywnego konta";
+"switch.err.notFound" = "Nie znaleziono zapisanego konta";
+"switch.err.io" = "Błąd odczytu/zapisu";
+
 // Горячая клавиша
 "hotkey.disabled" = "wyłączony";
 "hotkey.recorder.title" = "Skrót";

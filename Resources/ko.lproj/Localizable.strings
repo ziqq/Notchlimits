@@ -72,6 +72,21 @@
 "update.err.unpack" = "업데이트의 압축을 풀지 못했습니다.";
 "update.err.notWritable" = "여기에서 앱을 교체할 권한이 없습니다.";
 
+// Переключение аккаунтов
+"switch.codex" = "활성 Codex 계정";
+"switch.claude" = "활성 Claude 계정";
+"switch.saveCurrent" = "현재 계정 저장";
+"switch.saved" = "저장됨: %@";
+"switch.saveFailed" = "계정을 저장하지 못했습니다";
+"switch.confirm.title" = "활성 계정을 전환할까요?";
+"switch.confirm.do" = "전환";
+"switch.confirm.codex" = "codex 명령이 선택한 계정을 사용합니다. 현재 계정은 먼저 목록에 저장됩니다.";
+"switch.confirm.claude" = "claude 명령이 선택한 계정을 사용합니다. 현재 계정은 먼저 저장됩니다. 활성 Claude 세션에서 사용 중인 계정은 전환하지 마세요.";
+"switch.failed" = "계정을 전환하지 못했습니다";
+"switch.err.noActive" = "활성 계정이 없습니다";
+"switch.err.notFound" = "저장된 계정을 찾을 수 없습니다";
+"switch.err.io" = "읽기/쓰기 오류";
+
 // Горячая клавиша
 "hotkey.disabled" = "꺼짐";
 "hotkey.recorder.title" = "단축키";

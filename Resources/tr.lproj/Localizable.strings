@@ -72,6 +72,21 @@
 "update.err.unpack" = "Güncelleme açılamadı.";
 "update.err.notWritable" = "Uygulamayı burada değiştirme izni yok.";
 
+// Переключение аккаунтов
+"switch.codex" = "Etkin Codex hesabı";
+"switch.claude" = "Etkin Claude hesabı";
+"switch.saveCurrent" = "Geçerli olanı kaydet";
+"switch.saved" = "Kaydedildi: %@";
+"switch.saveFailed" = "Hesap kaydedilemedi";
+"switch.confirm.title" = "Etkin hesap değiştirilsin mi?";
+"switch.confirm.do" = "Değiştir";
+"switch.confirm.codex" = "codex komutu seçilen hesabı kullanacak. Geçerli hesap önce listeye kaydedilir.";
+"switch.confirm.claude" = "claude komutu seçilen hesabı kullanacak; geçerli hesap önce kaydedilir. Etkin bir Claude oturumunda kullandığın hesabı değiştirme.";
+"switch.failed" = "Hesap değiştirilemedi";
+"switch.err.noActive" = "Etkin hesap yok";
+"switch.err.notFound" = "Kayıtlı hesap bulunamadı";
+"switch.err.io" = "Okuma/yazma hatası";
+
 // Горячая клавиша
 "hotkey.disabled" = "kapalı";
 "hotkey.recorder.title" = "Kısayol";

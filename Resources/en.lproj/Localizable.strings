@@ -72,6 +72,21 @@
 "update.err.unpack" = "Couldn't unpack the update.";
 "update.err.notWritable" = "No permission to replace the app here.";
 
+// Переключение аккаунтов
+"switch.codex" = "Active Codex account";
+"switch.claude" = "Active Claude account";
+"switch.saveCurrent" = "Save current";
+"switch.saved" = "Saved: %@";
+"switch.saveFailed" = "Couldn't save the account";
+"switch.confirm.title" = "Switch active account?";
+"switch.confirm.do" = "Switch";
+"switch.confirm.codex" = "The plain codex command will use the selected account. The current one is saved to the list first.";
+"switch.confirm.claude" = "The plain claude command will use the selected account; the current one is saved first. Don't switch the account you're using in an active Claude session right now.";
+"switch.failed" = "Couldn't switch the account";
+"switch.err.noActive" = "No active account to save";
+"switch.err.notFound" = "Saved account not found";
+"switch.err.io" = "Read/write error";
+
 // Горячая клавиша
 "hotkey.disabled" = "off";
 "hotkey.recorder.title" = "Shortcut";

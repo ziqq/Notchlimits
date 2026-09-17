@@ -131,6 +131,39 @@ enum ClaudeKeychain {
                              [kSecValueData as String: data] as CFDictionary) == errSecSuccess
     }
 
+    /// Сырой blob записи Keychain — для копий keychain→keychain (свитчер
+    /// аккаунтов), чтобы токены не попадали на диск.
+    static func rawData(service: String) -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecReturnData as String: true
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return data
+    }
+
+    /// Записать сырой blob (создать запись или обновить существующую).
+    @discardableResult
+    static func writeRaw(service: String, data: Data) -> Bool {
+        let base: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service
+        ]
+        let updated = SecItemUpdate(base as CFDictionary,
+                                    [kSecValueData as String: data] as CFDictionary)
+        if updated == errSecSuccess { return true }
+        if updated == errSecItemNotFound {
+            var add = base
+            add[kSecValueData as String] = data
+            return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+        }
+        return false
+    }
+
     /// Папка профиля для записи с суффиксом-хэшем.
     /// claude хэширует путь CLAUDE_CONFIG_DIR, поэтому хэш не вычисляем «вперёд»,
     /// а сверяем известные папки профилей с суффиксом записи.

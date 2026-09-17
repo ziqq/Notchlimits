@@ -57,7 +57,7 @@ On a notch-less screen the panel sits top-center; collapsed, it's a small pill w
 
 ![Collapsed panel](docs/collapsed.png)
 
-The context menu covers: **Refresh** (force-poll, bypassing timers and backoff), **Add Claude / Codex account…**, **Hide** / **Rename column** submenus, **Show hidden columns**, **Remove account** (with a confirmation — deletes the account's login and profile), **Hotkey** submenu, **Launch at login** (`SMAppService`), **Check for updates…** (offers **Update now** — a SHA-256-verified in-place update — or opens the release page), **About Notch Limits** (native panel with the running version), and **Quit**.
+The context menu covers: **Refresh** (force-poll, bypassing timers and backoff), **Add Claude / Codex account…**, **Hide** / **Rename column** submenus, **Show hidden columns**, **Remove account** (with a confirmation — deletes the account's login and profile), **Active Codex / Claude account →** (save the current one, then switch which account the plain `codex`/`claude` command uses), **Hotkey** submenu, **Launch at login** (`SMAppService`), **Check for updates…** (offers **Update now** — a SHA-256-verified in-place update — or opens the release page), **About Notch Limits** (native panel with the running version), and **Quit**.
 
 ## Column names
 
@@ -102,6 +102,15 @@ A re-auth or error message is shown **on top of** cached numbers, not instead of
 Each row keeps a short local history of its percentage (in `UserDefaults`, no tokens). From those samples a **burn-rate forecast** is computed by least-squares slope: if the current pace would reach 100 % *before* the window resets, the reset line gains a `· full ≈ <time>` suffix — yellow, or red when it's under 45 minutes away. The reset countdown itself stays visible, and hovering gives the exact reset time. Flat or falling windows, and ones that comfortably reset first, show just the reset line. The forecast needs a few samples spanning at least five minutes, so it appears a little after launch, not immediately.
 
 Below the windows, whatever extra numbers the endpoint returns are listed: credit balance, early resets available, usage billed beyond the plan. Lines with a zero or missing value are omitted.
+
+## Switching the active account
+
+Beyond monitoring several accounts as columns, the panel can switch which account the plain `codex` / `claude` command uses — like [codex-account-switcher](https://github.com/liuzhao1225/codex-account-switcher), for both providers, from the notch. Right-click → **Active Codex account →** / **Active Claude account →**:
+
+- **Save current** snapshots the active account into a local library.
+- Picking a saved account (checkmark marks the active one) confirms, then makes it active. The current account is always saved first, so nothing is lost.
+
+**Codex** swaps `~/.codex/auth.json` (file-based, reversible). **Claude** copies between Keychain entries (keychain→keychain, no tokens on disk) and updates the email in `~/.claude.json`; switching there prompts for Keychain access once. Heads-up: the active Claude credential is read by any running Claude Code session, so don't switch the account you're using in a live session.
 
 ## Multiple accounts
 
