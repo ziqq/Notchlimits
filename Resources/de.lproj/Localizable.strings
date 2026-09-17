@@ -86,6 +86,7 @@
 "switch.err.noActive" = "Kein aktives Konto";
 "switch.err.notFound" = "Gespeichertes Konto nicht gefunden";
 "switch.err.io" = "Lese-/Schreibfehler";
+"switch.running" = "%d laufende Sitzung(en) — ein Wechsel kann sie stören.";
 
 // Горячая клавиша
 "hotkey.disabled" = "aus";

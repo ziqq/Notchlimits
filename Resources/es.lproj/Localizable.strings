@@ -86,6 +86,7 @@
 "switch.err.noActive" = "No hay cuenta activa";
 "switch.err.notFound" = "Cuenta guardada no encontrada";
 "switch.err.io" = "Error de lectura/escritura";
+"switch.running" = "%d sesión(es) en ejecución: cambiar puede romperlas.";
 
 // Горячая клавиша
 "hotkey.disabled" = "desactivado";

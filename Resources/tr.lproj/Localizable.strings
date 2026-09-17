@@ -86,6 +86,7 @@
 "switch.err.noActive" = "Etkin hesap yok";
 "switch.err.notFound" = "Kayıtlı hesap bulunamadı";
 "switch.err.io" = "Okuma/yazma hatası";
+"switch.running" = "Şu anda %d oturum açık — değiştirmek onları bozabilir.";
 
 // Горячая клавиша
 "hotkey.disabled" = "kapalı";
