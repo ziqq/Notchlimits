@@ -3,15 +3,14 @@ import Security
 
 /// Переключение активного аккаунта для обычных команд `codex` / `claude`.
 ///
-/// Модель как у codex-account-switcher: есть «библиотека» сохранённых аккаунтов
-/// и один активный вход; «Сохранить текущий» кладёт активный в библиотеку,
-/// «Переключить» ставит выбранный активным. Перед подменой активный всегда
-/// сохраняется в библиотеку, чтобы ничего не потерять.
+/// Список для переключения — это ВСЕ известные аккаунты: текущий активный,
+/// добавленные профили (колонки) и «библиотека» (снимки вытесненных аккаунтов).
+/// Отдельного «Сохранить текущий» не нужно: при переключении текущий активный
+/// сам уходит в библиотеку, поэтому вернуться к нему можно всегда.
 ///
 /// Codex хранит вход в файле `~/.codex/auth.json` — работаем файлами. Claude —
 /// в записи Keychain `Claude Code-credentials`, поэтому копии делаем
-/// keychain→keychain, не выгружая токены на диск. Библиотечные записи Claude
-/// называем с префиксом `NotchLimits.claude.`, чтобы их не приняли за профиль.
+/// keychain→keychain, не выгружая токены на диск.
 enum AccountSwitcher {
 
     enum Failure: LocalizedError {
@@ -25,26 +24,23 @@ enum AccountSwitcher {
         }
     }
 
+    /// `ref` — источник учётных данных: путь к auth.json (Codex) или имя записи
+    /// Keychain (Claude). Он же кладётся в пункт меню.
     struct Account: Equatable {
-        let slug: String
         let email: String?
         let isActive: Bool
-        var display: String { email ?? slug }
+        let ref: String
+        var display: String { email ?? ref }
     }
 
     // MARK: - Активные сессии
 
-    /// Сколько процессов `claude` запущено. Обычно ≥ 1 — это и есть текущая
-    /// сессия Claude Code, поэтому переключение Claude только предупреждаем.
-    /// Для Codex счётчик не показываем: `pgrep -x codex` ловит десятки фоновых
-    /// хелперов приложения ChatGPT (не «сессии»), да и подмена файла auth.json
-    /// не ломает уже запущенные процессы — они читают его лишь при старте.
-    static func runningClaudeSessions() -> Int { runningProcesses(named: "claude") }
-
-    private static func runningProcesses(named name: String) -> Int {
+    /// Сколько процессов `claude` запущено — обычно ≥ 1 (текущая сессия),
+    /// поэтому переключение Claude только предупреждаем, не блокируем.
+    static func runningClaudeSessions() -> Int {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        process.arguments = ["-x", name]
+        process.arguments = ["-x", "claude"]
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
@@ -52,8 +48,7 @@ enum AccountSwitcher {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         return String(decoding: data, as: UTF8.self)
-            .split(whereSeparator: \.isNewline)
-            .filter { !$0.isEmpty }.count
+            .split(whereSeparator: \.isNewline).filter { !$0.isEmpty }.count
     }
 
     // MARK: - Общее
@@ -83,19 +78,31 @@ enum AccountSwitcher {
         CodexProvider.readAuth(codexHome: codexHome)?.email
     }
 
+    /// Все аккаунты Codex: активный + профили + библиотека, без повторов по почте.
     static func codexAccounts() -> [Account] {
         let active = codexActiveEmail()
-        let entries = (try? FileManager.default.contentsOfDirectory(at: codexLib,
-                        includingPropertiesForKeys: nil)) ?? []
-        return entries.compactMap { dir -> Account? in
-            guard (try? dir.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { return nil }
-            let email = CodexProvider.readAuth(codexHome: dir)?.email
-            return Account(slug: dir.lastPathComponent, email: email,
-                           isActive: email != nil && email == active)
-        }.sorted { $0.display < $1.display }
+        var seen = Set<String>()
+        var result: [Account] = []
+        func add(authURL: URL) {
+            guard FileManager.default.fileExists(atPath: authURL.path) else { return }
+            let email = CodexProvider.readAuth(codexHome: authURL.deletingLastPathComponent())?.email
+            let key = email ?? authURL.path
+            guard seen.insert(key).inserted else { return }
+            result.append(Account(email: email,
+                                  isActive: email != nil && email == active,
+                                  ref: authURL.path))
+        }
+        add(authURL: codexAuth)                                    // текущий активный
+        for dir in ProfileDirectories.codexProfiles() {           // профили
+            add(authURL: dir.appendingPathComponent("auth.json"))
+        }
+        let libDirs = (try? FileManager.default.contentsOfDirectory(at: codexLib,
+                        includingPropertiesForKeys: nil)) ?? []    // библиотека
+        for dir in libDirs { add(authURL: dir.appendingPathComponent("auth.json")) }
+        return result
     }
 
-    /// Снимок текущего активного Codex-аккаунта в библиотеку.
+    /// Снимок текущего активного Codex-аккаунта в библиотеку (для losslessness).
     @discardableResult
     static func saveCurrentCodex() throws -> Account {
         guard let auth = try? Data(contentsOf: codexAuth), !auth.isEmpty else { throw Failure.noActive }
@@ -106,13 +113,15 @@ enum AccountSwitcher {
         let dest = dir.appendingPathComponent("auth.json")
         try auth.write(to: dest, options: .atomic)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: dest.path)
-        return Account(slug: dir.lastPathComponent, email: email, isActive: true)
+        return Account(email: email, isActive: true, ref: dest.path)
     }
 
-    static func switchCodex(toSlug target: String) throws {
-        let source = codexLib.appendingPathComponent(target).appendingPathComponent("auth.json")
-        guard let data = try? Data(contentsOf: source), !data.isEmpty else { throw Failure.notFound }
-        _ = try? saveCurrentCodex()  // сохранить текущий, чтобы не потерять
+    /// Сделать активным аккаунт из `ref` (путь к auth.json).
+    static func switchCodex(toRef path: String) throws {
+        guard path != codexAuth.path else { return }              // уже активен
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)), !data.isEmpty
+        else { throw Failure.notFound }
+        _ = try? saveCurrentCodex()                               // сохранить текущий
         do {
             try data.write(to: codexAuth, options: .atomic)
             try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: codexAuth.path)
@@ -122,8 +131,9 @@ enum AccountSwitcher {
     // MARK: - Claude (keychain→keychain)
 
     private static let claudeBase = ClaudeKeychain.baseService
+    private static let libPrefix = "NotchLimits.claude."
     private static let emailsKey = "switcherClaudeEmails"
-    private static func claudeLibService(_ slug: String) -> String { "NotchLimits.claude.\(slug)" }
+    private static func claudeLibService(_ slug: String) -> String { libPrefix + slug }
     private static var claudeConfig: URL { ProfileDirectories.home.appendingPathComponent(".claude.json") }
 
     static func claudeActiveEmail() -> String? {
@@ -134,36 +144,65 @@ enum AccountSwitcher {
         UserDefaults.standard.dictionary(forKey: emailsKey) as? [String: String] ?? [:]
     }
 
-    /// Активный определяем по e-mail из `~/.claude.json`, а не чтением blob'ов
-    /// Keychain — иначе простое открытие меню вызвало бы запрос пароля на каждую
-    /// запись. Keychain трогаем только при самом переключении.
+    /// Почта аккаунта по имени записи Keychain (для отображения и `~/.claude.json`).
+    private static func email(forService service: String) -> String? {
+        if service == claudeBase { return claudeActiveEmail() }
+        if service.hasPrefix(libPrefix) {
+            let value = storedEmails()[String(service.dropFirst(libPrefix.count))]
+            return (value?.isEmpty == false) ? value : nil
+        }
+        // Профиль: почта лежит в <config-dir>/.claude.json.
+        if let dir = ClaudeKeychain.configDirectory(for: service) {
+            return (try? Data(contentsOf: dir.appendingPathComponent(".claude.json")))
+                .flatMap { ClaudeProvider.parseEmail(fromConfig: $0) }
+        }
+        return nil
+    }
+
+    /// Все аккаунты Claude: активный (base) + профили (записи Keychain) +
+    /// библиотека. Активный определяем по почте из `~/.claude.json`, без чтения
+    /// секретов, чтобы открытие меню не вызывало запрос пароля.
     static func claudeAccounts() -> [Account] {
         let active = claudeActiveEmail()
-        return storedEmails().map { slug, email in
-            Account(slug: slug, email: email.isEmpty ? nil : email,
-                    isActive: !email.isEmpty && email == active)
-        }.sorted { $0.display < $1.display }
+        var seen = Set<String>()
+        var result: [Account] = []
+        func add(service: String, email: String?) {
+            let key = email ?? service
+            guard seen.insert(key).inserted else { return }
+            result.append(Account(email: email,
+                                  isActive: email != nil && email == active,
+                                  ref: service))
+        }
+        add(service: claudeBase, email: active)                              // активный
+        for service in ClaudeKeychain.services() where service != claudeBase {  // профили
+            add(service: service, email: email(forService: service))
+        }
+        for (slug, mail) in storedEmails() {                                // библиотека
+            add(service: claudeLibService(slug), email: mail.isEmpty ? nil : mail)
+        }
+        return result
     }
 
     /// Снимок текущего активного Claude-аккаунта в библиотеку (keychain→keychain).
     @discardableResult
     static func saveCurrentClaude() throws -> Account {
         guard let blob = ClaudeKeychain.rawData(service: claudeBase) else { throw Failure.noActive }
-        let email = claudeActiveEmail()
-        let s = slug(email)
+        let mail = claudeActiveEmail()
+        let s = slug(mail)
         guard ClaudeKeychain.writeRaw(service: claudeLibService(s), data: blob) else { throw Failure.io }
-        var emails = storedEmails(); emails[s] = email ?? ""
+        var emails = storedEmails(); emails[s] = mail ?? ""
         UserDefaults.standard.set(emails, forKey: emailsKey)
-        return Account(slug: s, email: email, isActive: true)
+        return Account(email: mail, isActive: true, ref: claudeLibService(s))
     }
 
-    static func switchClaude(toSlug target: String) throws {
-        guard let blob = ClaudeKeychain.rawData(service: claudeLibService(target)) else { throw Failure.notFound }
-        _ = try? saveCurrentClaude()  // сохранить текущий
+    /// Сделать активным аккаунт из `ref` (имя записи Keychain).
+    static func switchClaude(toService service: String) throws {
+        guard service != claudeBase else { return }                        // уже активен
+        guard let blob = ClaudeKeychain.rawData(service: service) else { throw Failure.notFound }
+        let targetEmail = email(forService: service)
+        _ = try? saveCurrentClaude()                                       // сохранить текущий
         guard ClaudeKeychain.writeRaw(service: claudeBase, data: blob) else { throw Failure.io }
-        // Подтянуть e-mail в ~/.claude.json, чтобы claude и панель показывали
-        // верный аккаунт (это не токен, а отображаемое поле).
-        if let email = storedEmails()[target], !email.isEmpty { updateClaudeConfigEmail(email) }
+        if let targetEmail { updateClaudeConfigEmail(targetEmail) }        // чтобы claude/панель показывали верно
     }
 
     private static func updateClaudeConfigEmail(_ email: String) {

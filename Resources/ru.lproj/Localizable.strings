@@ -149,3 +149,5 @@
 "error.unknownSource" = "неизвестный источник";
 "error.noProvider" = "нет провайдера";
 "error.unreachable" = "сеть недоступна";
+"switch.activeMark" = "%@ · активный";
+"switch.empty" = "Пока нет аккаунтов";

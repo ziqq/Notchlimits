@@ -149,3 +149,5 @@
 "error.unknownSource" = "알 수 없는 소스";
 "error.noProvider" = "제공자 없음";
 "error.unreachable" = "네트워크 사용 불가";
+"switch.activeMark" = "%@ · 사용 중";
+"switch.empty" = "아직 계정이 없습니다";

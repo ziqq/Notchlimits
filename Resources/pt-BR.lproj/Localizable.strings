@@ -149,3 +149,5 @@
 "error.unknownSource" = "origem desconhecida";
 "error.noProvider" = "sem provedor";
 "error.unreachable" = "rede indisponível";
+"switch.activeMark" = "%@ · ativo";
+"switch.empty" = "Nenhuma conta ainda";

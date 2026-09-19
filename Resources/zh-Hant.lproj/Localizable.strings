@@ -149,3 +149,5 @@
 "error.unknownSource" = "來源不明";
 "error.noProvider" = "沒有提供者";
 "error.unreachable" = "網路無法使用";
+"switch.activeMark" = "%@ · 使用中";
+"switch.empty" = "尚無帳戶";

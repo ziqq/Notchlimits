@@ -149,3 +149,5 @@
 "error.unknownSource" = "unknown source";
 "error.noProvider" = "no provider";
 "error.unreachable" = "network unavailable";
+"switch.activeMark" = "%@ · active";
+"switch.empty" = "No accounts yet";

@@ -140,11 +140,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Переключение активного аккаунта для обычных команд codex/claude.
         menu.addItem(switchSubmenu(title: L.t("switch.codex"),
                                    accounts: AccountSwitcher.codexAccounts(),
-                                   save: #selector(saveCodexAccount),
                                    pick: #selector(switchCodexAccount(_:))))
         menu.addItem(switchSubmenu(title: L.t("switch.claude"),
                                    accounts: AccountSwitcher.claudeAccounts(),
-                                   save: #selector(saveClaudeAccount),
                                    pick: #selector(switchClaudeAccount(_:))))
 
         menu.addItem(.separator())
@@ -182,18 +180,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menuItem
     }
 
-    /// Подменю переключения активного аккаунта: «Сохранить текущий» + список
-    /// сохранённых с галочкой на активном.
+    /// Подменю переключения активного аккаунта: все известные аккаунты —
+    /// активный, профили-колонки и сохранённые — без отдельного «Сохранить
+    /// текущий» (список наполняется сам). Активный помечен галочкой, жирным
+    /// и суффиксом, и выбрать его нельзя — переключать некуда.
     private func switchSubmenu(title: String, accounts: [AccountSwitcher.Account],
-                               save: Selector, pick: Selector) -> NSMenuItem {
+                               pick: Selector) -> NSMenuItem {
         let root = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         let submenu = NSMenu()
-        submenu.addItem(item(L.t("switch.saveCurrent"), save))
-        if !accounts.isEmpty {
-            submenu.addItem(.separator())
+        if accounts.isEmpty {
+            let empty = NSMenuItem(title: L.t("switch.empty"), action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            submenu.addItem(empty)
+        } else {
             for account in accounts {
-                let entry = item(account.display, pick, state: account.isActive ? .on : .off)
-                entry.representedObject = account.slug
+                let label = account.isActive ? L.t("switch.activeMark", account.display)
+                                             : account.display
+                let entry = item(label, pick, state: account.isActive ? .on : .off)
+                entry.representedObject = account.ref
+                if account.isActive {
+                    entry.isEnabled = false          // уже активен — переключать некуда
+                    entry.attributedTitle = NSAttributedString(
+                        string: label,
+                        attributes: [.font: NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)])
+                }
                 submenu.addItem(entry)
             }
         }
@@ -393,38 +403,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Переключение аккаунтов
 
-    @objc private func saveCodexAccount() { saveAccount { try AccountSwitcher.saveCurrentCodex() } }
-    @objc private func saveClaudeAccount() { saveAccount { try AccountSwitcher.saveCurrentClaude() } }
-
-    private func saveAccount(_ work: @escaping () throws -> AccountSwitcher.Account) {
-        Task { @MainActor in
-            do {
-                let account = try await Task.detached(priority: .userInitiated) { try work() }.value
-                infoAlert(L.t("switch.saved", account.display), info: L.t("switch.saved.hint"))
-            } catch {
-                errorAlert(L.t("switch.saveFailed"), error)
-            }
-        }
-    }
-
     @objc private func switchCodexAccount(_ sender: NSMenuItem) {
-        guard let slug = sender.representedObject as? String else { return }
-        let target = AccountSwitcher.codexAccounts().first { $0.slug == slug }?.display ?? slug
+        guard let ref = sender.representedObject as? String else { return }
+        let target = AccountSwitcher.codexAccounts().first { $0.ref == ref }?.display ?? ref
         // У Codex счётчик сессий не показываем (см. AccountSwitcher): подмена
         // файла не ломает запущенные процессы.
         switchAccount(provider: "Codex", target: target, body: L.t("switch.confirm.codex"),
                       running: 0) {
-            try AccountSwitcher.switchCodex(toSlug: slug)
+            try AccountSwitcher.switchCodex(toRef: ref)
         }
     }
 
     @objc private func switchClaudeAccount(_ sender: NSMenuItem) {
-        guard let slug = sender.representedObject as? String else { return }
-        let target = AccountSwitcher.claudeAccounts().first { $0.slug == slug }?.display ?? slug
+        guard let ref = sender.representedObject as? String else { return }
+        let target = AccountSwitcher.claudeAccounts().first { $0.ref == ref }?.display ?? ref
         // У Claude предупреждаем сильнее: активную запись читает и текущая сессия.
         switchAccount(provider: "Claude", target: target, body: L.t("switch.confirm.claude"),
                       running: AccountSwitcher.runningClaudeSessions()) {
-            try AccountSwitcher.switchClaude(toSlug: slug)
+            try AccountSwitcher.switchClaude(toService: ref)
         }
     }
 
@@ -455,14 +451,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 errorAlert(L.t("switch.failed"), error)
             }
         }
-    }
-
-    private func infoAlert(_ message: String, info: String = "") {
-        let alert = NSAlert()
-        alert.messageText = message
-        if !info.isEmpty { alert.informativeText = info }
-        alert.addButton(withTitle: L.t("common.ok"))
-        runModalAbovePanel(alert)
     }
 
     private func errorAlert(_ title: String, _ error: Error) {

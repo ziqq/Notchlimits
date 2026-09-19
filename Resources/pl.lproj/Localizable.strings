@@ -149,3 +149,5 @@
 "error.unknownSource" = "nieznane źródło";
 "error.noProvider" = "brak dostawcy";
 "error.unreachable" = "sieć niedostępna";
+"switch.activeMark" = "%@ · aktywne";
+"switch.empty" = "Brak kont";
