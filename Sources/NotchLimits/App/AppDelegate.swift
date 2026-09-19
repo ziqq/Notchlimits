@@ -28,6 +28,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.onContextMenu = { [weak self] event, view in
             self?.showContextMenu(event: event, view: view)
         }
+        // Диалоги добавления аккаунта тоже должны быть над панелью.
+        AccountSetup.suppressPanel = { [weak self] suppressed in
+            self?.panel.setModalSuppression(suppressed)
+        }
 
         panel.install()
         store.start()
@@ -469,13 +473,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         runModalAbovePanel(alert)
     }
 
-    /// Модальный диалог поверх панели. Панель у чёлки живёт на уровне
-    /// `.popUpMenu`, и обычное окно алерта вылезает ПОД ней — «Ок» не виден.
-    /// Поднимаем окно алерта выше панели.
+    /// Модальный диалог поверх панели. Панель у чёлки на уровне `.popUpMenu`, и
+    /// окно алерта вылезает ПОД ней (NSAlert не даёт поднять своё окно выше),
+    /// поэтому на время диалога опускаем саму панель.
     @discardableResult
     private func runModalAbovePanel(_ alert: NSAlert) -> NSApplication.ModalResponse {
         NSApp.activate(ignoringOtherApps: true)
-        alert.window.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 1)
+        panel.setModalSuppression(true)
+        defer { panel.setModalSuppression(false) }
         return alert.runModal()
     }
 
