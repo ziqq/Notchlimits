@@ -54,6 +54,7 @@
 "remove.body" = "Hesabın kimlik bilgileri kalıcı olarak silinecek. Geri getirmek için claude veya codex ile yeniden giriş yap.";
 "remove.delete" = "Sil";
 "remove.failed.title" = "Hesap kaldırılamadı";
+"remove.incomplete" = "%@ — oturum açılmadı";
 
 // Обновления
 "menu.checkUpdates" = "Güncellemeleri denetle…";

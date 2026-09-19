@@ -54,6 +54,7 @@
 "remove.body" = "As credenciais da conta serão excluídas permanentemente. Entre novamente com claude ou codex para recuperá-la.";
 "remove.delete" = "Excluir";
 "remove.failed.title" = "Não foi possível remover a conta";
+"remove.incomplete" = "%@ — sem login";
 
 // Обновления
 "menu.checkUpdates" = "Procurar atualizações…";

@@ -54,6 +54,7 @@
 "remove.body" = "Die Zugangsdaten des Kontos werden endgültig gelöscht. Melde dich mit claude oder codex erneut an, um es zurückzuholen.";
 "remove.delete" = "Löschen";
 "remove.failed.title" = "Konto konnte nicht entfernt werden";
+"remove.incomplete" = "%@ — nicht angemeldet";
 
 // Обновления
 "menu.checkUpdates" = "Nach Updates suchen…";

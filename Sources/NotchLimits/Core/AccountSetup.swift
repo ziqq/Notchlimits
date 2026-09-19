@@ -75,6 +75,7 @@ enum AccountSetup {
         NSApp.activate(ignoringOtherApps: true)
 
         let (alert, prompt) = makeProfileAlert(title: title, root: root)
+        raiseAbovePanel(alert)
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
 
         let name = prompt.name
@@ -124,7 +125,14 @@ enum AccountSetup {
         alert.messageText = title
         alert.informativeText = message
         alert.addButton(withTitle: L.t("common.ok"))
+        raiseAbovePanel(alert)
         alert.runModal()
+    }
+
+    /// Панель у чёлки живёт на уровне `.popUpMenu`; поднимаем диалог над ней,
+    /// иначе он открывается ПОД панелью.
+    private static func raiseAbovePanel(_ alert: NSAlert) {
+        alert.window.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 1)
     }
 }
 

@@ -104,10 +104,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(showAll)
 
         // Удаление доступно и для скрытых колонок, поэтому список — по всем.
+        // Плюс незавершённые профили (папка есть, входа нет) — их колонки нет,
+        // но удалить надо уметь.
         let removeItem = NSMenuItem(title: L.t("menu.removeColumn"), action: nil, keyEquivalent: "")
         let removeSubmenu = NSMenu()
         let allColumns = store.columns
-        if allColumns.isEmpty {
+        let orphans = orphanProfiles()
+        if allColumns.isEmpty && orphans.isEmpty {
             let empty = NSMenuItem(title: L.t("menu.noColumns"), action: nil, keyEquivalent: "")
             empty.isEnabled = false
             removeSubmenu.addItem(empty)
@@ -117,9 +120,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 entry.representedObject = column.id
                 removeSubmenu.addItem(entry)
             }
+            if !orphans.isEmpty {
+                if !allColumns.isEmpty { removeSubmenu.addItem(.separator()) }
+                for orphan in orphans {
+                    let entry = item(L.t("remove.incomplete", orphan.label), #selector(removeOrphanProfile(_:)))
+                    entry.representedObject = orphan.url.path
+                    removeSubmenu.addItem(entry)
+                }
+            }
         }
         removeItem.submenu = removeSubmenu
-        removeItem.isEnabled = !allColumns.isEmpty
+        removeItem.isEnabled = !allColumns.isEmpty || !orphans.isEmpty
         menu.addItem(removeItem)
 
         // Переключение активного аккаунта для обычных команд codex/claude.
@@ -228,6 +239,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showAllColumns() {
         store.showAllColumns()
+    }
+
+    /// Незавершённые профили: папки ~/.codex-profiles / ~/.claude-profiles,
+    /// для которых нет колонки (вход не выполнен, поэтому не обнаружены).
+    private func orphanProfiles() -> [(label: String, url: URL)] {
+        let codexIds = Set(store.columns.filter { $0.provider == .codex }.map(\.id))
+        let claudeDirs = Set(store.discoveredAccounts.compactMap { account -> String? in
+            if case .claudeKeychain(_, let dir) = account.source { return dir?.path }
+            return nil
+        })
+        var result: [(label: String, url: URL)] = []
+        for dir in ProfileDirectories.codexProfiles() where !codexIds.contains("codex:\(dir.lastPathComponent)") {
+            result.append(("CODEX · \(dir.lastPathComponent)", dir))
+        }
+        for dir in ProfileDirectories.claudeProfiles() where !claudeDirs.contains(dir.path) {
+            result.append(("CLAUDE · \(dir.lastPathComponent)", dir))
+        }
+        return result
+    }
+
+    @objc private func removeOrphanProfile(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String else { return }
+        let url = URL(fileURLWithPath: path)
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = L.t("remove.title", url.lastPathComponent)
+        alert.informativeText = L.t("remove.body")
+        let deleteButton = alert.addButton(withTitle: L.t("remove.delete"))
+        let cancelButton = alert.addButton(withTitle: L.t("common.cancel"))
+        deleteButton.hasDestructiveAction = true
+        deleteButton.keyEquivalent = ""
+        cancelButton.keyEquivalent = "\r"
+        guard runModalAbovePanel(alert) == .alertFirstButtonReturn else { return }
+
+        do {
+            try FileManager.default.removeItem(at: url)
+            store.rediscover(force: true)
+        } catch {
+            errorAlert(L.t("remove.failed.title"), error)
+        }
     }
 
     @objc private func removeColumn(_ sender: NSMenuItem) {
