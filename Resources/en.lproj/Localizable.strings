@@ -54,6 +54,7 @@
 "remove.body" = "The account's credentials will be deleted permanently. Sign in again with claude or codex to bring it back.";
 "remove.delete" = "Delete";
 "remove.failed.title" = "Couldn't remove the account";
+"remove.incomplete" = "%@ — not signed in";
 
 // Обновления
 "menu.checkUpdates" = "Check for updates…";

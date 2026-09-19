@@ -114,7 +114,7 @@ Beyond monitoring several accounts as columns, the panel can switch which accoun
 
 ## Multiple accounts
 
-Menu → **Add Claude account…** or **Add Codex account…**. The dialog asks for a short profile name and previews the result live (`Folder: ~/.claude-profiles/work`); the Create button stays disabled until the name is valid. The panel then creates `~/.claude-profiles/<name>` (or `~/.codex-profiles/<name>`), drops a `login.command` there and opens it in Terminal.app. Passwords are never seen or asked — the CLI handles login. New profiles are picked up automatically, no restart.
+Menu → **Add Claude account…** or **Add Codex account…**. The dialog asks for a short profile name and previews the result live (`Folder: ~/.claude-profiles/work`); the Create button stays disabled until the name is valid. The panel then creates `~/.claude-profiles/<name>` (or `~/.codex-profiles/<name>`), drops a `login.command` there and opens it in Terminal.app. Passwords are never seen or asked — the CLI handles login. New profiles are picked up automatically, no restart. A profile whose login never completed shows up in **Remove account** as “… — not signed in”, so an accidentally created one can still be deleted.
 
 The equivalent by hand:
 

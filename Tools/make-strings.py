@@ -40,6 +40,7 @@ ORDER = [
     ]),
     ("Удаление аккаунта", [
         "remove.title", "remove.body", "remove.delete", "remove.failed.title",
+        "remove.incomplete",
     ]),
     ("Обновления", [
         "menu.checkUpdates", "update.available", "update.availableBody",
@@ -1320,6 +1321,19 @@ _SAVED_HINT = {
 }
 for _lang, _text in _SAVED_HINT.items():
     T[_lang]["switch.saved.hint"] = _text
+
+# Метка незавершённого профиля в списке удаления. Один «%@» — заголовок.
+_INCOMPLETE = {
+    "en": "%@ — not signed in",       "ru": "%@ — вход не выполнен",
+    "de": "%@ — nicht angemeldet",    "fr": "%@ — non connecté",
+    "es": "%@ — sin iniciar sesión",  "it": "%@ — accesso non eseguito",
+    "pt-BR": "%@ — sem login",        "uk": "%@ — вхід не виконано",
+    "pl": "%@ — niezalogowany",       "tr": "%@ — oturum açılmadı",
+    "ja": "%@ — 未ログイン",           "ko": "%@ — 로그인 안 됨",
+    "zh-Hans": "%@ — 未登录",          "zh-Hant": "%@ — 未登入",
+}
+for _lang, _text in _INCOMPLETE.items():
+    T[_lang]["remove.incomplete"] = _text
 
 
 def main():

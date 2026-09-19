@@ -54,6 +54,7 @@
 "remove.body" = "Les identifiants du compte seront supprimés définitivement. Reconnecte-toi avec claude ou codex pour le récupérer.";
 "remove.delete" = "Supprimer";
 "remove.failed.title" = "Impossible de supprimer le compte";
+"remove.incomplete" = "%@ — non connecté";
 
 // Обновления
 "menu.checkUpdates" = "Rechercher des mises à jour…";

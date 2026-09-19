@@ -54,6 +54,7 @@
 "remove.body" = "該帳號的登入憑證將被永久刪除。用 claude 或 codex 重新登入即可復原。";
 "remove.delete" = "刪除";
 "remove.failed.title" = "無法移除帳號";
+"remove.incomplete" = "%@ — 未登入";
 
 // Обновления
 "menu.checkUpdates" = "檢查更新…";
