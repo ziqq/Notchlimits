@@ -149,3 +149,5 @@
 "error.unknownSource" = "bilinmeyen kaynak";
 "error.noProvider" = "sağlayıcı yok";
 "error.unreachable" = "ağ kullanılamıyor";
+"switch.activeMark" = "%@ · etkin";
+"switch.empty" = "Henüz hesap yok";

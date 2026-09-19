@@ -149,3 +149,5 @@
 "error.unknownSource" = "不明なソース";
 "error.noProvider" = "プロバイダなし";
 "error.unreachable" = "ネットワークに接続できません";
+"switch.activeMark" = "%@ · 使用中";
+"switch.empty" = "アカウントがまだありません";
