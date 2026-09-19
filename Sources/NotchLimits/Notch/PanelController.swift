@@ -177,6 +177,13 @@ final class PanelController {
     /// Снимок раскрытой панели для отладки вёрстки.
     func snapshotPNG() -> Data? { hosting.snapshotPNG() }
 
+    /// На время модального диалога опускаем панель под него: она живёт на уровне
+    /// `.popUpMenu`, и алерт иначе открывается ПОД ней (NSAlert не даёт поднять
+    /// своё окно выше). После диалога уровень возвращаем.
+    func setModalSuppression(_ suppressed: Bool) {
+        panel.level = suppressed ? .normal : .popUpMenu
+    }
+
     /// Удержание панели раскрытой на время модального взаимодействия (меню, алерт).
     func holdOpen(_ hold: Bool) {
         if hold {

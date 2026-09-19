@@ -9,6 +9,10 @@ import AppKit
 @MainActor
 enum AccountSetup {
 
+    /// Опускание панели на время модального диалога (задаёт AppDelegate).
+    /// Панель на уровне `.popUpMenu`, иначе диалог открывается под ней.
+    static var suppressPanel: ((Bool) -> Void)?
+
     static func addClaude(completion: @escaping () -> Void) {
         guard let binary = BinaryLocator.claude() else {
             showMissingBinary(name: "claude",
@@ -75,8 +79,10 @@ enum AccountSetup {
         NSApp.activate(ignoringOtherApps: true)
 
         let (alert, prompt) = makeProfileAlert(title: title, root: root)
-        raiseAbovePanel(alert)
-        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        suppressPanel?(true)
+        let response = alert.runModal()
+        suppressPanel?(false)
+        guard response == .alertFirstButtonReturn else { return nil }
 
         let name = prompt.name
         guard ProfileNamePrompt.isValid(name, root: root) else {
@@ -125,14 +131,9 @@ enum AccountSetup {
         alert.messageText = title
         alert.informativeText = message
         alert.addButton(withTitle: L.t("common.ok"))
-        raiseAbovePanel(alert)
+        suppressPanel?(true)
         alert.runModal()
-    }
-
-    /// Панель у чёлки живёт на уровне `.popUpMenu`; поднимаем диалог над ней,
-    /// иначе он открывается ПОД панелью.
-    private static func raiseAbovePanel(_ alert: NSAlert) {
-        alert.window.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 1)
+        suppressPanel?(false)
     }
 }
 
