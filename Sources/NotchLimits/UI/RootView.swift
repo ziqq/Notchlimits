@@ -13,8 +13,7 @@ struct RootView: View {
     var body: some View {
         ZStack(alignment: .top) {
             ZStack(alignment: .top) {
-                BottomRoundedRectangle(radius: cornerRadius)
-                    .fill(Theme.panelBackground)
+                panelBackground
 
                 CollapsedContent(store: store, state: state)
                     .frame(width: state.notchSize.width, height: state.notchSize.height)
@@ -38,6 +37,19 @@ struct RootView: View {
         .ignoresSafeArea()
         .onPreferenceChange(ColumnsHeightKey.self) { height in
             state.onColumnsHeightChange?(height)
+        }
+    }
+
+    /// Фон панели: Liquid Glass (macOS 26+, если включён) поверх десктопа, иначе
+    /// сплошной тёмный. Лёгкий тёмный тинт держит контраст белого текста.
+    @ViewBuilder
+    private var panelBackground: some View {
+        let shape = BottomRoundedRectangle(radius: cornerRadius)
+        if #available(macOS 26.0, *), state.liquidGlass {
+            shape.fill(Color.clear)
+                .glassEffect(.regular.tint(Color.black.opacity(0.28)), in: shape)
+        } else {
+            shape.fill(Theme.panelBackground)
         }
     }
 }

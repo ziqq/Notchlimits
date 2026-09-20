@@ -156,3 +156,4 @@
 "switch.restart.body" = "La nueva cuenta se aplica a la app de Claude ya abierta solo tras reiniciar. La sesión actual se cerrará.";
 "switch.restart.now" = "Reiniciar ahora";
 "switch.restart.later" = "Más tarde";
+"menu.liquidGlass" = "Liquid Glass";
