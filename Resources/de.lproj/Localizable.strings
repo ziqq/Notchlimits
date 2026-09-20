@@ -152,3 +152,7 @@
 "switch.activeMark" = "%@ · aktiv";
 "switch.empty" = "Noch keine Konten";
 "switch.applyHint" = "Gilt für neue Sitzungen. Laufende (Terminal und diese App) neu starten, um es anzuwenden.";
+"switch.restart.title" = "Claude neu starten?";
+"switch.restart.body" = "Das neue Konto gilt für die bereits geöffnete Claude-App erst nach einem Neustart. Die aktuelle Sitzung wird geschlossen.";
+"switch.restart.now" = "Jetzt neu starten";
+"switch.restart.later" = "Später";

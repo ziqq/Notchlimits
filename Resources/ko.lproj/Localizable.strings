@@ -152,3 +152,7 @@
 "switch.activeMark" = "%@ · 사용 중";
 "switch.empty" = "아직 계정이 없습니다";
 "switch.applyHint" = "새 세션에 적용됩니다. 실행 중인 것(터미널과 이 앱)은 재시작해야 적용됩니다.";
+"switch.restart.title" = "Claude를 재시작할까요?";
+"switch.restart.body" = "새 계정은 이미 열려 있는 Claude 앱에는 재시작 후에만 적용됩니다. 현재 세션은 닫힙니다.";
+"switch.restart.now" = "지금 재시작";
+"switch.restart.later" = "나중에";

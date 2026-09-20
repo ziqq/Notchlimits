@@ -152,3 +152,7 @@
 "switch.activeMark" = "%@ · etkin";
 "switch.empty" = "Henüz hesap yok";
 "switch.applyHint" = "Yeni oturumlara uygulanır. Açık olanları (terminal ve bu uygulama) yeniden başlatın.";
+"switch.restart.title" = "Claude yeniden başlatılsın mı?";
+"switch.restart.body" = "Yeni hesap, zaten açık olan Claude uygulamasına ancak yeniden başlatınca uygulanır. Mevcut oturum kapanacak.";
+"switch.restart.now" = "Şimdi yeniden başlat";
+"switch.restart.later" = "Sonra";

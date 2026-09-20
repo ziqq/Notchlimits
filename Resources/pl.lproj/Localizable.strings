@@ -152,3 +152,7 @@
 "switch.activeMark" = "%@ · aktywne";
 "switch.empty" = "Brak kont";
 "switch.applyHint" = "Dotyczy nowych sesji. Uruchom ponownie działające (terminal i tę aplikację), aby zastosować.";
+"switch.restart.title" = "Uruchomić Claude ponownie?";
+"switch.restart.body" = "Nowe konto zadziała w już otwartej aplikacji Claude dopiero po ponownym uruchomieniu. Bieżąca sesja zostanie zamknięta.";
+"switch.restart.now" = "Uruchom ponownie";
+"switch.restart.later" = "Później";

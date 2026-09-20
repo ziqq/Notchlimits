@@ -152,3 +152,7 @@
 "switch.activeMark" = "%@ · actif";
 "switch.empty" = "Aucun compte pour l’instant";
 "switch.applyHint" = "S’applique aux nouvelles sessions. Redémarre celles en cours (terminal et cette app) pour l’appliquer.";
+"switch.restart.title" = "Redémarrer Claude ?";
+"switch.restart.body" = "Le nouveau compte s’applique à l’app Claude déjà ouverte seulement après un redémarrage. La session en cours se fermera.";
+"switch.restart.now" = "Redémarrer maintenant";
+"switch.restart.later" = "Plus tard";
