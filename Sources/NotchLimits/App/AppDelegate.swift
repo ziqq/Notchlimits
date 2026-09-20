@@ -414,13 +414,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let target = AccountSwitcher.claudeAccounts().first { $0.ref == ref }?.display ?? ref
         // У Claude предупреждаем сильнее: активную запись читает и текущая сессия.
         switchAccount(provider: "Claude", target: target, body: L.t("switch.confirm.claude"),
-                      running: AccountSwitcher.runningClaudeSessions()) {
+                      running: AccountSwitcher.runningClaudeSessions(), offerRestart: true) {
             try AccountSwitcher.switchClaude(toService: ref)
         }
     }
 
     private func switchAccount(provider: String, target: String, body: String,
-                               running: Int, _ work: @escaping () throws -> Void) {
+                               running: Int, offerRestart: Bool = false,
+                               _ work: @escaping () throws -> Void) {
         let confirm = NSAlert()
         confirm.messageText = L.t("switch.confirm.title")
         var text = "\(provider) → \(target)\n\n\(body)"
@@ -444,9 +445,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 try await Task.detached(priority: .userInitiated) { try work() }.value
                 store.rediscover(force: true)
                 store.refreshAll(force: true)
+                if offerRestart { offerClaudeRestart() }
             } catch {
                 errorAlert(L.t("switch.failed"), error)
             }
+        }
+    }
+
+    /// Идентификатор десктоп-приложения Claude — его вкладка Code читает базовый
+    /// аккаунт при старте, поэтому применить свич к уже открытому приложению
+    /// можно только перезапуском.
+    private static let claudeAppBundleID = "com.anthropic.claudefordesktop"
+
+    /// Предложить перезапустить приложение Claude, чтобы свич применился сразу.
+    /// Показываем только если оно запущено; «Позже» — по умолчанию, чтобы
+    /// случайный Enter не закрыл текущую сессию.
+    private func offerClaudeRestart() {
+        let running = NSRunningApplication.runningApplications(
+            withBundleIdentifier: Self.claudeAppBundleID)
+        guard !running.isEmpty else { return }
+
+        let alert = NSAlert()
+        alert.messageText = L.t("switch.restart.title")
+        alert.informativeText = L.t("switch.restart.body")
+        let now = alert.addButton(withTitle: L.t("switch.restart.now"))
+        let later = alert.addButton(withTitle: L.t("switch.restart.later"))
+        now.keyEquivalent = ""
+        later.keyEquivalent = "\r"
+        guard runModalAbovePanel(alert) == .alertFirstButtonReturn else { return }
+        restartClaudeApp()
+    }
+
+    /// Мягко закрыть приложение Claude и запустить снова, когда оно закроется.
+    private func restartClaudeApp() {
+        let apps = NSRunningApplication.runningApplications(
+            withBundleIdentifier: Self.claudeAppBundleID)
+        let appURL = apps.first?.bundleURL
+            ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.claudeAppBundleID)
+        guard let appURL else { return }
+        apps.forEach { $0.terminate() }
+        relaunchWhenClosed(appURL: appURL, attempts: 12)   // ~4.8с максимум
+    }
+
+    private func relaunchWhenClosed(appURL: URL, attempts: Int) {
+        let stillRunning = !NSRunningApplication.runningApplications(
+            withBundleIdentifier: Self.claudeAppBundleID).isEmpty
+        if !stillRunning || attempts <= 0 {
+            let config = NSWorkspace.OpenConfiguration()
+            config.createsNewApplicationInstance = false
+            NSWorkspace.shared.openApplication(at: appURL, configuration: config, completionHandler: nil)
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            self?.relaunchWhenClosed(appURL: appURL, attempts: attempts - 1)
         }
     }
 

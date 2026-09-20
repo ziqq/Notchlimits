@@ -152,3 +152,7 @@
 "switch.activeMark" = "%@ · 使用中";
 "switch.empty" = "アカウントがまだありません";
 "switch.applyHint" = "新しいセッションに適用されます。実行中のもの（ターミナルとこのアプリ）は再起動して反映してください。";
+"switch.restart.title" = "Claude を再起動しますか？";
+"switch.restart.body" = "新しいアカウントは、すでに開いている Claude アプリには再起動後にのみ適用されます。現在のセッションは閉じます。";
+"switch.restart.now" = "今すぐ再起動";
+"switch.restart.later" = "あとで";

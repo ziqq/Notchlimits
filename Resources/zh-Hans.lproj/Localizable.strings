@@ -152,3 +152,7 @@
 "switch.activeMark" = "%@ · 使用中";
 "switch.empty" = "暂无账户";
 "switch.applyHint" = "对新会话生效。正在运行的（终端和本应用）需重启才能应用。";
+"switch.restart.title" = "重启 Claude？";
+"switch.restart.body" = "新账户只有在重启后才会应用到已打开的 Claude 应用。当前会话将关闭。";
+"switch.restart.now" = "立即重启";
+"switch.restart.later" = "稍后";
