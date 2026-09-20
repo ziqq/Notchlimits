@@ -156,3 +156,4 @@
 "switch.restart.body" = "Il nuovo account si applica all’app Claude già aperta solo dopo il riavvio. La sessione attuale si chiuderà.";
 "switch.restart.now" = "Riavvia ora";
 "switch.restart.later" = "Più tardi";
+"menu.liquidGlass" = "Liquid Glass";

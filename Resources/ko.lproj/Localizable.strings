@@ -156,3 +156,4 @@
 "switch.restart.body" = "새 계정은 이미 열려 있는 Claude 앱에는 재시작 후에만 적용됩니다. 현재 세션은 닫힙니다.";
 "switch.restart.now" = "지금 재시작";
 "switch.restart.later" = "나중에";
+"menu.liquidGlass" = "Liquid Glass";

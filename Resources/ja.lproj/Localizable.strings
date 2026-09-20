@@ -156,3 +156,4 @@
 "switch.restart.body" = "新しいアカウントは、すでに開いている Claude アプリには再起動後にのみ適用されます。現在のセッションは閉じます。";
 "switch.restart.now" = "今すぐ再起動";
 "switch.restart.later" = "あとで";
+"menu.liquidGlass" = "Liquid Glass";

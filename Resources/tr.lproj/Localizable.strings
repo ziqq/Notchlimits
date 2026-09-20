@@ -156,3 +156,4 @@
 "switch.restart.body" = "Yeni hesap, zaten açık olan Claude uygulamasına ancak yeniden başlatınca uygulanır. Mevcut oturum kapanacak.";
 "switch.restart.now" = "Şimdi yeniden başlat";
 "switch.restart.later" = "Sonra";
+"menu.liquidGlass" = "Liquid Glass";

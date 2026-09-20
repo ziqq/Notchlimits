@@ -156,3 +156,4 @@
 "switch.restart.body" = "Новий акаунт застосується до вже відкритого застосунку Claude лише після перезапуску. Поточна сесія закриється.";
 "switch.restart.now" = "Перезапустити зараз";
 "switch.restart.later" = "Пізніше";
+"menu.liquidGlass" = "Liquid Glass";

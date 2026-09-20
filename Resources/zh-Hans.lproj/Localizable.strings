@@ -156,3 +156,4 @@
 "switch.restart.body" = "新账户只有在重启后才会应用到已打开的 Claude 应用。当前会话将关闭。";
 "switch.restart.now" = "立即重启";
 "switch.restart.later" = "稍后";
+"menu.liquidGlass" = "Liquid Glass";
