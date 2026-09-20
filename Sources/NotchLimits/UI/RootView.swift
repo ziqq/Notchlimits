@@ -47,7 +47,7 @@ struct RootView: View {
         let shape = BottomRoundedRectangle(radius: cornerRadius)
         if #available(macOS 26.0, *), state.liquidGlass {
             shape.fill(Color.clear)
-                .glassEffect(.regular.tint(Color.black.opacity(0.28)), in: shape)
+                .glassEffect(.regular, in: shape)
         } else {
             shape.fill(Theme.panelBackground)
         }

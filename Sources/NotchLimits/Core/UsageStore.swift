@@ -70,19 +70,23 @@ final class UsageStore: ObservableObject {
         lastDiscovery = now
 
         let found = discovery.discover()
-        guard found.map(\.id) != accounts.map(\.id) else { return }
+        // Пересобираем при любой смене состава ИЛИ активного (после свича id
+        // могут совпасть, а флаг isActive — нет).
+        guard found != accounts else { return }
         accounts = found
 
         var next: [AccountColumn] = []
         for (index, account) in found.enumerated() {
-            if let existing = columns.first(where: { $0.id == account.id }) {
-                // Уже известная колонка — её данные и статус сохраняем как есть.
+            if var existing = columns.first(where: { $0.id == account.id }) {
+                // Уже известная колонка — данные сохраняем, обновляем активность.
+                existing.isActive = account.isActive
                 next.append(existing)
             } else {
                 var column = AccountColumn(id: account.id,
                                            provider: account.provider,
                                            profileName: account.profileName)
                 column.customName = customNames[account.id]
+                column.isActive = account.isActive
                 if let cached = cache.load(id: account.id) {
                     column.windows = cached.windows
                     column.subtitle = cached.subtitle
@@ -130,6 +134,7 @@ final class UsageStore: ObservableObject {
 
     /// При раскрытии панели обновляем только то, что старше двух минут.
     func refreshStale() {
+        rediscover(force: true)   // свежий состав и подсветка активного на открытии
         let now = Date()
         for account in accounts {
             guard var state = runtime[account.id], !state.inFlight else { continue }

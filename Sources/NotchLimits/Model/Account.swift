@@ -15,6 +15,11 @@ struct DiscoveredAccount: Identifiable, Equatable {
     let provider: Provider
     let profileName: String
     let source: AccountSource
+    /// Почта аккаунта (из конфигов, без Keychain). Для дедупа и подсветки.
+    var email: String? = nil
+    /// Аккаунт активен для голой команды (claude → базовый ~/.claude.json,
+    /// codex → базовый ~/.codex). Только его имя подсвечивается.
+    var isActive: Bool = false
 }
 
 struct UsageSnapshot {

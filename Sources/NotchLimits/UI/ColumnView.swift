@@ -5,10 +5,13 @@ struct ColumnView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(column.header)
+            // Префикс провайдера («CLAUDE · ») всегда приглушён. Имя колонки
+            // («me») подсвечиваем основным цветом ТОЛЬКО у активного аккаунта —
+            // у остальных оно такое же приглушённое, как префикс.
+            (Text(column.provider.displayName + " · ").foregroundColor(Theme.secondary)
+                + Text(column.displayName).foregroundColor(column.isActive ? Theme.primary : Theme.secondary))
                 .font(.system(size: 9.5, weight: .semibold))
                 .kerning(1.3)
-                .foregroundColor(Theme.secondary)
                 .lineLimit(1)
 
             // Строку подзаголовка резервируем всегда — даже когда её нет.
