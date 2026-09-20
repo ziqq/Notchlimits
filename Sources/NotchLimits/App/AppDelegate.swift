@@ -194,16 +194,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             submenu.addItem(empty)
         } else {
             for account in accounts {
-                let label = account.isActive ? L.t("switch.activeMark", account.display)
-                                             : account.display
-                let entry = item(label, pick, state: account.isActive ? .on : .off)
+                // Активный помечаем только галочкой и делаем некликабельным —
+                // переключать на него некуда.
+                let entry = item(account.display, pick, state: account.isActive ? .on : .off)
                 entry.representedObject = account.ref
-                if account.isActive {
-                    entry.isEnabled = false          // уже активен — переключать некуда
-                    entry.attributedTitle = NSAttributedString(
-                        string: label,
-                        attributes: [.font: NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)])
-                }
+                if account.isActive { entry.isEnabled = false }
                 submenu.addItem(entry)
             }
         }
@@ -429,6 +424,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let confirm = NSAlert()
         confirm.messageText = L.t("switch.confirm.title")
         var text = "\(provider) → \(target)\n\n\(body)"
+        // Как применяется: новые сессии — сразу; уже запущенные нужно перезапустить.
+        text += "\n\n" + L.t("switch.applyHint")
         // Есть запущенные сессии — предупреждаем и делаем «Отмену» по умолчанию.
         if running > 0 { text += "\n\n⚠️ " + L.t("switch.running", running) }
         confirm.informativeText = text

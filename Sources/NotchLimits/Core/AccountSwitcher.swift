@@ -35,20 +35,32 @@ enum AccountSwitcher {
 
     // MARK: - Активные сессии
 
-    /// Сколько процессов `claude` запущено — обычно ≥ 1 (текущая сессия),
-    /// поэтому переключение Claude только предупреждаем, не блокируем.
+    /// Сколько CLI-сессий `claude` запущено (без хелперов десктоп-приложения
+    /// Claude.app). Обычно ≥ 1 — текущая сессия, поэтому переключение Claude
+    /// только предупреждаем, не блокируем. Хелперы Claude.app отсеиваем по пути
+    /// исполняемого файла (`comm`), а НЕ по всей строке: в окружении настоящего
+    /// CLI тоже встречается `.app/` (PATH, entrypoint).
     static func runningClaudeSessions() -> Int {
+        let pids = shell("/usr/bin/pgrep", ["-x", "claude"])
+            .split(whereSeparator: \.isNewline).map(String.init).filter { !$0.isEmpty }
+        guard !pids.isEmpty else { return 0 }
+        return shell("/bin/ps", ["-o", "pid=,comm=", "-p", pids.joined(separator: ",")])
+            .split(whereSeparator: \.isNewline)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty && !$0.contains(".app/") }
+            .count
+    }
+
+    private static func shell(_ launchPath: String, _ arguments: [String]) -> String {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        process.arguments = ["-x", "claude"]
+        process.executableURL = URL(fileURLWithPath: launchPath)
+        process.arguments = arguments
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return 0 }
+        do { try process.run() } catch { return "" }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         return String(decoding: data, as: UTF8.self)
-            .split(whereSeparator: \.isNewline).filter { !$0.isEmpty }.count
     }
 
     // MARK: - Общее
@@ -132,10 +144,14 @@ enum AccountSwitcher {
 
     private static let claudeBase = ClaudeKeychain.baseService
     private static let libPrefix = "NotchLimits.claude."
-    private static let emailsKey = "switcherClaudeEmails"
+    private static let emailsKey = "switcherClaudeEmails"       // slug → email (список)
+    private static let accountsKey = "switcherClaudeAccounts"   // slug → JSON блока oauthAccount
     private static func claudeLibService(_ slug: String) -> String { libPrefix + slug }
     private static var claudeConfig: URL { ProfileDirectories.home.appendingPathComponent(".claude.json") }
 
+    /// E-mail из базового `~/.claude.json` — это и есть активный аккаунт (что
+    /// использует голая команда claude). Его помечаем галочкой; переключение
+    /// меняет именно его.
     static func claudeActiveEmail() -> String? {
         (try? Data(contentsOf: claudeConfig)).flatMap { ClaudeProvider.parseEmail(fromConfig: $0) }
     }
@@ -144,17 +160,47 @@ enum AccountSwitcher {
         UserDefaults.standard.dictionary(forKey: emailsKey) as? [String: String] ?? [:]
     }
 
+    private static func storedAccounts() -> [String: String] {
+        UserDefaults.standard.dictionary(forKey: accountsKey) as? [String: String] ?? [:]
+    }
+
+    /// Блок `oauthAccount` из `~/.claude.json` — это ПОЛНЫЕ метаданные аккаунта
+    /// (почта, accountUuid, organizationUuid, план…). Переключение подменяет его
+    /// целиком: подмена одной почты оставила бы токен нового аккаунта с UUID
+    /// старого, и сервер ответил бы 401 → «re-auth».
+    private static func oauthAccount(inConfig url: URL) -> [String: Any]? {
+        guard let data = try? Data(contentsOf: url),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return nil }
+        return root["oauthAccount"] as? [String: Any]
+    }
+
+    /// Блок oauthAccount целевого аккаунта: профиль — из его `.claude.json`,
+    /// библиотека — из сохранённого снимка, база — из активного конфига.
+    private static func oauthAccount(forService service: String) -> [String: Any]? {
+        if service == claudeBase { return oauthAccount(inConfig: claudeConfig) }
+        if service.hasPrefix(libPrefix) {
+            let slug = String(service.dropFirst(libPrefix.count))
+            guard let json = storedAccounts()[slug],
+                  let obj = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any]
+            else { return nil }
+            return obj
+        }
+        if let dir = ClaudeKeychain.configDirectory(for: service) {
+            return oauthAccount(inConfig: dir.appendingPathComponent(".claude.json"))
+        }
+        return nil
+    }
+
     /// Почта аккаунта по имени записи Keychain (для отображения и `~/.claude.json`).
     private static func email(forService service: String) -> String? {
         if service == claudeBase { return claudeActiveEmail() }
-        if service.hasPrefix(libPrefix) {
+        if let mail = oauthAccount(forService: service)?["emailAddress"] as? String, !mail.isEmpty {
+            return mail
+        }
+        if service.hasPrefix(libPrefix) {                                   // старые записи без снимка
             let value = storedEmails()[String(service.dropFirst(libPrefix.count))]
             return (value?.isEmpty == false) ? value : nil
-        }
-        // Профиль: почта лежит в <config-dir>/.claude.json.
-        if let dir = ClaudeKeychain.configDirectory(for: service) {
-            return (try? Data(contentsOf: dir.appendingPathComponent(".claude.json")))
-                .flatMap { ClaudeProvider.parseEmail(fromConfig: $0) }
         }
         return nil
     }
@@ -173,17 +219,19 @@ enum AccountSwitcher {
                                   isActive: email != nil && email == active,
                                   ref: service))
         }
-        add(service: claudeBase, email: active)                              // активный
+        add(service: claudeBase, email: active)                              // активный (базовый)
         for service in ClaudeKeychain.services() where service != claudeBase {  // профили
             add(service: service, email: email(forService: service))
         }
-        for (slug, mail) in storedEmails() {                                // библиотека
-            add(service: claudeLibService(slug), email: mail.isEmpty ? nil : mail)
+        for slug in Set(storedEmails().keys).union(storedAccounts().keys) {  // библиотека
+            add(service: claudeLibService(slug), email: email(forService: claudeLibService(slug)))
         }
         return result
     }
 
-    /// Снимок текущего активного Claude-аккаунта в библиотеку (keychain→keychain).
+    /// Снимок текущего активного Claude-аккаунта в библиотеку: токен (keychain→
+    /// keychain) И полный блок oauthAccount — иначе вернуться на него без 401
+    /// нельзя.
     @discardableResult
     static func saveCurrentClaude() throws -> Account {
         guard let blob = ClaudeKeychain.rawData(service: claudeBase) else { throw Failure.noActive }
@@ -192,26 +240,42 @@ enum AccountSwitcher {
         guard ClaudeKeychain.writeRaw(service: claudeLibService(s), data: blob) else { throw Failure.io }
         var emails = storedEmails(); emails[s] = mail ?? ""
         UserDefaults.standard.set(emails, forKey: emailsKey)
+        if let account = oauthAccount(inConfig: claudeConfig),
+           let json = try? JSONSerialization.data(withJSONObject: account),
+           let str = String(data: json, encoding: .utf8) {
+            var accounts = storedAccounts(); accounts[s] = str
+            UserDefaults.standard.set(accounts, forKey: accountsKey)
+        }
         return Account(email: mail, isActive: true, ref: claudeLibService(s))
     }
 
-    /// Сделать активным аккаунт из `ref` (имя записи Keychain).
+    /// Сделать активным аккаунт из `ref` (имя записи Keychain). Полный обмен:
+    /// токен → base keychain И весь блок oauthAccount → ~/.claude.json.
     static func switchClaude(toService service: String) throws {
         guard service != claudeBase else { return }                        // уже активен
         guard let blob = ClaudeKeychain.rawData(service: service) else { throw Failure.notFound }
+        let targetAccount = oauthAccount(forService: service)              // снять ДО сохранения текущего
         let targetEmail = email(forService: service)
         _ = try? saveCurrentClaude()                                       // сохранить текущий
         guard ClaudeKeychain.writeRaw(service: claudeBase, data: blob) else { throw Failure.io }
-        if let targetEmail { updateClaudeConfigEmail(targetEmail) }        // чтобы claude/панель показывали верно
+        writeActiveOAuthAccount(targetAccount, fallbackEmail: targetEmail)
     }
 
-    private static func updateClaudeConfigEmail(_ email: String) {
+    /// Пишет блок oauthAccount в `~/.claude.json` целиком, сохраняя остальные
+    /// поля файла. Нет полного снимка (старая запись) — меняем хотя бы почту.
+    private static func writeActiveOAuthAccount(_ account: [String: Any]?, fallbackEmail: String?) {
         guard let data = try? Data(contentsOf: claudeConfig),
               var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         else { return }
-        var account = (root["oauthAccount"] as? [String: Any]) ?? [:]
-        account["emailAddress"] = email
-        root["oauthAccount"] = account
+        if let account {
+            root["oauthAccount"] = account
+        } else if let fallbackEmail {
+            var acc = (root["oauthAccount"] as? [String: Any]) ?? [:]
+            acc["emailAddress"] = fallbackEmail
+            root["oauthAccount"] = acc
+        } else {
+            return
+        }
         if let out = try? JSONSerialization.data(withJSONObject: root) {
             try? out.write(to: claudeConfig, options: .atomic)
         }

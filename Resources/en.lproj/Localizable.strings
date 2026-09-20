@@ -81,13 +81,13 @@
 "switch.saveFailed" = "Couldn't save the account";
 "switch.confirm.title" = "Switch active account?";
 "switch.confirm.do" = "Switch";
-"switch.confirm.codex" = "The plain codex command will use the selected account. The current one is saved to the list first.";
-"switch.confirm.claude" = "The plain claude command will use the selected account; the current one is saved first. Don't switch the account you're using in an active Claude session right now.";
+"switch.confirm.codex" = "The codex command will switch to this account. The current one is saved to the list.";
+"switch.confirm.claude" = "The claude command will switch to this account. The current one is saved to the list.";
 "switch.failed" = "Couldn't switch the account";
 "switch.err.noActive" = "No active account to save";
 "switch.err.notFound" = "Saved account not found";
 "switch.err.io" = "Read/write error";
-"switch.running" = "%d session(s) running right now — switching may break them.";
+"switch.running" = "%d session(s) running — they may break.";
 "switch.saved.hint" = "Added to the list — pick it in this menu to switch.";
 
 // Горячая клавиша
@@ -151,3 +151,4 @@
 "error.unreachable" = "network unavailable";
 "switch.activeMark" = "%@ · active";
 "switch.empty" = "No accounts yet";
+"switch.applyHint" = "Applies to new sessions. Restart any running ones (terminal and this app) to apply.";

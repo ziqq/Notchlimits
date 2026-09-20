@@ -81,13 +81,13 @@
 "switch.saveFailed" = "Hesap kaydedilemedi";
 "switch.confirm.title" = "Etkin hesap değiştirilsin mi?";
 "switch.confirm.do" = "Değiştir";
-"switch.confirm.codex" = "codex komutu seçilen hesabı kullanacak. Geçerli hesap önce listeye kaydedilir.";
-"switch.confirm.claude" = "claude komutu seçilen hesabı kullanacak; geçerli hesap önce kaydedilir. Etkin bir Claude oturumunda kullandığın hesabı değiştirme.";
+"switch.confirm.codex" = "codex komutu bu hesaba geçer. Mevcut hesap listeye kaydedilir.";
+"switch.confirm.claude" = "claude komutu bu hesaba geçer. Mevcut hesap listeye kaydedilir.";
 "switch.failed" = "Hesap değiştirilemedi";
 "switch.err.noActive" = "Etkin hesap yok";
 "switch.err.notFound" = "Kayıtlı hesap bulunamadı";
 "switch.err.io" = "Okuma/yazma hatası";
-"switch.running" = "Şu anda %d oturum açık — değiştirmek onları bozabilir.";
+"switch.running" = "%d oturum açık — bozulabilir.";
 "switch.saved.hint" = "Listeye eklendi — geçmek için bu menüden seç.";
 
 // Горячая клавиша
@@ -151,3 +151,4 @@
 "error.unreachable" = "ağ kullanılamıyor";
 "switch.activeMark" = "%@ · etkin";
 "switch.empty" = "Henüz hesap yok";
+"switch.applyHint" = "Yeni oturumlara uygulanır. Açık olanları (terminal ve bu uygulama) yeniden başlatın.";

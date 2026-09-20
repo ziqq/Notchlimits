@@ -81,13 +81,13 @@
 "switch.saveFailed" = "Konto konnte nicht gespeichert werden";
 "switch.confirm.title" = "Aktives Konto wechseln?";
 "switch.confirm.do" = "Wechseln";
-"switch.confirm.codex" = "Der Befehl codex nutzt künftig das gewählte Konto. Das aktuelle wird zuvor in der Liste gespeichert.";
-"switch.confirm.claude" = "Der Befehl claude nutzt künftig das gewählte Konto; das aktuelle wird zuvor gespeichert. Wechsle nicht das Konto, das du gerade in einer aktiven Claude-Sitzung nutzt.";
+"switch.confirm.codex" = "Der Befehl codex wechselt zu diesem Konto. Das aktuelle wird in der Liste gespeichert.";
+"switch.confirm.claude" = "Der Befehl claude wechselt zu diesem Konto. Das aktuelle wird in der Liste gespeichert.";
 "switch.failed" = "Konto konnte nicht gewechselt werden";
 "switch.err.noActive" = "Kein aktives Konto";
 "switch.err.notFound" = "Gespeichertes Konto nicht gefunden";
 "switch.err.io" = "Lese-/Schreibfehler";
-"switch.running" = "%d laufende Sitzung(en) — ein Wechsel kann sie stören.";
+"switch.running" = "%d Sitzung(en) aktiv – könnten kaputtgehen.";
 "switch.saved.hint" = "Zur Liste hinzugefügt — in diesem Menü auswählen, um zu wechseln.";
 
 // Горячая клавиша
@@ -151,3 +151,4 @@
 "error.unreachable" = "Netzwerk nicht verfügbar";
 "switch.activeMark" = "%@ · aktiv";
 "switch.empty" = "Noch keine Konten";
+"switch.applyHint" = "Gilt für neue Sitzungen. Laufende (Terminal und diese App) neu starten, um es anzuwenden.";

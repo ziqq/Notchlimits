@@ -81,13 +81,13 @@
 "switch.saveFailed" = "無法儲存帳號";
 "switch.confirm.title" = "切換目前帳號？";
 "switch.confirm.do" = "切換";
-"switch.confirm.codex" = "codex 指令將使用所選帳號。目前帳號會先儲存到清單。";
-"switch.confirm.claude" = "claude 指令將使用所選帳號；目前帳號會先儲存。不要切換你正在使用中的 Claude 工作階段的帳號。";
+"switch.confirm.codex" = "codex 指令將切換到此帳戶。目前帳戶會儲存到清單。";
+"switch.confirm.claude" = "claude 指令將切換到此帳戶。目前帳戶會儲存到清單。";
 "switch.failed" = "無法切換帳號";
 "switch.err.noActive" = "沒有作用中的帳號";
 "switch.err.notFound" = "找不到已儲存的帳號";
 "switch.err.io" = "讀寫錯誤";
-"switch.running" = "目前有 %d 個工作階段在執行——切換可能會中斷它們。";
+"switch.running" = "正在執行 %d 個工作階段 — 可能會中斷。";
 "switch.saved.hint" = "已加入清單——在此選單中選擇即可切換。";
 
 // Горячая клавиша
@@ -151,3 +151,4 @@
 "error.unreachable" = "網路無法使用";
 "switch.activeMark" = "%@ · 使用中";
 "switch.empty" = "尚無帳戶";
+"switch.applyHint" = "對新工作階段生效。正在執行的（終端機和本應用程式）需重新啟動才會套用。";

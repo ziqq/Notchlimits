@@ -81,13 +81,13 @@
 "switch.saveFailed" = "Impossibile salvare l'account";
 "switch.confirm.title" = "Cambiare account attivo?";
 "switch.confirm.do" = "Cambia";
-"switch.confirm.codex" = "Il comando codex userà l'account scelto. L'attuale viene prima salvato nell'elenco.";
-"switch.confirm.claude" = "Il comando claude userà l'account scelto; l'attuale viene prima salvato. Non cambiare l'account che stai usando in una sessione Claude attiva.";
+"switch.confirm.codex" = "Il comando codex passerà a questo account. Quello attuale viene salvato nell’elenco.";
+"switch.confirm.claude" = "Il comando claude passerà a questo account. Quello attuale viene salvato nell’elenco.";
 "switch.failed" = "Impossibile cambiare account";
 "switch.err.noActive" = "Nessun account attivo";
 "switch.err.notFound" = "Account salvato non trovato";
 "switch.err.io" = "Errore di lettura/scrittura";
-"switch.running" = "%d sessione/i in corso: il cambio può interromperle.";
+"switch.running" = "%d sessione/i attive: potrebbero rompersi.";
 "switch.saved.hint" = "Aggiunto all'elenco: sceglilo in questo menu per cambiare.";
 
 // Горячая клавиша
@@ -151,3 +151,4 @@
 "error.unreachable" = "rete non disponibile";
 "switch.activeMark" = "%@ · attivo";
 "switch.empty" = "Ancora nessun account";
+"switch.applyHint" = "Vale per le nuove sessioni. Riavvia quelle attive (terminale e questa app) per applicarlo.";
