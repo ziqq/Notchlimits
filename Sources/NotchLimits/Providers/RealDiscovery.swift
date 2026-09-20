@@ -3,6 +3,11 @@ import Foundation
 /// Поиск живых аккаунтов: записи Claude Code в Keychain + папки CODEX_HOME.
 /// Вызывается на каждом цикле обновления, поэтому новый профиль появляется
 /// в панели сам, без перезапуска.
+///
+/// Аккаунты дедуплицируются по почте: базовый аккаунт (то, что использует голая
+/// команда) и профиль с тем же аккаунтом — это одна колонка. Так после
+/// переключения базовый не задваивает профиль. Активный — тот, чья почта
+/// совпадает с базовой; почту читаем из конфигов, Keychain не трогаем.
 struct RealDiscovery: AccountDiscovery {
 
     func discover() -> [DiscoveredAccount] {
@@ -10,16 +15,26 @@ struct RealDiscovery: AccountDiscovery {
     }
 
     private func claudeAccounts() -> [DiscoveredAccount] {
-        ClaudeKeychain.services().map { service in
-            let name = ClaudeKeychain.profileName(for: service)
-            return DiscoveredAccount(
+        let baseConfig = ProfileDirectories.home.appendingPathComponent(".claude.json")
+        let baseEmail = configEmail(baseConfig)
+        var seen = Set<String>()
+        var result: [DiscoveredAccount] = []
+        // services() отдаёт базовую запись первой — она и остаётся при дедупе.
+        for service in ClaudeKeychain.services() {
+            let configDir = ClaudeKeychain.configDirectory(for: service)
+            let email: String? = (service == ClaudeKeychain.baseService)
+                ? baseEmail
+                : configEmail((configDir ?? ProfileDirectories.home).appendingPathComponent(".claude.json"))
+            if let email, !seen.insert(email).inserted { continue }   // тот же аккаунт — пропускаем
+            result.append(DiscoveredAccount(
                 id: "claude:\(service)",
                 provider: .claude,
-                profileName: name,
-                source: .claudeKeychain(service: service,
-                                        configDir: ClaudeKeychain.configDirectory(for: service))
-            )
+                profileName: ClaudeKeychain.profileName(for: service),
+                source: .claudeKeychain(service: service, configDir: configDir),
+                email: email,
+                isActive: email != nil && email == baseEmail))
         }
+        return result
     }
 
     private func codexAccounts() -> [DiscoveredAccount] {
@@ -42,11 +57,25 @@ struct RealDiscovery: AccountDiscovery {
             homes.append((key: folder, name: folder, url: directory))
         }
 
-        return homes.map { home in
-            DiscoveredAccount(id: "codex:\(home.key)",
-                              provider: .codex,
-                              profileName: home.name,
-                              source: .codexHome(home.url))
+        // Базовый (~/.codex) идёт первым — он и остаётся при дедупе.
+        let baseEmail = CodexProvider.readAuth(codexHome: defaultHome)?.email
+        var seen = Set<String>()
+        var result: [DiscoveredAccount] = []
+        for home in homes {
+            let email = CodexProvider.readAuth(codexHome: home.url)?.email
+            if let email, !seen.insert(email).inserted { continue }
+            result.append(DiscoveredAccount(id: "codex:\(home.key)",
+                                            provider: .codex,
+                                            profileName: home.name,
+                                            source: .codexHome(home.url),
+                                            email: email,
+                                            isActive: email != nil && email == baseEmail))
         }
+        return result
+    }
+
+    /// Почта из `.claude.json` — обычный файл, без Keychain и подпроцессов.
+    private func configEmail(_ url: URL) -> String? {
+        (try? Data(contentsOf: url)).flatMap { ClaudeProvider.parseEmail(fromConfig: $0) }
     }
 }
