@@ -40,19 +40,8 @@ struct RootView: View {
         }
     }
 
-    /// Фон панели: Liquid Glass (macOS 26+, если включён) поверх десктопа, иначе
-    /// сплошной тёмный. Лёгкий тёмный тинт держит контраст белого текста.
-    @ViewBuilder
     private var panelBackground: some View {
-        let shape = BottomRoundedRectangle(radius: cornerRadius)
-        if #available(macOS 26.0, *), state.liquidGlass {
-            // Позади панели обычно тёмное окно, и чистый .regular выглядит почти
-            // чёрным. Светлый тинт даёт «морозный» вид ближе к Control Center.
-            shape.fill(Color.clear)
-                .glassEffect(.regular.tint(Color.white.opacity(0.14)), in: shape)
-        } else {
-            shape.fill(Theme.panelBackground)
-        }
+        BottomRoundedRectangle(radius: cornerRadius).fill(Theme.panelBackground)
     }
 }
 
