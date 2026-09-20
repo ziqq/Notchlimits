@@ -71,11 +71,6 @@ struct AccountColumn: Identifiable, Equatable {
     /// Имя, заданное вручную через меню. Пусто — берём имя профиля.
     var customName: String?
 
-    /// Аккаунт этой колонки прямо сейчас в работе (у claude — запущенная
-    /// CLI-сессия по CLAUDE_CONFIG_DIR; у codex — активный ~/.codex). Только
-    /// у него подсвечиваем имя колонки.
-    var isActive: Bool = false
-
     var displayName: String { customName ?? profileName }
     var header: String { "\(provider.displayName) · \(displayName)" }
 
