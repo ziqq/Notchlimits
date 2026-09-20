@@ -81,13 +81,13 @@
 "switch.saveFailed" = "无法保存账号";
 "switch.confirm.title" = "切换当前账号？";
 "switch.confirm.do" = "切换";
-"switch.confirm.codex" = "codex 命令将使用所选账号。当前账号会先保存到列表。";
-"switch.confirm.claude" = "claude 命令将使用所选账号；当前账号会先保存。不要切换你正在活动的 Claude 会话中使用的账号。";
+"switch.confirm.codex" = "codex 命令将切换到此账户。当前账户会保存到列表。";
+"switch.confirm.claude" = "claude 命令将切换到此账户。当前账户会保存到列表。";
 "switch.failed" = "无法切换账号";
 "switch.err.noActive" = "没有活动账号";
 "switch.err.notFound" = "未找到已保存的账号";
 "switch.err.io" = "读写错误";
-"switch.running" = "当前有 %d 个会话在运行——切换可能会中断它们。";
+"switch.running" = "正在运行 %d 个会话 — 可能被中断。";
 "switch.saved.hint" = "已加入列表——在此菜单中选择即可切换。";
 
 // Горячая клавиша
@@ -151,3 +151,4 @@
 "error.unreachable" = "网络不可用";
 "switch.activeMark" = "%@ · 使用中";
 "switch.empty" = "暂无账户";
+"switch.applyHint" = "对新会话生效。正在运行的（终端和本应用）需重启才能应用。";

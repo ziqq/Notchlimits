@@ -81,13 +81,13 @@
 "switch.saveFailed" = "Nie udało się zapisać konta";
 "switch.confirm.title" = "Przełączyć aktywne konto?";
 "switch.confirm.do" = "Przełącz";
-"switch.confirm.codex" = "Polecenie codex użyje wybranego konta. Bieżące zostanie najpierw zapisane na liście.";
-"switch.confirm.claude" = "Polecenie claude użyje wybranego konta; bieżące zostanie najpierw zapisane. Nie przełączaj konta, którego używasz w aktywnej sesji Claude.";
+"switch.confirm.codex" = "Polecenie codex przełączy się na to konto. Bieżące zostanie zapisane na liście.";
+"switch.confirm.claude" = "Polecenie claude przełączy się na to konto. Bieżące zostanie zapisane na liście.";
 "switch.failed" = "Nie udało się przełączyć konta";
 "switch.err.noActive" = "Brak aktywnego konta";
 "switch.err.notFound" = "Nie znaleziono zapisanego konta";
 "switch.err.io" = "Błąd odczytu/zapisu";
-"switch.running" = "Uruchomionych sesji: %d — przełączenie może je przerwać.";
+"switch.running" = "Aktywne sesje: %d — mogą się zepsuć.";
 "switch.saved.hint" = "Dodano do listy — wybierz je w tym menu, aby przełączyć.";
 
 // Горячая клавиша
@@ -151,3 +151,4 @@
 "error.unreachable" = "sieć niedostępna";
 "switch.activeMark" = "%@ · aktywne";
 "switch.empty" = "Brak kont";
+"switch.applyHint" = "Dotyczy nowych sesji. Uruchom ponownie działające (terminal i tę aplikację), aby zastosować.";

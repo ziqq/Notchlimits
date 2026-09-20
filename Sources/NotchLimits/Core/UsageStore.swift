@@ -100,7 +100,33 @@ final class UsageStore: ObservableObject {
         runtime = runtime.filter { ids.contains($0.key) }
 
         columns = next
+        markActiveColumns()
         onColumnsChanged?()
+    }
+
+    /// Помечает активную колонку — только её имя подсвечивается в панели.
+    /// Активен базовый аккаунт: у claude это запись Keychain `Claude
+    /// Code-credentials` (её меняет переключатель), у codex — базовый ~/.codex.
+    /// Именно на него переключатель и переключает, поэтому подсветка сразу
+    /// переезжает после переключения.
+    private func markActiveColumns() {
+        let codexBase = (ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
+                         ?? ProfileDirectories.home.appendingPathComponent(".codex")).standardizedFileURL.path
+
+        for index in columns.indices {
+            guard let account = accounts.first(where: { $0.id == columns[index].id }) else {
+                columns[index].isActive = false
+                continue
+            }
+            switch account.source {
+            case let .claudeKeychain(service, _):
+                columns[index].isActive = service == ClaudeKeychain.baseService
+            case let .codexHome(url):
+                columns[index].isActive = url.standardizedFileURL.path == codexBase
+            case .mock:
+                columns[index].isActive = false
+            }
+        }
     }
 
     // MARK: - Планировщик
@@ -125,11 +151,13 @@ final class UsageStore: ObservableObject {
             state.nextDue = now
             runtime[account.id] = state
         }
+        markActiveColumns()
         pump()
     }
 
     /// При раскрытии панели обновляем только то, что старше двух минут.
     func refreshStale() {
+        markActiveColumns()   // подсветка активной колонки — свежая на открытии
         let now = Date()
         for account in accounts {
             guard var state = runtime[account.id], !state.inFlight else { continue }

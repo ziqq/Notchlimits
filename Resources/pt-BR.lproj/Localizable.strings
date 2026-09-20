@@ -81,13 +81,13 @@
 "switch.saveFailed" = "Não foi possível salvar a conta";
 "switch.confirm.title" = "Trocar a conta ativa?";
 "switch.confirm.do" = "Trocar";
-"switch.confirm.codex" = "O comando codex passará a usar a conta escolhida. A atual é salva antes na lista.";
-"switch.confirm.claude" = "O comando claude passará a usar a conta escolhida; a atual é salva antes. Não troque a conta que você está usando em uma sessão ativa do Claude.";
+"switch.confirm.codex" = "O comando codex vai mudar para esta conta. A atual é salva na lista.";
+"switch.confirm.claude" = "O comando claude vai mudar para esta conta. A atual é salva na lista.";
 "switch.failed" = "Não foi possível trocar a conta";
 "switch.err.noActive" = "Nenhuma conta ativa";
 "switch.err.notFound" = "Conta salva não encontrada";
 "switch.err.io" = "Erro de leitura/gravação";
-"switch.running" = "%d sessão(ões) em execução — trocar pode quebrá-las.";
+"switch.running" = "%d sessão(ões) em execução — podem quebrar.";
 "switch.saved.hint" = "Adicionada à lista — escolha-a neste menu para trocar.";
 
 // Горячая клавиша
@@ -151,3 +151,4 @@
 "error.unreachable" = "rede indisponível";
 "switch.activeMark" = "%@ · ativo";
 "switch.empty" = "Nenhuma conta ainda";
+"switch.applyHint" = "Vale para novas sessões. Reinicie as abertas (terminal e este app) para aplicar.";
