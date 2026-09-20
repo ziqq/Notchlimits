@@ -162,10 +162,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(item(L.t("menu.loginItem"), #selector(toggleLoginItem),
                           state: LoginItem.isEnabled ? .on : .off))
-        if #available(macOS 26.0, *) {
-            menu.addItem(item(L.t("menu.liquidGlass"), #selector(toggleLiquidGlass),
-                              state: panel.state.liquidGlass ? .on : .off))
-        }
         menu.addItem(item(L.t("menu.checkUpdates"), #selector(checkForUpdates)))
         menu.addItem(item(L.t("menu.about"), #selector(showAbout)))
         menu.addItem(.separator())
@@ -341,10 +337,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleLoginItem() {
         LoginItem.toggle()
-    }
-
-    @objc private func toggleLiquidGlass() {
-        panel.state.liquidGlass.toggle()
     }
 
     @objc private func checkForUpdates() {

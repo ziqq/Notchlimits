@@ -18,7 +18,10 @@ struct RealDiscovery: AccountDiscovery {
         AccountSwitcher.claudeAccounts().map { account in
             let service = account.ref
             return DiscoveredAccount(
-                id: "claude:\(service)",
+                // id по аккаунту (почте), а не по слоту: имя-колонки, кэш и
+                // расписание следуют за аккаунтом, даже когда он переезжает
+                // между базой и библиотекой при переключении.
+                id: "claude:\(account.email ?? service)",
                 provider: .claude,
                 profileName: claudeName(service: service, email: account.email),
                 source: .claudeKeychain(service: service,
@@ -32,7 +35,7 @@ struct RealDiscovery: AccountDiscovery {
         AccountSwitcher.codexAccounts().map { account in
             let home = URL(fileURLWithPath: account.ref).deletingLastPathComponent()
             return DiscoveredAccount(
-                id: "codex:\(codexKey(home: home))",
+                id: "codex:\(account.email ?? codexKey(home: home))",
                 provider: .codex,
                 profileName: codexName(home: home, email: account.email),
                 source: .codexHome(home),
