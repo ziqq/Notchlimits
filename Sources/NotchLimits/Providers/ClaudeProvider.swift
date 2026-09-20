@@ -35,10 +35,16 @@ actor ClaudeProvider: UsageProvider {
             return .reauth(L.t("column.reauth.claude"))
         }
 
-        // Почту API не отдаёт, зато её знает CLI (`claude auth status`). Тянем
-        // подпроцессом один раз за запуск и кэшируем — как у Codex: «Pro · почта».
-        let email = await email(for: service, configDir: configDir)
-        let subtitle = Self.subtitle(plan: token.plan, email: email)
+        // Почту API не отдаёт. Обычно берём из discovery (конфиг/снимок), иначе
+        // читаем сами из конфига CLI. Так библиотечные колонки без папки конфига
+        // тоже показывают верную почту.
+        let resolvedEmail: String?
+        if let discovered = account.email {
+            resolvedEmail = discovered
+        } else {
+            resolvedEmail = await email(for: service, configDir: configDir)
+        }
+        let subtitle = Self.subtitle(plan: token.plan, email: resolvedEmail)
 
         let headers = [
             "Authorization": "Bearer \(token.value)",

@@ -46,8 +46,10 @@ struct RootView: View {
     private var panelBackground: some View {
         let shape = BottomRoundedRectangle(radius: cornerRadius)
         if #available(macOS 26.0, *), state.liquidGlass {
+            // Позади панели обычно тёмное окно, и чистый .regular выглядит почти
+            // чёрным. Светлый тинт даёт «морозный» вид ближе к Control Center.
             shape.fill(Color.clear)
-                .glassEffect(.regular, in: shape)
+                .glassEffect(.regular.tint(Color.white.opacity(0.14)), in: shape)
         } else {
             shape.fill(Theme.panelBackground)
         }
