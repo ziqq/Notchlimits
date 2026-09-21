@@ -157,3 +157,13 @@
 "switch.restart.now" = "Перезапустити зараз";
 "switch.restart.later" = "Пізніше";
 "menu.liquidGlass" = "Liquid Glass";
+"appswitch.title" = "Акаунт застосунку Claude";
+"appswitch.add" = "Додати акаунт застосунку…";
+"appswitch.confirm.title" = "Перемкнути акаунт застосунку?";
+"appswitch.confirm.body" = "Claude закриється і відкриється як «%@». Поточна сесія/чат закриється.";
+"appswitch.confirm.do" = "Перемкнути й перезапустити";
+"appswitch.add.title" = "Додати акаунт застосунку";
+"appswitch.add.body" = "Ім’я латиницею. Claude відкриється в новій папці — увійди в акаунт. Поточна сесія закриється.";
+"appswitch.add.do" = "Створити й відкрити";
+"appswitch.add.badName" = "Некоректне або зайняте ім’я";
+"appswitch.add.failed" = "Не вдалося створити акаунт застосунку";
