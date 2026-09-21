@@ -137,13 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         removeItem.isEnabled = !allColumns.isEmpty || !orphans.isEmpty
         menu.addItem(removeItem)
 
-        // Переключение активного аккаунта для обычных команд codex/claude.
-        menu.addItem(switchSubmenu(title: L.t("switch.codex"),
-                                   accounts: AccountSwitcher.codexAccounts(),
-                                   pick: #selector(switchCodexAccount(_:))))
-        menu.addItem(switchSubmenu(title: L.t("switch.claude"),
-                                   accounts: AccountSwitcher.claudeAccounts(),
-                                   pick: #selector(switchClaudeAccount(_:))))
+        // Переключение аккаунта в самом приложении Claude.
         menu.addItem(appAccountSubmenu())
 
         menu.addItem(.separator())
@@ -179,29 +173,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuItem.state = state
         menuItem.isEnabled = true
         return menuItem
-    }
-
-    /// Подменю переключения активного аккаунта: все известные аккаунты с
-    /// галочкой на активном. Активный оставляем КЛИКАБЕЛЬНЫМ — повторный выбор
-    /// перезаписывает базу чистыми кредами из профиля/снимка (чинит базу, если
-    /// её токен разошёлся с метаданными).
-    private func switchSubmenu(title: String, accounts: [AccountSwitcher.Account],
-                               pick: Selector) -> NSMenuItem {
-        let root = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        let submenu = NSMenu()
-        if accounts.isEmpty {
-            let empty = NSMenuItem(title: L.t("switch.empty"), action: nil, keyEquivalent: "")
-            empty.isEnabled = false
-            submenu.addItem(empty)
-        } else {
-            for account in accounts {
-                let entry = item(account.display, pick, state: account.isActive ? .on : .off)
-                entry.representedObject = account.ref
-                submenu.addItem(entry)
-            }
-        }
-        root.submenu = submenu
-        return root
     }
 
     /// Подменю «Аккаунт приложения»: список аккаунтов приложения Claude (каждый —
@@ -411,29 +382,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Переключение аккаунтов
-
-    @objc private func switchCodexAccount(_ sender: NSMenuItem) {
-        guard let ref = sender.representedObject as? String else { return }
-        let target = AccountSwitcher.codexAccounts().first { $0.ref == ref }?.display ?? ref
-        // У Codex счётчик сессий не показываем (см. AccountSwitcher): подмена
-        // файла не ломает запущенные процессы.
-        switchAccount(provider: "Codex", target: target, body: L.t("switch.confirm.codex"),
-                      running: 0) {
-            try AccountSwitcher.switchCodex(toRef: ref)
-        }
-    }
-
-    @objc private func switchClaudeAccount(_ sender: NSMenuItem) {
-        guard let ref = sender.representedObject as? String else { return }
-        let target = AccountSwitcher.claudeAccounts().first { $0.ref == ref }?.display ?? ref
-        // У Claude предупреждаем сильнее: активную запись читает и текущая сессия.
-        switchAccount(provider: "Claude", target: target, body: L.t("switch.confirm.claude"),
-                      running: AccountSwitcher.runningClaudeSessions(), offerRestart: true) {
-            try AccountSwitcher.switchClaude(toService: ref)
-        }
-    }
-
     // MARK: - Аккаунт приложения Claude
 
     @objc private func switchAppAccount(_ sender: NSMenuItem) {
@@ -475,88 +423,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         do { try AppAccountSwitcher.add(name: name) }
         catch { errorAlert(L.t("appswitch.add.failed"), error) }
-    }
-
-    private func switchAccount(provider: String, target: String, body: String,
-                               running: Int, offerRestart: Bool = false,
-                               _ work: @escaping () throws -> Void) {
-        let confirm = NSAlert()
-        confirm.messageText = L.t("switch.confirm.title")
-        var text = "\(provider) → \(target)\n\n\(body)"
-        // Как применяется: новые сессии — сразу; уже запущенные нужно перезапустить.
-        text += "\n\n" + L.t("switch.applyHint")
-        // Есть запущенные сессии — предупреждаем и делаем «Отмену» по умолчанию.
-        if running > 0 { text += "\n\n⚠️ " + L.t("switch.running", running) }
-        confirm.informativeText = text
-        confirm.alertStyle = running > 0 ? .critical : .warning
-
-        let doButton = confirm.addButton(withTitle: L.t("switch.confirm.do"))
-        let cancelButton = confirm.addButton(withTitle: L.t("common.cancel"))
-        if running > 0 {
-            doButton.keyEquivalent = ""
-            cancelButton.keyEquivalent = "\r"
-        }
-        guard runModalAbovePanel(confirm) == .alertFirstButtonReturn else { return }
-
-        Task { @MainActor in
-            do {
-                try await Task.detached(priority: .userInitiated) { try work() }.value
-                store.rediscover(force: true)
-                store.refreshAll(force: true)
-                if offerRestart { offerClaudeRestart() }
-            } catch {
-                errorAlert(L.t("switch.failed"), error)
-            }
-        }
-    }
-
-    /// Идентификатор десктоп-приложения Claude — его вкладка Code читает базовый
-    /// аккаунт при старте, поэтому применить свич к уже открытому приложению
-    /// можно только перезапуском.
-    private static let claudeAppBundleID = "com.anthropic.claudefordesktop"
-
-    /// Предложить перезапустить приложение Claude, чтобы свич применился сразу.
-    /// Показываем только если оно запущено; «Позже» — по умолчанию, чтобы
-    /// случайный Enter не закрыл текущую сессию.
-    private func offerClaudeRestart() {
-        let running = NSRunningApplication.runningApplications(
-            withBundleIdentifier: Self.claudeAppBundleID)
-        guard !running.isEmpty else { return }
-
-        let alert = NSAlert()
-        alert.messageText = L.t("switch.restart.title")
-        alert.informativeText = L.t("switch.restart.body")
-        let now = alert.addButton(withTitle: L.t("switch.restart.now"))
-        let later = alert.addButton(withTitle: L.t("switch.restart.later"))
-        now.keyEquivalent = ""
-        later.keyEquivalent = "\r"
-        guard runModalAbovePanel(alert) == .alertFirstButtonReturn else { return }
-        restartClaudeApp()
-    }
-
-    /// Мягко закрыть приложение Claude и запустить снова, когда оно закроется.
-    private func restartClaudeApp() {
-        let apps = NSRunningApplication.runningApplications(
-            withBundleIdentifier: Self.claudeAppBundleID)
-        let appURL = apps.first?.bundleURL
-            ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.claudeAppBundleID)
-        guard let appURL else { return }
-        apps.forEach { $0.terminate() }
-        relaunchWhenClosed(appURL: appURL, attempts: 12)   // ~4.8с максимум
-    }
-
-    private func relaunchWhenClosed(appURL: URL, attempts: Int) {
-        let stillRunning = !NSRunningApplication.runningApplications(
-            withBundleIdentifier: Self.claudeAppBundleID).isEmpty
-        if !stillRunning || attempts <= 0 {
-            let config = NSWorkspace.OpenConfiguration()
-            config.createsNewApplicationInstance = false
-            NSWorkspace.shared.openApplication(at: appURL, configuration: config, completionHandler: nil)
-            return
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-            self?.relaunchWhenClosed(appURL: appURL, attempts: attempts - 1)
-        }
     }
 
     private func errorAlert(_ title: String, _ error: Error) {
