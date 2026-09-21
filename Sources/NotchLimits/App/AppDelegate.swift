@@ -180,10 +180,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menuItem
     }
 
-    /// Подменю переключения активного аккаунта: все известные аккаунты —
-    /// активный, профили-колонки и сохранённые — без отдельного «Сохранить
-    /// текущий» (список наполняется сам). Активный помечен галочкой, жирным
-    /// и суффиксом, и выбрать его нельзя — переключать некуда.
+    /// Подменю переключения активного аккаунта: все известные аккаунты с
+    /// галочкой на активном. Активный оставляем КЛИКАБЕЛЬНЫМ — повторный выбор
+    /// перезаписывает базу чистыми кредами из профиля/снимка (чинит базу, если
+    /// её токен разошёлся с метаданными).
     private func switchSubmenu(title: String, accounts: [AccountSwitcher.Account],
                                pick: Selector) -> NSMenuItem {
         let root = NSMenuItem(title: title, action: nil, keyEquivalent: "")
@@ -194,11 +194,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             submenu.addItem(empty)
         } else {
             for account in accounts {
-                // Активный помечаем только галочкой и делаем некликабельным —
-                // переключать на него некуда.
                 let entry = item(account.display, pick, state: account.isActive ? .on : .off)
                 entry.representedObject = account.ref
-                if account.isActive { entry.isEnabled = false }
                 submenu.addItem(entry)
             }
         }

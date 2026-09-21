@@ -104,13 +104,15 @@ enum AccountSwitcher {
                                   isActive: email != nil && email == active,
                                   ref: authURL.path))
         }
-        add(authURL: codexAuth)                                    // текущий активный
+        // Профили и библиотека — раньше базы: источником берём самодостаточную
+        // папку профиля/снимка, а не базовый ~/.codex (см. claudeAccounts).
         for dir in ProfileDirectories.codexProfiles() {           // профили
             add(authURL: dir.appendingPathComponent("auth.json"))
         }
         let libDirs = (try? FileManager.default.contentsOfDirectory(at: codexLib,
                         includingPropertiesForKeys: nil)) ?? []    // библиотека
         for dir in libDirs { add(authURL: dir.appendingPathComponent("auth.json")) }
+        add(authURL: codexAuth)                                    // база — если больше негде
         return result
     }
 
@@ -219,13 +221,18 @@ enum AccountSwitcher {
                                   isActive: email != nil && email == active,
                                   ref: service))
         }
-        add(service: claudeBase, email: active)                              // активный (базовый)
+        // Профили и библиотека — РАНЬШЕ базы: у аккаунта берём источником
+        // самодостаточный профиль/снимок, а не базовый токен. Базовый токен
+        // после переключений может разойтись с метаданными; профиль всегда
+        // консистентен, поэтому и колонка читает верные данные, и переключение
+        // копирует в базу чистые креды.
         for service in ClaudeKeychain.services() where service != claudeBase {  // профили
             add(service: service, email: email(forService: service))
         }
         for slug in Set(storedEmails().keys).union(storedAccounts().keys) {  // библиотека
             add(service: claudeLibService(slug), email: email(forService: claudeLibService(slug)))
         }
+        add(service: claudeBase, email: active)                              // база — если больше негде
         return result
     }
 
