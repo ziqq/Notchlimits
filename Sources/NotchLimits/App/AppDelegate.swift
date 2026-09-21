@@ -144,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(switchSubmenu(title: L.t("switch.claude"),
                                    accounts: AccountSwitcher.claudeAccounts(),
                                    pick: #selector(switchClaudeAccount(_:))))
+        menu.addItem(appAccountSubmenu())
 
         menu.addItem(.separator())
 
@@ -199,6 +200,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 submenu.addItem(entry)
             }
         }
+        root.submenu = submenu
+        return root
+    }
+
+    /// Подменю «Аккаунт приложения»: список аккаунтов приложения Claude (каждый —
+    /// своя папка данных) + добавление. Переключение закрывает и открывает Claude.
+    private func appAccountSubmenu() -> NSMenuItem {
+        let root = NSMenuItem(title: L.t("appswitch.title"), action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        for account in AppAccountSwitcher.accounts() {
+            let entry = item(account.name, #selector(switchAppAccount(_:)),
+                             state: account.isCurrent ? .on : .off)
+            entry.representedObject = account.dir?.path ?? ""      // "" — основной (дефолт)
+            submenu.addItem(entry)
+        }
+        submenu.addItem(.separator())
+        submenu.addItem(item(L.t("appswitch.add"), #selector(addAppAccount)))
         root.submenu = submenu
         return root
     }
@@ -414,6 +432,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                       running: AccountSwitcher.runningClaudeSessions(), offerRestart: true) {
             try AccountSwitcher.switchClaude(toService: ref)
         }
+    }
+
+    // MARK: - Аккаунт приложения Claude
+
+    @objc private func switchAppAccount(_ sender: NSMenuItem) {
+        let path = (sender.representedObject as? String) ?? ""
+        let dir = path.isEmpty ? nil : URL(fileURLWithPath: path)
+        let name = sender.title
+        let confirm = NSAlert()
+        confirm.messageText = L.t("appswitch.confirm.title")
+        confirm.informativeText = L.t("appswitch.confirm.body", name)
+        confirm.alertStyle = .warning
+        let doButton = confirm.addButton(withTitle: L.t("appswitch.confirm.do"))
+        let cancel = confirm.addButton(withTitle: L.t("common.cancel"))
+        doButton.keyEquivalent = ""
+        cancel.keyEquivalent = "\r"
+        guard runModalAbovePanel(confirm) == .alertFirstButtonReturn else { return }
+        AppAccountSwitcher.switchTo(name: name, dir: dir)
+    }
+
+    @objc private func addAppAccount() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = L.t("appswitch.add.title")
+        alert.informativeText = L.t("appswitch.add.body")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.placeholderString = "work"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        alert.addButton(withTitle: L.t("appswitch.add.do"))
+        alert.addButton(withTitle: L.t("common.cancel"))
+        guard runModalAbovePanel(alert) == .alertFirstButtonReturn else { return }
+
+        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        guard AppAccountSwitcher.isValidName(name) else {
+            let bad = NSAlert()
+            bad.messageText = L.t("appswitch.add.badName")
+            bad.addButton(withTitle: L.t("common.ok"))
+            runModalAbovePanel(bad)
+            return
+        }
+        do { try AppAccountSwitcher.add(name: name) }
+        catch { errorAlert(L.t("appswitch.add.failed"), error) }
     }
 
     private func switchAccount(provider: String, target: String, body: String,

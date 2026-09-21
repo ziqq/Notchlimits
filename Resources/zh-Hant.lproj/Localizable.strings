@@ -157,3 +157,13 @@
 "switch.restart.now" = "立即重新啟動";
 "switch.restart.later" = "稍後";
 "menu.liquidGlass" = "Liquid Glass";
+"appswitch.title" = "Claude 應用程式帳戶";
+"appswitch.add" = "新增應用程式帳戶…";
+"appswitch.confirm.title" = "切換應用程式帳戶？";
+"appswitch.confirm.body" = "Claude 將結束並以「%@」重新開啟。目前工作階段/對話將關閉。";
+"appswitch.confirm.do" = "切換並重新啟動";
+"appswitch.add.title" = "新增應用程式帳戶";
+"appswitch.add.body" = "拉丁字母名稱。Claude 會在新資料夾中開啟——請登入帳戶。目前工作階段將關閉。";
+"appswitch.add.do" = "建立並開啟";
+"appswitch.add.badName" = "名稱無效或已被使用";
+"appswitch.add.failed" = "無法建立應用程式帳戶";

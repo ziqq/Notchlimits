@@ -157,3 +157,13 @@
 "switch.restart.now" = "Şimdi yeniden başlat";
 "switch.restart.later" = "Sonra";
 "menu.liquidGlass" = "Liquid Glass";
+"appswitch.title" = "Claude uygulama hesabı";
+"appswitch.add" = "Uygulama hesabı ekle…";
+"appswitch.confirm.title" = "Uygulama hesabı değiştirilsin mi?";
+"appswitch.confirm.body" = "Claude kapanıp “%@” olarak yeniden açılacak. Mevcut oturum/sohbet kapanacak.";
+"appswitch.confirm.do" = "Değiştir ve yeniden başlat";
+"appswitch.add.title" = "Uygulama hesabı ekle";
+"appswitch.add.body" = "Latin ad. Claude yeni bir klasörde açılır — giriş yap. Mevcut oturum kapanacak.";
+"appswitch.add.do" = "Oluştur ve aç";
+"appswitch.add.badName" = "Geçersiz veya kullanılan ad";
+"appswitch.add.failed" = "Uygulama hesabı oluşturulamadı";

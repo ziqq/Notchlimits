@@ -157,3 +157,13 @@
 "switch.restart.now" = "Riavvia ora";
 "switch.restart.later" = "Più tardi";
 "menu.liquidGlass" = "Liquid Glass";
+"appswitch.title" = "Account app Claude";
+"appswitch.add" = "Aggiungi account app…";
+"appswitch.confirm.title" = "Cambiare account dell’app?";
+"appswitch.confirm.body" = "Claude si chiuderà e riaprirà come «%@». La sessione/chat attuale si chiuderà.";
+"appswitch.confirm.do" = "Cambia e riavvia";
+"appswitch.add.title" = "Aggiungi account app";
+"appswitch.add.body" = "Nome latino. Claude apre una nuova cartella: accedi all’account. La sessione attuale si chiuderà.";
+"appswitch.add.do" = "Crea e apri";
+"appswitch.add.badName" = "Nome non valido o già in uso";
+"appswitch.add.failed" = "Impossibile creare l’account dell’app";

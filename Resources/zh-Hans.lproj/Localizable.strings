@@ -157,3 +157,13 @@
 "switch.restart.now" = "立即重启";
 "switch.restart.later" = "稍后";
 "menu.liquidGlass" = "Liquid Glass";
+"appswitch.title" = "Claude 应用账户";
+"appswitch.add" = "添加应用账户…";
+"appswitch.confirm.title" = "切换应用账户？";
+"appswitch.confirm.body" = "Claude 将退出并以“%@”重新打开。当前会话/聊天将关闭。";
+"appswitch.confirm.do" = "切换并重启";
+"appswitch.add.title" = "添加应用账户";
+"appswitch.add.body" = "拉丁字母名称。Claude 会在新文件夹中打开——请登录账户。当前会话将关闭。";
+"appswitch.add.do" = "创建并打开";
+"appswitch.add.badName" = "名称无效或已被占用";
+"appswitch.add.failed" = "无法创建应用账户";
