@@ -158,12 +158,13 @@
 "switch.restart.later" = "Później";
 "menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Konto aplikacji Claude";
+"appswitch.title.codex" = "Konto aplikacji Codex";
 "appswitch.add" = "Dodaj konto aplikacji…";
 "appswitch.confirm.title" = "Przełączyć konto aplikacji?";
-"appswitch.confirm.body" = "Claude zamknie się i otworzy jako „%@”. Bieżąca sesja/czat zostanie zamknięta.";
+"appswitch.confirm.body" = "%@ zamknie się i otworzy jako „%@”. Bieżąca sesja/czat zostanie zamknięta.";
 "appswitch.confirm.do" = "Przełącz i uruchom ponownie";
 "appswitch.add.title" = "Dodaj konto aplikacji";
-"appswitch.add.body" = "Nazwa łacińska. Claude otworzy nowy folder — zaloguj się. Bieżąca sesja zostanie zamknięta.";
+"appswitch.add.body" = "Nazwa łacińska. %@ otworzy nowy folder — zaloguj się. Bieżąca sesja zostanie zamknięta.";
 "appswitch.add.do" = "Utwórz i otwórz";
 "appswitch.add.badName" = "Nieprawidłowa lub zajęta nazwa";
 "appswitch.add.failed" = "Nie udało się utworzyć konta aplikacji";

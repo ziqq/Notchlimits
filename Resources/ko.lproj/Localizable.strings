@@ -158,12 +158,13 @@
 "switch.restart.later" = "나중에";
 "menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Claude 앱 계정";
+"appswitch.title.codex" = "Codex 앱 계정";
 "appswitch.add" = "앱 계정 추가…";
 "appswitch.confirm.title" = "앱 계정을 전환할까요?";
-"appswitch.confirm.body" = "Claude가 종료되고 “%@”로 다시 열립니다. 현재 세션/채팅이 닫힙니다.";
+"appswitch.confirm.body" = "%@가 종료되고 “%@”로 다시 열립니다. 현재 세션/채팅이 닫힙니다.";
 "appswitch.confirm.do" = "전환 후 재시작";
 "appswitch.add.title" = "앱 계정 추가";
-"appswitch.add.body" = "영문 이름. Claude가 새 폴더로 열립니다 — 로그인하세요. 현재 세션이 닫힙니다.";
+"appswitch.add.body" = "영문 이름. %@가 새 폴더로 열립니다 — 로그인하세요. 현재 세션이 닫힙니다.";
 "appswitch.add.do" = "만들고 열기";
 "appswitch.add.badName" = "이름이 잘못되었거나 사용 중입니다";
 "appswitch.add.failed" = "앱 계정을 만들지 못했습니다";

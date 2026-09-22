@@ -13,6 +13,11 @@ final class UsageStore: ObservableObject {
     var visibleColumns: [AccountColumn] { columns.filter { !hidden.contains($0.id) } }
     var hasHiddenColumns: Bool { !hidden.isEmpty }
 
+    /// Откуда колонка берёт учётные данные (папка codex-профиля и т.п.).
+    func source(for columnID: String) -> AccountSource? {
+        accounts.first(where: { $0.id == columnID })?.source
+    }
+
     var lastUpdatedAt: Date? {
         visibleColumns.compactMap(\.updatedAt).max()
     }

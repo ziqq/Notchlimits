@@ -158,12 +158,13 @@
 "switch.restart.later" = "Later";
 "menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Claude app account";
+"appswitch.title.codex" = "Codex app account";
 "appswitch.add" = "Add app account…";
 "appswitch.confirm.title" = "Switch app account?";
-"appswitch.confirm.body" = "Claude will quit and reopen as “%@”. The current session/chat will close.";
+"appswitch.confirm.body" = "%@ will quit and reopen as “%@”. The current session/chat will close.";
 "appswitch.confirm.do" = "Switch and restart";
 "appswitch.add.title" = "Add app account";
-"appswitch.add.body" = "Latin name. Claude opens in a new folder — sign in to the account. The current session will close.";
+"appswitch.add.body" = "Latin name. %@ opens in a new folder — sign in to the account. The current session will close.";
 "appswitch.add.do" = "Create and open";
 "appswitch.add.badName" = "Invalid or taken name";
 "appswitch.add.failed" = "Couldn't create the app account";

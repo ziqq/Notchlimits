@@ -1,87 +1,106 @@
 import AppKit
 
-/// Переключение аккаунта в самом приложении Claude (не CLI!).
+/// Переключение аккаунта в самом десктоп-приложении (не CLI!).
 ///
 /// Аккаунт приложения — это его веб-сессия (Electron), она живёт в
 /// user-data-dir. Подменить сессию у работающего приложения нельзя, поэтому
-/// свич = закрыть Claude и открыть заново с нужной папкой данных
-/// (`--user-data-dir`). Каждый аккаунт — отдельная папка; текущую (дефолтную)
-/// папку `~/Library/Application Support/Claude` не трогаем.
+/// свич = закрыть приложение и открыть заново с нужной папкой данных
+/// (`--user-data-dir`). Папку заводим по имени аккаунта той же колонки, что
+/// видно в панели: отдельного «добавить аккаунт приложения» нет — список
+/// целиком повторяет колонки. Первый свич на аккаунт открывает приложение в
+/// пустой папке — там нужно один раз войти.
+///
+/// И Claude, и Codex (`ChatGPT.app`) — Electron, поэтому один и тот же приём
+/// работает для обоих. Но у Codex вход живёт не в веб-сессии, а в
+/// `$CODEX_HOME/auth.json`, поэтому ему дополнительно передаём `CODEX_HOME`
+/// колонки (см. `switchTo(accountKey:codexHome:)`).
 @MainActor
-enum AppAccountSwitcher {
+struct AppAccountSwitcher {
 
-    static let bundleID = "com.anthropic.claudefordesktop"
-    private static let currentKey = "currentClaudeAppAccount"   // имя папки, "" = дефолт
+    /// bundle id десктоп-приложения.
+    let bundleID: String
+    /// Имя для диалогов («Claude» / «Codex»).
+    let appName: String
+    /// Подпапка в `~/Library/Application Support/NotchLimits`, где живут папки
+    /// данных аккаунтов этого приложения.
+    private let folderKey: String
+    /// Ключ UserDefaults: ключ активного аккаунта, "" — ещё не переключались.
+    private let currentKey: String
 
-    struct AppAccount: Equatable {
-        let name: String
-        /// Папка данных; nil — дефолтная (основной аккаунт приложения).
-        let dir: URL?
-        let isCurrent: Bool
+    /// Свитчер приложения Claude Desktop.
+    static let claude = AppAccountSwitcher(
+        bundleID: "com.anthropic.claudefordesktop",
+        appName: "Claude",
+        folderKey: "claude-app",
+        currentKey: "currentClaudeAppAccount")
+
+    /// Свитчер приложения Codex (`ChatGPT.app`).
+    static let codex = AppAccountSwitcher(
+        bundleID: "com.openai.codex",
+        appName: "Codex",
+        folderKey: "codex-app",
+        currentKey: "currentCodexAppAccount")
+
+    /// Установлено ли приложение (иначе подменю показывать незачем).
+    var isInstalled: Bool {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) != nil
     }
 
-    private static var root: URL {
-        let base = (try? FileManager.default.url(for: .applicationSupportDirectory,
-                                                 in: .userDomainMask, appropriateFor: nil, create: true))
-            ?? ProfileDirectories.home.appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("NotchLimits/claude-app", isDirectory: true)
-    }
-
-    private static var currentName: String {
+    /// Ключ аккаунта, под которым приложение открывали последним. "" — ещё нет.
+    var currentAccountKey: String {
         UserDefaults.standard.string(forKey: currentKey) ?? ""
     }
 
-    /// Список аккаунтов: основной (дефолтная папка) + добавленные папки.
-    static func accounts() -> [AppAccount] {
-        let current = currentName
-        var result = [AppAccount(name: ProfileDirectories.primaryName, dir: nil, isCurrent: current.isEmpty)]
-        let dirs = (try? FileManager.default.contentsOfDirectory(at: root,
-                    includingPropertiesForKeys: [.isDirectoryKey])) ?? []
-        for dir in dirs.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
-            guard (try? dir.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
-            let name = dir.lastPathComponent
-            result.append(AppAccount(name: name, dir: dir, isCurrent: name == current))
-        }
-        return result
+    private var root: URL {
+        let base = (try? FileManager.default.url(for: .applicationSupportDirectory,
+                                                 in: .userDomainMask, appropriateFor: nil, create: true))
+            ?? ProfileDirectories.home.appendingPathComponent("Library/Application Support")
+        return base.appendingPathComponent("NotchLimits/\(folderKey)", isDirectory: true)
     }
 
-    /// Уникальное ли имя (не «main», не занятая папка).
-    static func isValidName(_ name: String) -> Bool {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, trimmed != ProfileDirectories.primaryName else { return false }
-        let allowed = CharacterSet(charactersIn:
-            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
-        guard trimmed.unicodeScalars.allSatisfy(allowed.contains), trimmed.first != "." else { return false }
-        return !FileManager.default.fileExists(atPath: root.appendingPathComponent(trimmed).path)
+    /// Стабильный ключ папки для колонки: из её id, не из имени (переименование
+    /// колонки не должно осиротить папку данных приложения).
+    static func key(for columnID: String) -> String {
+        AccountSwitcher.slug(columnID)
     }
 
-    /// Добавить аккаунт: создать папку и открыть в ней Claude для входа.
-    static func add(name: String) throws {
-        let dir = root.appendingPathComponent(name, isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        switchTo(name: name, dir: dir)
-    }
-
-    /// Переключиться: закрыть Claude и открыть заново с папкой аккаунта.
-    static func switchTo(name: String, dir: URL?) {
-        UserDefaults.standard.set(dir == nil ? "" : name, forKey: currentKey)
+    /// Переключиться на аккаунт колонки: создать (при необходимости) папку данных
+    /// и открыть приложение заново с ней.
+    ///
+    /// `codexHome` — папка codex-профиля колонки (`~/.codex`,
+    /// `~/.codex-profiles/<имя>`). Приложение Codex берёт `CODEX_HOME` из
+    /// окружения, только если задан и `CODEX_ELECTRON_USER_DATA_PATH` (иначе
+    /// перетирает его окружением login-шелла) — так же оно само открывает
+    /// второй экземпляр.
+    func switchTo(accountKey: String, codexHome: URL? = nil) {
+        let dir = root.appendingPathComponent(accountKey, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        UserDefaults.standard.set(accountKey, forKey: currentKey)
         guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return }
         let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
         running.forEach { $0.terminate() }
-        relaunch(appURL: appURL, dataDir: dir, attempts: 25)   // ~10с максимум
+        var environment: [String: String] = [:]
+        if let codexHome {
+            environment["CODEX_HOME"] = codexHome.path
+            environment["CODEX_ELECTRON_USER_DATA_PATH"] = dir.path
+        }
+        relaunch(appURL: appURL, dataDir: dir, environment: environment, attempts: 25)   // ~10с максимум
     }
 
-    private static func relaunch(appURL: URL, dataDir: URL?, attempts: Int) {
+    private func relaunch(appURL: URL, dataDir: URL, environment: [String: String], attempts: Int) {
         let stillRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
         guard !stillRunning || attempts <= 0 else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                relaunch(appURL: appURL, dataDir: dataDir, attempts: attempts - 1)
+                relaunch(appURL: appURL, dataDir: dataDir, environment: environment, attempts: attempts - 1)
             }
             return
         }
         let config = NSWorkspace.OpenConfiguration()
         config.createsNewApplicationInstance = false
-        if let dataDir { config.arguments = ["--user-data-dir=\(dataDir.path)"] }
+        config.arguments = ["--user-data-dir=\(dataDir.path)"]
+        if !environment.isEmpty {
+            config.environment = environment
+        }
         NSWorkspace.shared.openApplication(at: appURL, configuration: config, completionHandler: nil)
     }
 }
