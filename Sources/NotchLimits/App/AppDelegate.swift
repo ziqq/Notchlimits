@@ -64,9 +64,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(item(L.t("menu.refresh"), #selector(refresh)))
         menu.addItem(.separator())
-        menu.addItem(item(L.t("menu.addClaude"), #selector(addClaude)))
-        menu.addItem(item(L.t("menu.addCodex"), #selector(addCodex)))
-        menu.addItem(.separator())
 
         let hideItem = NSMenuItem(title: L.t("menu.hideColumn"), action: nil, keyEquivalent: "")
         let hideSubmenu = NSMenu()
@@ -137,9 +134,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         removeItem.isEnabled = !allColumns.isEmpty || !orphans.isEmpty
         menu.addItem(removeItem)
 
-        // Переключение аккаунта в самом приложении Claude.
-        menu.addItem(appAccountSubmenu())
-
+        // Аккаунты по провайдерам: список — это колонки, плюс «Добавить…» внизу
+        // того же подменю. Переключение закрывает и открывает приложение.
+        menu.addItem(appAccountSubmenu(switcher: .claude, provider: .claude,
+                                       title: L.t("appswitch.title"),
+                                       switchSelector: #selector(switchClaudeAppAccount(_:)),
+                                       addTitle: L.t("menu.addClaude"),
+                                       addSelector: #selector(addClaude)))
+        menu.addItem(appAccountSubmenu(switcher: .codex, provider: .codex,
+                                       title: L.t("appswitch.title.codex"),
+                                       switchSelector: #selector(switchCodexAppAccount(_:)),
+                                       addTitle: L.t("menu.addCodex"),
+                                       addSelector: #selector(addCodex)))
         menu.addItem(.separator())
 
         let hotKeyItem = NSMenuItem(title: L.t("menu.hotKey", hotKeys.displayName),
@@ -175,19 +181,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menuItem
     }
 
-    /// Подменю «Аккаунт приложения»: список аккаунтов приложения Claude (каждый —
-    /// своя папка данных) + добавление. Переключение закрывает и открывает Claude.
-    private func appAccountSubmenu() -> NSMenuItem {
-        let root = NSMenuItem(title: L.t("appswitch.title"), action: nil, keyEquivalent: "")
+    /// Подменю «Аккаунт приложения»: те же аккаунты, что и колонки этого
+    /// провайдера, плюс «Добавить аккаунт…» внизу. Переключение закрывает и
+    /// открывает приложение под папкой данных этого аккаунта.
+    ///
+    /// Галочка — на аккаунте, куда переключались последним; если ещё не
+    /// переключались, помечаем активную колонку (базовый CLI-аккаунт), чтобы
+    /// пункт «текущий» был не пустым.
+    private func appAccountSubmenu(switcher: AppAccountSwitcher,
+                                   provider: Provider,
+                                   title: String,
+                                   switchSelector: Selector,
+                                   addTitle: String,
+                                   addSelector: Selector) -> NSMenuItem {
+        let root = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         let submenu = NSMenu()
-        for account in AppAccountSwitcher.accounts() {
-            let entry = item(account.name, #selector(switchAppAccount(_:)),
-                             state: account.isCurrent ? .on : .off)
-            entry.representedObject = account.dir?.path ?? ""      // "" — основной (дефолт)
+        let columns = store.columns.filter { $0.provider == provider }
+        let current = switcher.currentAccountKey
+        for column in columns {
+            let key = AppAccountSwitcher.key(for: column.id)
+            let isCurrent = current.isEmpty ? column.isActive : (key == current)
+            let entry = item(column.displayName, switchSelector, state: isCurrent ? .on : .off)
+            var payload = [key, column.displayName]
+            if case .codexHome(let home)? = store.source(for: column.id) {
+                payload.append(home.path)
+            }
+            entry.representedObject = payload
             submenu.addItem(entry)
         }
-        submenu.addItem(.separator())
-        submenu.addItem(item(L.t("appswitch.add"), #selector(addAppAccount)))
+        if !columns.isEmpty { submenu.addItem(.separator()) }
+        submenu.addItem(item(addTitle, addSelector))
         root.submenu = submenu
         return root
     }
@@ -382,47 +405,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Аккаунт приложения Claude
+    // MARK: - Аккаунт десктоп-приложения (Claude / Codex)
 
-    @objc private func switchAppAccount(_ sender: NSMenuItem) {
-        let path = (sender.representedObject as? String) ?? ""
-        let dir = path.isEmpty ? nil : URL(fileURLWithPath: path)
-        let name = sender.title
+    @objc private func switchClaudeAppAccount(_ sender: NSMenuItem) {
+        switchAppAccount(sender, switcher: .claude)
+    }
+
+    @objc private func switchCodexAppAccount(_ sender: NSMenuItem) {
+        switchAppAccount(sender, switcher: .codex)
+    }
+
+    private func switchAppAccount(_ sender: NSMenuItem, switcher: AppAccountSwitcher) {
+        guard let payload = sender.representedObject as? [String], payload.count >= 2 else { return }
+        let key = payload[0], name = payload[1]
         let confirm = NSAlert()
         confirm.messageText = L.t("appswitch.confirm.title")
-        confirm.informativeText = L.t("appswitch.confirm.body", name)
+        confirm.informativeText = L.t("appswitch.confirm.body", switcher.appName, name)
         confirm.alertStyle = .warning
         let doButton = confirm.addButton(withTitle: L.t("appswitch.confirm.do"))
         let cancel = confirm.addButton(withTitle: L.t("common.cancel"))
         doButton.keyEquivalent = ""
         cancel.keyEquivalent = "\r"
         guard runModalAbovePanel(confirm) == .alertFirstButtonReturn else { return }
-        AppAccountSwitcher.switchTo(name: name, dir: dir)
-    }
-
-    @objc private func addAppAccount() {
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = L.t("appswitch.add.title")
-        alert.informativeText = L.t("appswitch.add.body")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        field.placeholderString = "work"
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        alert.addButton(withTitle: L.t("appswitch.add.do"))
-        alert.addButton(withTitle: L.t("common.cancel"))
-        guard runModalAbovePanel(alert) == .alertFirstButtonReturn else { return }
-
-        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
-        guard AppAccountSwitcher.isValidName(name) else {
-            let bad = NSAlert()
-            bad.messageText = L.t("appswitch.add.badName")
-            bad.addButton(withTitle: L.t("common.ok"))
-            runModalAbovePanel(bad)
-            return
-        }
-        do { try AppAccountSwitcher.add(name: name) }
-        catch { errorAlert(L.t("appswitch.add.failed"), error) }
+        var codexHome: URL?
+        if payload.count > 2 { codexHome = URL(fileURLWithPath: payload[2]) }
+        switcher.switchTo(accountKey: key, codexHome: codexHome)
     }
 
     private func errorAlert(_ title: String, _ error: Error) {

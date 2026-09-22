@@ -17,7 +17,10 @@ struct RealDiscovery: AccountDiscovery {
                 provider: .claude,
                 profileName: name,
                 source: .claudeKeychain(service: service,
-                                        configDir: ClaudeKeychain.configDirectory(for: service))
+                                        configDir: ClaudeKeychain.configDirectory(for: service)),
+                // Активна та запись, которую берёт голая команда `claude` —
+                // базовая запись Keychain без суффикса-хэша.
+                isActive: service == ClaudeKeychain.baseService
             )
         }
     }
@@ -46,7 +49,9 @@ struct RealDiscovery: AccountDiscovery {
             DiscoveredAccount(id: "codex:\(home.key)",
                               provider: .codex,
                               profileName: home.name,
-                              source: .codexHome(home.url))
+                              source: .codexHome(home.url),
+                              // Активен базовый ~/.codex — его берёт голая `codex`.
+                              isActive: home.key == "default")
         }
     }
 }

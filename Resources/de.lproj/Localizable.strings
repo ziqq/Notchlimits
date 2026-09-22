@@ -158,12 +158,13 @@
 "switch.restart.later" = "Später";
 "menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Claude-App-Konto";
+"appswitch.title.codex" = "Codex-App-Konto";
 "appswitch.add" = "App-Konto hinzufügen…";
 "appswitch.confirm.title" = "App-Konto wechseln?";
-"appswitch.confirm.body" = "Claude wird beendet und als „%@“ neu geöffnet. Die aktuelle Sitzung/Chat wird geschlossen.";
+"appswitch.confirm.body" = "%@ wird beendet und als „%@“ neu geöffnet. Die aktuelle Sitzung/Chat wird geschlossen.";
 "appswitch.confirm.do" = "Wechseln und neu starten";
 "appswitch.add.title" = "App-Konto hinzufügen";
-"appswitch.add.body" = "Name (lateinisch). Claude öffnet einen neuen Ordner — melde dich an. Die aktuelle Sitzung wird geschlossen.";
+"appswitch.add.body" = "Name (lateinisch). %@ öffnet einen neuen Ordner — melde dich an. Die aktuelle Sitzung wird geschlossen.";
 "appswitch.add.do" = "Erstellen und öffnen";
 "appswitch.add.badName" = "Ungültiger oder belegter Name";
 "appswitch.add.failed" = "App-Konto konnte nicht erstellt werden";

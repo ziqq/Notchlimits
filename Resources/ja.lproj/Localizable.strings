@@ -158,12 +158,13 @@
 "switch.restart.later" = "あとで";
 "menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Claude アプリのアカウント";
+"appswitch.title.codex" = "Codex アプリのアカウント";
 "appswitch.add" = "アプリのアカウントを追加…";
 "appswitch.confirm.title" = "アプリのアカウントを切り替えますか？";
-"appswitch.confirm.body" = "Claude を終了し「%@」で開き直します。現在のセッション/チャットは閉じます。";
+"appswitch.confirm.body" = "%@ を終了し「%@」で開き直します。現在のセッション/チャットは閉じます。";
 "appswitch.confirm.do" = "切り替えて再起動";
 "appswitch.add.title" = "アプリのアカウントを追加";
-"appswitch.add.body" = "半角英数の名前。Claude が新しいフォルダで開きます — サインインしてください。現在のセッションは閉じます。";
+"appswitch.add.body" = "半角英数の名前。%@ が新しいフォルダで開きます — サインインしてください。現在のセッションは閉じます。";
 "appswitch.add.do" = "作成して開く";
 "appswitch.add.badName" = "名前が不正または使用中です";
 "appswitch.add.failed" = "アプリのアカウントを作成できませんでした";
