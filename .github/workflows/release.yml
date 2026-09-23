@@ -61,10 +61,20 @@ jobs:
           NAME="NotchLimits-${{ steps.meta.outputs.version }}.zip"
           # ditto, а не zip: сохраняет подпись бандла и расширенные атрибуты.
           ditto -c -k --sequesterRsrc --keepParent build/NotchLimits.app "$NAME"
-          shasum -a 256 "$NAME" > SHA256SUMS.txt
+
+          # DMG — для ручной установки перетаскиванием; .zip остаётся,
+          # по нему работает обновление изнутри приложения.
+          NOTCHLIMITS_VERSION="${{ steps.meta.outputs.version }}" ./scripts/build_dmg.sh
+          DMG="NotchLimits-${{ steps.meta.outputs.version }}.dmg"
+          mv "build/${DMG}" "$DMG"
+
+          shasum -a 256 "$DMG" "$NAME" > SHA256SUMS.txt
           echo "name=${NAME}" >> "$GITHUB_OUTPUT"
           echo "sha=$(shasum -a 256 "$NAME" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "size=$(du -h "$NAME" | cut -f1 | tr -d ' ')" >> "$GITHUB_OUTPUT"
+          echo "dmg=${DMG}" >> "$GITHUB_OUTPUT"
+          echo "dmg_sha=$(shasum -a 256 "$DMG" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "dmg_size=$(du -h "$DMG" | cut -f1 | tr -d ' ')" >> "$GITHUB_OUTPUT"
 
       - name: Заметки к релизу
         id: notes
@@ -89,6 +99,19 @@ jobs:
             echo
             echo "## Установка"
             echo
+            echo "Открой **${{ steps.package.outputs.dmg }}** и перетащи NotchLimits в папку"
+            echo "«Программы» (Applications), затем сними карантин и запусти:"
+            echo
+            echo '```bash'
+            echo "xattr -dr com.apple.quarantine /Applications/NotchLimits.app"
+            echo "open /Applications/NotchLimits.app"
+            echo '```'
+            echo
+            echo "Снять карантин обязательно: сборка подписана ad-hoc, без сертификата"
+            echo "Apple Developer, поэтому Gatekeeper иначе не даст её запустить."
+            echo
+            echo "Без DMG — из архива:"
+            echo
             echo '```bash'
             echo "unzip ${{ steps.package.outputs.name }}"
             echo "mv NotchLimits.app /Applications/"
@@ -96,8 +119,7 @@ jobs:
             echo "open /Applications/NotchLimits.app"
             echo '```'
             echo
-            echo "Третья строка обязательна: сборка подписана ad-hoc, без сертификата"
-            echo "Apple Developer, поэтому Gatekeeper иначе не даст её запустить."
+            echo "Обновление изнутри приложения («Проверить наличие обновлений») берёт .zip."
             echo
             echo "Приложение фоновое — иконки в доке нет. Наведи курсор на челку,"
             echo "либо нажми ⌘P. Выход и настройки — правым кликом по панели."
@@ -123,6 +145,7 @@ jobs:
             echo "| --- | --- |"
             echo "| Версия | ${{ steps.meta.outputs.version }} |"
             echo "| Минимальная macOS | 13.0 |"
+            echo "| Размер DMG | ${{ steps.package.outputs.dmg_size }} |"
             echo "| Размер архива | ${{ steps.package.outputs.size }} |"
             echo "| Языки интерфейса | ${LOCALES} |"
             echo "| Подпись | ad-hoc |"
@@ -133,6 +156,8 @@ jobs:
             echo "## Контрольная сумма"
             echo
             echo '```'
+            echo "SHA-256  ${{ steps.package.outputs.dmg_sha }}"
+            echo "         ${{ steps.package.outputs.dmg }}"
             echo "SHA-256  ${{ steps.package.outputs.sha }}"
             echo "         ${{ steps.package.outputs.name }}"
             echo '```'
@@ -155,6 +180,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ steps.meta.outputs.tag }}" \
+            "${{ steps.package.outputs.dmg }}" \
             "${{ steps.package.outputs.name }}" \
             SHA256SUMS.txt \
             --title "NotchLimits ${{ steps.meta.outputs.version }}" \

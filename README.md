@@ -42,6 +42,12 @@ Restart after a rebuild:
 pkill -x NotchLimits; open build/NotchLimits.app
 ```
 
+A drag-to-Applications DMG (the app plus an `Applications` shortcut) is packed from the built bundle:
+
+```bash
+./scripts/build_dmg.sh   # → build/NotchLimits-<version>.dmg
+```
+
 ## Usage
 
 | Action | Result |
@@ -199,7 +205,7 @@ The app makes no automatic request beyond the two usage endpoints above and Anth
 
 The self-test (`NOTCHLIMITS_SELFTEST=1`) needs no network, Keychain, or window server, and covers Claude/Codex parsing (garbage, `null` windows, unknown keys), window order and titles, JWT claims, time/age/percent formatting, cache and hotkey serialization, and localization completeness — matching key sets, no empty values, and **format specifiers matching English**, or `String(format:)` would crash in another language.
 
-[`.github/workflows/release.yml`](.github/workflows/release.yml) runs on a `v*` tag or manually with a version: builds, self-tests, checks the `Info.plist` version against the tag, packs with `ditto` (plain `zip` breaks the signature), computes SHA-256, and publishes a release with the `.zip` and `SHA256SUMS.txt`. Release notes are generated: install steps (including the mandatory quarantine removal for ad-hoc builds), commits since the last tag, a spec table, and the checksum.
+[`.github/workflows/release.yml`](.github/workflows/release.yml) runs on a `v*` tag or manually with a version: builds, self-tests, checks the `Info.plist` version against the tag, packs with `ditto` (plain `zip` breaks the signature), computes SHA-256, also builds a DMG with `scripts/build_dmg.sh`, and publishes a release with the `.dmg` (manual install), the `.zip` (used by the in-app updater), and `SHA256SUMS.txt` covering both. Release notes are generated: the version's `CHANGELOG.md` section, install steps (DMG first, then the zip, including the mandatory quarantine removal for ad-hoc builds), commits since the last tag, a spec table, and the checksum.
 
 Version comes from `NOTCHLIMITS_VERSION`, else the [`VERSION`](VERSION) file:
 
