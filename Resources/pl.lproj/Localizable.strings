@@ -110,19 +110,22 @@
 // Добавление аккаунта
 "setup.claude.title" = "Nowe konto Claude";
 "setup.codex.title" = "Nowe konto Codex";
-"setup.profile.hint" = "Wybierz krótką nazwę dla tego konta — na przykład work albo personal. Stanie się nagłówkiem kolumny, a CLI będzie trzymać ustawienia w folderze o tej nazwie.";
+"setup.profile.hint" = "Zostaw nazwę pustą, aby zalogować się kontem głównym — tym, którego używają aplikacja Claude/Codex i zwykłe CLI. Dla dodatkowego konta wymyśl krótką nazwę, np. work: stanie się nagłówkiem kolumny, a CLI będzie trzymać ustawienia w folderze o tej nazwie.";
 "setup.profile.terminal" = "Po kliknięciu „Utwórz” otworzy się Terminal — zaloguj się tam.";
 "setup.profile.folder" = "Folder: %@";
+"setup.profile.main" = "Konto główne: %@";
+"setup.profile.mainReplaces" = "Konto główne %@ — zastąpi obecne logowanie.";
 "setup.profile.badChars" = "Tylko litery łacińskie, cyfry, myślnik i podkreślenie.";
 "setup.profile.exists" = "Profil o tej nazwie już istnieje.";
 "setup.create" = "Utwórz";
 "setup.badName.title" = "Zła nazwa profilu";
-"setup.badName.body" = "Tylko litery łacińskie, cyfry, myślnik i podkreślenie. Nazwa nie może być pusta ani zajęta.";
+"setup.badName.body" = "Tylko litery łacińskie, cyfry, myślnik i podkreślenie, a nazwa nie może być zajęta. Dla konta głównego zostaw pole puste.";
 "setup.failed.title" = "Nie udało się utworzyć profilu";
 "setup.missing.title" = "Nie znaleziono %@";
 "setup.missing.body" = "Zainstaluj CLI i spróbuj ponownie:\n\n%@";
 "setup.script.profile" = "Profil: %@";
 "setup.script.hint" = "Zaloguj sie, potem zamknij to okno.";
+"setup.script.relogin" = "Już zalogowano — wpisz /login, aby zalogować się na inne konto, potem zamknij to okno.";
 "loginItem.failed.title" = "Nie udało się zmienić uruchamiania przy logowaniu";
 
 // Статистика под окнами
@@ -159,12 +162,10 @@
 "menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Konto aplikacji Claude";
 "appswitch.title.codex" = "Konto aplikacji Codex";
-"appswitch.add" = "Dodaj konto aplikacji…";
 "appswitch.confirm.title" = "Przełączyć konto aplikacji?";
 "appswitch.confirm.body" = "%@ zamknie się i otworzy jako „%@”. Bieżąca sesja/czat zostanie zamknięta.";
 "appswitch.confirm.do" = "Przełącz i uruchom ponownie";
-"appswitch.add.title" = "Dodaj konto aplikacji";
-"appswitch.add.body" = "Nazwa łacińska. %@ otworzy nowy folder — zaloguj się. Bieżąca sesja zostanie zamknięta.";
-"appswitch.add.do" = "Utwórz i otwórz";
-"appswitch.add.badName" = "Nieprawidłowa lub zajęta nazwa";
-"appswitch.add.failed" = "Nie udało się utworzyć konta aplikacji";
+"appswitch.error.title" = "Nie udało się przełączyć konta";
+"appswitch.error.notInstalled" = "%@ nie jest zainstalowany.";
+"appswitch.error.didNotQuit" = "%@ się nie zamknął — zamknij go i spróbuj ponownie.";
+"appswitch.error.noAuth" = "To konto nie ma logowania do Codex (auth.json). Zaloguj się ponownie.";

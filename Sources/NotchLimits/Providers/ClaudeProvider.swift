@@ -32,7 +32,10 @@ actor ClaudeProvider: UsageProvider {
         }
 
         guard let token = await token(for: service) else {
-            return .reauth(L.t("column.reauth.claude"))
+            let noLogin = await Task.detached(priority: .utility) {
+                ClaudeKeychain.hasNoLogin(service: service)
+            }.value
+            return noLogin ? .notAnAccount : .reauth(L.t("column.reauth.claude"))
         }
 
         // Почту API не отдаёт. Обычно берём из discovery (конфиг/снимок), иначе

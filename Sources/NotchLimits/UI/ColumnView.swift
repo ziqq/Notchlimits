@@ -163,6 +163,12 @@ struct LimitRowView: View {
                 timingLine(resetsAt: resetsAt)
                     .font(.system(size: 9.5))
                     .fixedSize(horizontal: false, vertical: true)
+            } else {
+                // Окно ещё не началось (0 %, даты сброса нет). Держим место под
+                // строку, иначе всё ниже съезжает относительно соседних колонок.
+                Text(" ")
+                    .font(.system(size: 9.5))
+                    .hidden()
             }
         }
         // При наведении — точный момент сброса: «сегодня, 13:30».

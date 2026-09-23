@@ -110,19 +110,22 @@
 // Добавление аккаунта
 "setup.claude.title" = "Nuovo account Claude";
 "setup.codex.title" = "Nuovo account Codex";
-"setup.profile.hint" = "Scegli un nome breve per questo account — per esempio work o personal. Diventerà il titolo della colonna e la CLI terrà le sue impostazioni in una cartella con quel nome.";
+"setup.profile.hint" = "Lascia il nome vuoto per accedere con l’account principale, quello usato dall’app Claude/Codex e dalla CLI normale. Per un account aggiuntivo scegli un nome breve, ad esempio work: diventa il titolo della colonna e la CLI salva le impostazioni in una cartella con quel nome.";
 "setup.profile.terminal" = "Dopo «Crea» si apre il Terminale — accedi da lì.";
 "setup.profile.folder" = "Cartella: %@";
+"setup.profile.main" = "Account principale: %@";
+"setup.profile.mainReplaces" = "Account principale %@: sostituisce l’accesso.";
 "setup.profile.badChars" = "Solo lettere latine, cifre, trattino e trattino basso.";
 "setup.profile.exists" = "Esiste già un profilo con questo nome.";
 "setup.create" = "Crea";
 "setup.badName.title" = "Nome profilo non valido";
-"setup.badName.body" = "Solo lettere latine, cifre, trattino e trattino basso. Il nome non può essere vuoto o già usato.";
+"setup.badName.body" = "Solo lettere latine, cifre, trattino e trattino basso, e il nome non deve essere già usato. Lascialo vuoto per l’account principale.";
 "setup.failed.title" = "Impossibile creare il profilo";
 "setup.missing.title" = "Impossibile trovare %@";
 "setup.missing.body" = "Installa la CLI e riprova:\n\n%@";
 "setup.script.profile" = "Profilo: %@";
 "setup.script.hint" = "Accedi, poi chiudi questa finestra.";
+"setup.script.relogin" = "Accesso già effettuato: digita /login per accedere a un altro account, poi chiudi questa finestra.";
 "loginItem.failed.title" = "Impossibile modificare l’avvio all’accesso";
 
 // Статистика под окнами
@@ -159,12 +162,10 @@
 "menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Account app Claude";
 "appswitch.title.codex" = "Account app Codex";
-"appswitch.add" = "Aggiungi account app…";
 "appswitch.confirm.title" = "Cambiare account dell’app?";
 "appswitch.confirm.body" = "%@ si chiuderà e riaprirà come «%@». La sessione/chat attuale si chiuderà.";
 "appswitch.confirm.do" = "Cambia e riavvia";
-"appswitch.add.title" = "Aggiungi account app";
-"appswitch.add.body" = "Nome latino. %@ apre una nuova cartella: accedi all’account. La sessione attuale si chiuderà.";
-"appswitch.add.do" = "Crea e apri";
-"appswitch.add.badName" = "Nome non valido o già in uso";
-"appswitch.add.failed" = "Impossibile creare l’account dell’app";
+"appswitch.error.title" = "Impossibile cambiare account";
+"appswitch.error.notInstalled" = "%@ non è installato.";
+"appswitch.error.didNotQuit" = "%@ non si è chiuso: chiudilo e riprova.";
+"appswitch.error.noAuth" = "Questo account non ha un accesso a Codex (auth.json). Accedi di nuovo.";

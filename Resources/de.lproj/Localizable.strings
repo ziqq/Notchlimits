@@ -110,19 +110,22 @@
 // Добавление аккаунта
 "setup.claude.title" = "Neuer Claude-Account";
 "setup.codex.title" = "Neuer Codex-Account";
-"setup.profile.hint" = "Wähle einen kurzen Namen für diesen Account — etwa work oder personal. Er wird zur Spaltenüberschrift, und das CLI legt seine Einstellungen in einem Ordner dieses Namens ab.";
+"setup.profile.hint" = "Lass den Namen leer, um dich mit dem Hauptkonto anzumelden – dem Konto, das die Claude/Codex-App und die normale CLI nutzen. Für ein zusätzliches Konto wähle einen kurzen Namen, z. B. work: Er wird zur Spaltenüberschrift, und die CLI speichert ihre Einstellungen in einem Ordner mit diesem Namen.";
 "setup.profile.terminal" = "Nach „Erstellen“ öffnet sich das Terminal — melde dich dort an.";
 "setup.profile.folder" = "Ordner: %@";
+"setup.profile.main" = "Hauptkonto: %@";
+"setup.profile.mainReplaces" = "Hauptkonto %@ – ersetzt die aktuelle Anmeldung.";
 "setup.profile.badChars" = "Nur lateinische Buchstaben, Ziffern, Bindestrich und Unterstrich.";
 "setup.profile.exists" = "Ein Profil mit diesem Namen existiert bereits.";
 "setup.create" = "Erstellen";
 "setup.badName.title" = "Ungültiger Profilname";
-"setup.badName.body" = "Nur lateinische Buchstaben, Ziffern, Bindestrich und Unterstrich. Der Name darf nicht leer oder schon vergeben sein.";
+"setup.badName.body" = "Nur lateinische Buchstaben, Ziffern, Bindestrich und Unterstrich; der Name darf nicht vergeben sein. Für das Hauptkonto leer lassen.";
 "setup.failed.title" = "Profil konnte nicht erstellt werden";
 "setup.missing.title" = "%@ nicht gefunden";
 "setup.missing.body" = "Installiere das CLI und versuche es erneut:\n\n%@";
 "setup.script.profile" = "Profil: %@";
 "setup.script.hint" = "Melde dich an und schliesse dieses Fenster.";
+"setup.script.relogin" = "Bereits angemeldet – gib /login ein, um dich mit einem anderen Konto anzumelden, und schließe dann dieses Fenster.";
 "loginItem.failed.title" = "Anmeldeobjekt konnte nicht geändert werden";
 
 // Статистика под окнами
@@ -159,12 +162,10 @@
 "menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Claude-App-Konto";
 "appswitch.title.codex" = "Codex-App-Konto";
-"appswitch.add" = "App-Konto hinzufügen…";
 "appswitch.confirm.title" = "App-Konto wechseln?";
 "appswitch.confirm.body" = "%@ wird beendet und als „%@“ neu geöffnet. Die aktuelle Sitzung/Chat wird geschlossen.";
 "appswitch.confirm.do" = "Wechseln und neu starten";
-"appswitch.add.title" = "App-Konto hinzufügen";
-"appswitch.add.body" = "Name (lateinisch). %@ öffnet einen neuen Ordner — melde dich an. Die aktuelle Sitzung wird geschlossen.";
-"appswitch.add.do" = "Erstellen und öffnen";
-"appswitch.add.badName" = "Ungültiger oder belegter Name";
-"appswitch.add.failed" = "App-Konto konnte nicht erstellt werden";
+"appswitch.error.title" = "Konto konnte nicht gewechselt werden";
+"appswitch.error.notInstalled" = "%@ ist nicht installiert.";
+"appswitch.error.didNotQuit" = "%@ wurde nicht beendet – schließe die App und versuche es erneut.";
+"appswitch.error.noAuth" = "Dieses Konto hat keine Codex-Anmeldung (auth.json). Melde dich erneut an.";

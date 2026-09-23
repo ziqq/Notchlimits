@@ -110,19 +110,22 @@
 // Добавление аккаунта
 "setup.claude.title" = "新しい Claude アカウント";
 "setup.codex.title" = "新しい Codex アカウント";
-"setup.profile.hint" = "このアカウントの短い名前を決めてください（例: work、personal）。列の見出しになり、CLI はその名前のフォルダに設定を保存します。";
+"setup.profile.hint" = "名前を空欄にするとメインアカウントでサインインします（Claude/Codex アプリと通常の CLI が使うアカウント）。追加アカウントには work などの短い名前を付けてください。列の見出しになり、CLI はその名前のフォルダに設定を保存します。";
 "setup.profile.terminal" = "「作成」を押すとターミナルが開きます。ログインはそこで行います。";
 "setup.profile.folder" = "フォルダ: %@";
+"setup.profile.main" = "メインアカウント: %@";
+"setup.profile.mainReplaces" = "メイン %@ — 現在のサインインを置き換えます。";
 "setup.profile.badChars" = "半角英字・数字・ハイフン・アンダースコアのみ。";
 "setup.profile.exists" = "同じ名前のプロファイルがすでにあります。";
 "setup.create" = "作成";
 "setup.badName.title" = "プロファイル名が不正です";
-"setup.badName.body" = "半角英字・数字・ハイフン・アンダースコアのみ。空や既存の名前は使えません。";
+"setup.badName.body" = "使えるのはラテン文字、数字、ハイフン、アンダースコアのみで、既存の名前は使えません。メインアカウントは空欄のままにします。";
 "setup.failed.title" = "プロファイルを作成できませんでした";
 "setup.missing.title" = "%@ が見つかりません";
 "setup.missing.body" = "CLI をインストールして再試行してください:\n\n%@";
 "setup.script.profile" = "プロファイル: %@";
 "setup.script.hint" = "ログインしたら、このウインドウを閉じてください。";
+"setup.script.relogin" = "すでにサインインしています。別のアカウントにするには /login と入力し、その後このウインドウを閉じてください。";
 "loginItem.failed.title" = "ログイン時の起動を変更できませんでした";
 
 // Статистика под окнами
@@ -159,12 +162,10 @@
 "menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Claude アプリのアカウント";
 "appswitch.title.codex" = "Codex アプリのアカウント";
-"appswitch.add" = "アプリのアカウントを追加…";
 "appswitch.confirm.title" = "アプリのアカウントを切り替えますか？";
 "appswitch.confirm.body" = "%@ を終了し「%@」で開き直します。現在のセッション/チャットは閉じます。";
 "appswitch.confirm.do" = "切り替えて再起動";
-"appswitch.add.title" = "アプリのアカウントを追加";
-"appswitch.add.body" = "半角英数の名前。%@ が新しいフォルダで開きます — サインインしてください。現在のセッションは閉じます。";
-"appswitch.add.do" = "作成して開く";
-"appswitch.add.badName" = "名前が不正または使用中です";
-"appswitch.add.failed" = "アプリのアカウントを作成できませんでした";
+"appswitch.error.title" = "アカウントを切り替えられませんでした";
+"appswitch.error.notInstalled" = "%@ がインストールされていません。";
+"appswitch.error.didNotQuit" = "%@ が終了しませんでした。終了してからもう一度お試しください。";
+"appswitch.error.noAuth" = "このアカウントには Codex のサインイン (auth.json) がありません。もう一度サインインしてください。";

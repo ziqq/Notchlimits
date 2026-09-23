@@ -110,19 +110,22 @@
 // Добавление аккаунта
 "setup.claude.title" = "새 Claude 계정";
 "setup.codex.title" = "새 Codex 계정";
-"setup.profile.hint" = "이 계정의 짧은 이름을 정하세요 — 예를 들어 work 또는 personal. 열 제목이 되고, CLI 는 그 이름의 폴더에 설정을 저장합니다.";
+"setup.profile.hint" = "이름을 비워 두면 기본 계정으로 로그인합니다(Claude/Codex 앱과 일반 CLI가 쓰는 계정). 추가 계정에는 work 같은 짧은 이름을 정하세요. 열 제목이 되고, CLI는 그 이름의 폴더에 설정을 보관합니다.";
 "setup.profile.terminal" = "‘생성’을 누르면 터미널이 열립니다. 로그인은 거기서 하세요.";
 "setup.profile.folder" = "폴더: %@";
+"setup.profile.main" = "기본 계정: %@";
+"setup.profile.mainReplaces" = "기본 계정 %@ — 현재 로그인을 교체합니다.";
 "setup.profile.badChars" = "영문자, 숫자, 하이픈, 밑줄만 가능합니다.";
 "setup.profile.exists" = "같은 이름의 프로파일이 이미 있습니다.";
 "setup.create" = "생성";
 "setup.badName.title" = "잘못된 프로파일 이름";
-"setup.badName.body" = "영문자, 숫자, 하이픈, 밑줄만 가능합니다. 비어 있거나 이미 사용 중이면 안 됩니다.";
+"setup.badName.body" = "라틴 문자, 숫자, 하이픈, 밑줄만 쓸 수 있고 이미 있는 이름은 안 됩니다. 기본 계정은 비워 두세요.";
 "setup.failed.title" = "프로파일을 만들지 못했습니다";
 "setup.missing.title" = "%@ 을(를) 찾지 못했습니다";
 "setup.missing.body" = "CLI 를 설치하고 다시 시도하세요:\n\n%@";
 "setup.script.profile" = "프로파일: %@";
 "setup.script.hint" = "로그인한 다음 이 창을 닫으세요.";
+"setup.script.relogin" = "이미 로그인되어 있습니다. 다른 계정으로 로그인하려면 /login을 입력한 뒤 이 창을 닫으세요.";
 "loginItem.failed.title" = "로그인 시 실행을 변경하지 못했습니다";
 
 // Статистика под окнами
@@ -159,12 +162,10 @@
 "menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Claude 앱 계정";
 "appswitch.title.codex" = "Codex 앱 계정";
-"appswitch.add" = "앱 계정 추가…";
 "appswitch.confirm.title" = "앱 계정을 전환할까요?";
 "appswitch.confirm.body" = "%@가 종료되고 “%@”로 다시 열립니다. 현재 세션/채팅이 닫힙니다.";
 "appswitch.confirm.do" = "전환 후 재시작";
-"appswitch.add.title" = "앱 계정 추가";
-"appswitch.add.body" = "영문 이름. %@가 새 폴더로 열립니다 — 로그인하세요. 현재 세션이 닫힙니다.";
-"appswitch.add.do" = "만들고 열기";
-"appswitch.add.badName" = "이름이 잘못되었거나 사용 중입니다";
-"appswitch.add.failed" = "앱 계정을 만들지 못했습니다";
+"appswitch.error.title" = "계정을 전환하지 못했습니다";
+"appswitch.error.notInstalled" = "%@이(가) 설치되어 있지 않습니다.";
+"appswitch.error.didNotQuit" = "%@이(가) 종료되지 않았습니다. 앱을 닫고 다시 시도하세요.";
+"appswitch.error.noAuth" = "이 계정에는 Codex 로그인(auth.json)이 없습니다. 다시 로그인하세요.";

@@ -33,7 +33,11 @@ enum ClaudeKeychain {
     }
 
     /// Имена всех generic password с нашим префиксом.
-    static func services() -> [String] {
+    static func services() -> [String] { items().map(\.service) }
+
+    /// Записи с датой последнего изменения. Только атрибуты — секрет не
+    /// читается, диалога пароля не будет.
+    static func items() -> [(service: String, modified: Date?)] {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecMatchLimit as String: kSecMatchLimitAll,
@@ -43,14 +47,47 @@ enum ClaudeKeychain {
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
               let items = result as? [[String: Any]] else { return [] }
 
-        let names = items
-            .compactMap { $0[kSecAttrService as String] as? String }
-            .filter { $0 == baseService || $0.hasPrefix(baseService + "-") }
-        return Array(Set(names)).sorted { lhs, rhs in
-            if lhs == baseService { return true }
-            if rhs == baseService { return false }
-            return lhs < rhs
+        var found: [String: Date?] = [:]
+        for item in items {
+            guard let service = item[kSecAttrService as String] as? String,
+                  service == baseService || service.hasPrefix(baseService + "-") else { continue }
+            found[service] = item[kSecAttrModificationDate as String] as? Date
         }
+        return found
+            .map { (service: $0.key, modified: $0.value) }
+            .sorted { lhs, rhs in
+                if lhs.service == baseService { return true }
+                if rhs.service == baseService { return false }
+                return lhs.service < rhs.service
+            }
+    }
+
+    /// Запись есть, но входа в ней нет. Голый `claude` пишет в базовую запись
+    /// служебное (`trustedDeviceToken`) даже без логина — это не аккаунт.
+    static func hasNoLogin(service: String) -> Bool {
+        guard let json = rawItem(service: service) else { return false }
+        return json["claudeAiOauth"] == nil
+    }
+
+    // MARK: - Записи без входа
+
+    private static let stubsKey = "claudeKeychainStubs"
+
+    /// Запомнить запись без входа вместе с датой изменения: пока запись та же,
+    /// колонкой её не показываем. Войдут в неё — дата сменится, и она снова
+    /// станет аккаунтом.
+    static func markNoLogin(service: String) {
+        guard let modified = items().first(where: { $0.service == service })?.modified else { return }
+        var stubs = UserDefaults.standard.dictionary(forKey: stubsKey) as? [String: Double] ?? [:]
+        stubs[service] = modified.timeIntervalSince1970
+        UserDefaults.standard.set(stubs, forKey: stubsKey)
+    }
+
+    static func isKnownNoLogin(service: String, modified: Date?) -> Bool {
+        guard let modified,
+              let stubs = UserDefaults.standard.dictionary(forKey: stubsKey) as? [String: Double],
+              let seen = stubs[service] else { return false }
+        return seen == modified.timeIntervalSince1970
     }
 
     /// Чтение секрета. Блокирующий вызов — только вне главного потока.

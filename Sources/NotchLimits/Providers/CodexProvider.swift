@@ -21,7 +21,9 @@ struct CodexProvider: UsageProvider {
             return .failure(L.t("error.unknownSource"))
         }
 
-        guard let auth = Self.readAuth(codexHome: home) else {
+        // Вход колонки может быть временно в ~/.codex (открыт в приложении).
+        let live = CodexAuthSwap.liveHome(columnID: account.id, home: home)
+        guard let auth = Self.readAuth(codexHome: live) else {
             return .reauth(L.t("column.reauth.codex"))
         }
         if let expiresAt = auth.expiresAt, expiresAt.timeIntervalSinceNow < 60 {

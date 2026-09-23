@@ -37,6 +37,12 @@ enum AccountRemoval {
             }
 
         case .codexHome(let url):
+            // Вход удаляемого аккаунта может быть подменён в ~/.codex —
+            // сперва раскладываем всё по местам.
+            if CodexAuthSwap.isSwapped,
+               [CodexAuthSwap.defaultColumnID, CodexAuthSwap.activeColumnID].contains(account.id) {
+                try CodexAuthSwap.restoreDefault()
+            }
             if url.path.hasPrefix(ProfileDirectories.codexRoot.path + "/") {
                 try fileManager.removeItem(at: url)           // доп. профиль — вся папка
             } else {

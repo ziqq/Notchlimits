@@ -10,19 +10,25 @@ struct RealDiscovery: AccountDiscovery {
     }
 
     private func claudeAccounts() -> [DiscoveredAccount] {
-        ClaudeKeychain.services().map { service in
-            let name = ClaudeKeychain.profileName(for: service)
-            return DiscoveredAccount(
-                id: "claude:\(service)",
-                provider: .claude,
-                profileName: name,
-                source: .claudeKeychain(service: service,
-                                        configDir: ClaudeKeychain.configDirectory(for: service)),
-                // Активна та запись, которую берёт голая команда `claude` —
-                // базовая запись Keychain без суффикса-хэша.
-                isActive: service == ClaudeKeychain.baseService
-            )
-        }
+        ClaudeKeychain.items()
+            // Записи без входа (их пишет голый `claude`) — не аккаунты.
+            .filter { !ClaudeKeychain.isKnownNoLogin(service: $0.service, modified: $0.modified) }
+            .map(\.service)
+            .map { service in
+                let name = ClaudeKeychain.profileName(for: service)
+                return DiscoveredAccount(
+                    id: "claude:\(service)",
+                    provider: .claude,
+                    profileName: name,
+                    source: .claudeKeychain(service: service,
+                                            configDir: ClaudeKeychain.configDirectory(for: service)),
+                    // Активен аккаунт, открытый в приложении Claude. Пока через нас
+                    // не переключались — тот, что берёт голая `claude` (базовая
+                    // запись Keychain без суффикса-хэша).
+                    isActive: ClaudeAppSwitcher().isOpenInApp(columnID: "claude:\(service)")
+                        ?? (service == ClaudeKeychain.baseService)
+                )
+            }
     }
 
     private func codexAccounts() -> [DiscoveredAccount] {
@@ -30,18 +36,18 @@ struct RealDiscovery: AccountDiscovery {
         // Переименование основного профиля не должно ронять кэш и уведомления.
         var homes: [(key: String, name: String, url: URL)] = []
 
-        let environment = ProcessInfo.processInfo.environment
-        let defaultHome = environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
-            ?? ProfileDirectories.home.appendingPathComponent(".codex")
-        if FileManager.default.fileExists(atPath: defaultHome.appendingPathComponent("auth.json").path) {
+        let defaultHome = CodexAuthSwap.baseHome
+        let defaultLive = CodexAuthSwap.liveHome(columnID: CodexAuthSwap.defaultColumnID, home: defaultHome)
+        if FileManager.default.fileExists(atPath: defaultLive.appendingPathComponent("auth.json").path) {
             homes.append((key: "default", name: ProfileDirectories.primaryName, url: defaultHome))
         }
 
         for directory in ProfileDirectories.codexProfiles() {
-            guard FileManager.default.fileExists(
-                atPath: directory.appendingPathComponent("auth.json").path
-            ) else { continue }
             let folder = directory.lastPathComponent
+            let live = CodexAuthSwap.liveHome(columnID: "codex:\(folder)", home: directory)
+            guard FileManager.default.fileExists(
+                atPath: live.appendingPathComponent("auth.json").path
+            ) else { continue }
             homes.append((key: folder, name: folder, url: directory))
         }
 
@@ -50,8 +56,9 @@ struct RealDiscovery: AccountDiscovery {
                               provider: .codex,
                               profileName: home.name,
                               source: .codexHome(home.url),
-                              // Активен базовый ~/.codex — его берёт голая `codex`.
-                              isActive: home.key == "default")
+                              // Активен тот, чей вход сейчас в ~/.codex: под ним
+                              // и приложение Codex, и голая `codex`.
+                              isActive: "codex:\(home.key)" == CodexAuthSwap.activeColumnID)
         }
     }
 }
