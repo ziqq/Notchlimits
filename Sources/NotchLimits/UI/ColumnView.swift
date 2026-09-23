@@ -36,12 +36,19 @@ struct ColumnView: View {
                 if !column.stats.isEmpty {
                     VStack(alignment: .leading, spacing: 3) {
                         ForEach(column.stats) { stat in
-                            HStack(spacing: 6) {
+                            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                                // Невидимая опора шрифта заголовка окна: строка
+                                // получает его высоту и базовую линию и стоит
+                                // вровень с окном соседней колонки.
+                                Text(" ")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .frame(width: 0)
+                                    .hidden()
                                 Text(stat.label)
                                     .font(.system(size: 9.5))
                                     .foregroundColor(Theme.tertiary)
                                     .lineLimit(1)
-                                Spacer(minLength: 4)
+                                Spacer(minLength: 10)
                                 Text(stat.value)
                                     .font(.system(size: 9.5, weight: .medium).monospacedDigit())
                                     .foregroundColor(Theme.secondary)
@@ -49,6 +56,8 @@ struct ColumnView: View {
                             }
                         }
                     }
+                    // Тот же шаг, что между окнами: строка на уровне следующего
+                    // окна соседних колонок.
                     .padding(.top, 10)
                 }
 
