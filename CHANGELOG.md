@@ -4,6 +4,12 @@
 ## Unreleased
 
 
+## 1.1.1 - 23/09/2026
+- **CHANGED**: The refresh button now sits right after "Updated … ago" as a light inline icon instead of a boxed button
+  in the far corner.
+- **FIXED**: "Early resets" lines up with the next limit window in neighbouring columns.
+
+
 ## 1.1.0 - 23/09/2026
 - **ADDED**: Desktop app account submenus for Claude and Codex. The list mirrors the panel columns; picking an account
   quits the app and reopens it under that account.
