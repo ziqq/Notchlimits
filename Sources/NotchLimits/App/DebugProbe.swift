@@ -152,6 +152,8 @@ enum DebugProbe {
                     print("  \(message)")
                 case .failure(let message):
                     print("  ошибка: \(message)")
+                case .notAnAccount:
+                    print("  не аккаунт: в записи нет входа")
                 }
                 group.leave()
             }

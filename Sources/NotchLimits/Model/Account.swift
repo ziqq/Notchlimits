@@ -17,8 +17,8 @@ struct DiscoveredAccount: Identifiable, Equatable {
     let source: AccountSource
     /// Почта аккаунта (из конфигов, без Keychain). Для дедупа и подсветки.
     var email: String? = nil
-    /// Аккаунт активен для голой команды (claude → базовый ~/.claude.json,
-    /// codex → базовый ~/.codex). Только его имя подсвечивается.
+    /// Аккаунт открыт в десктоп-приложении (Claude — по папке данных, Codex —
+    /// чей вход в ~/.codex). Только его имя подсвечивается.
     var isActive: Bool = false
 }
 
@@ -34,6 +34,8 @@ enum FetchOutcome {
     case rateLimited(retryAfter: TimeInterval?)
     /// Нет токена / 401 / 403 — нужен новый вход в CLI.
     case reauth(String)
+    /// В записи вообще нет входа — это не аккаунт (служебная запись CLI).
+    case notAnAccount
     case failure(String)
 }
 

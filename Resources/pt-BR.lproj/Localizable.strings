@@ -110,19 +110,22 @@
 // Добавление аккаунта
 "setup.claude.title" = "Nova conta Claude";
 "setup.codex.title" = "Nova conta Codex";
-"setup.profile.hint" = "Escolha um nome curto para esta conta — por exemplo work ou personal. Ele vira o título da coluna, e a CLI guarda as configurações numa pasta com esse nome.";
+"setup.profile.hint" = "Deixe o nome vazio para entrar com a conta principal — a usada pelo app Claude/Codex e pela CLI comum. Para uma conta extra, escolha um nome curto, por exemplo work: ele vira o título da coluna, e a CLI guarda as configurações numa pasta com esse nome.";
 "setup.profile.terminal" = "Depois de “Criar”, o Terminal abre — faça login por lá.";
 "setup.profile.folder" = "Pasta: %@";
+"setup.profile.main" = "Conta principal: %@";
+"setup.profile.mainReplaces" = "Conta principal %@ — substitui o login atual.";
 "setup.profile.badChars" = "Apenas letras latinas, dígitos, hífen e sublinhado.";
 "setup.profile.exists" = "Já existe um perfil com esse nome.";
 "setup.create" = "Criar";
 "setup.badName.title" = "Nome de perfil inválido";
-"setup.badName.body" = "Apenas letras latinas, dígitos, hífen e sublinhado. O nome não pode estar vazio nem repetido.";
+"setup.badName.body" = "Apenas letras latinas, dígitos, hífen e sublinhado, e o nome não pode estar em uso. Deixe vazio para a conta principal.";
 "setup.failed.title" = "Não foi possível criar o perfil";
 "setup.missing.title" = "Não encontrei %@";
 "setup.missing.body" = "Instale a CLI e tente de novo:\n\n%@";
 "setup.script.profile" = "Perfil: %@";
 "setup.script.hint" = "Faca login e feche esta janela.";
+"setup.script.relogin" = "Já existe um login — digite /login para entrar em outra conta e depois feche esta janela.";
 "loginItem.failed.title" = "Não foi possível mudar a abertura ao iniciar sessão";
 
 // Статистика под окнами
@@ -159,12 +162,10 @@
 "menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Conta do app Claude";
 "appswitch.title.codex" = "Conta do app Codex";
-"appswitch.add" = "Adicionar conta do app…";
 "appswitch.confirm.title" = "Trocar a conta do app?";
 "appswitch.confirm.body" = "O %@ vai fechar e reabrir como “%@”. A sessão/chat atual será fechada.";
 "appswitch.confirm.do" = "Trocar e reiniciar";
-"appswitch.add.title" = "Adicionar conta do app";
-"appswitch.add.body" = "Nome em latim. O %@ abre uma nova pasta — faça login. A sessão atual será fechada.";
-"appswitch.add.do" = "Criar e abrir";
-"appswitch.add.badName" = "Nome inválido ou em uso";
-"appswitch.add.failed" = "Não foi possível criar a conta do app";
+"appswitch.error.title" = "Não foi possível trocar de conta";
+"appswitch.error.notInstalled" = "%@ não está instalado.";
+"appswitch.error.didNotQuit" = "%@ não foi fechado — feche-o e tente novamente.";
+"appswitch.error.noAuth" = "Esta conta não tem login no Codex (auth.json). Entre novamente.";

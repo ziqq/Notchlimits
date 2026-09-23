@@ -136,14 +136,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Аккаунты по провайдерам: список — это колонки, плюс «Добавить…» внизу
         // того же подменю. Переключение закрывает и открывает приложение.
-        menu.addItem(appAccountSubmenu(switcher: .claude, provider: .claude,
+        menu.addItem(appAccountSubmenu(provider: .claude,
                                        title: L.t("appswitch.title"),
-                                       switchSelector: #selector(switchClaudeAppAccount(_:)),
                                        addTitle: L.t("menu.addClaude"),
                                        addSelector: #selector(addClaude)))
-        menu.addItem(appAccountSubmenu(switcher: .codex, provider: .codex,
+        menu.addItem(appAccountSubmenu(provider: .codex,
                                        title: L.t("appswitch.title.codex"),
-                                       switchSelector: #selector(switchCodexAppAccount(_:)),
                                        addTitle: L.t("menu.addCodex"),
                                        addSelector: #selector(addCodex)))
         menu.addItem(.separator())
@@ -181,32 +179,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menuItem
     }
 
-    /// Подменю «Аккаунт приложения»: те же аккаунты, что и колонки этого
-    /// провайдера, плюс «Добавить аккаунт…» внизу. Переключение закрывает и
-    /// открывает приложение под папкой данных этого аккаунта.
-    ///
-    /// Галочка — на аккаунте, куда переключались последним; если ещё не
-    /// переключались, помечаем активную колонку (базовый CLI-аккаунт), чтобы
-    /// пункт «текущий» был не пустым.
-    private func appAccountSubmenu(switcher: AppAccountSwitcher,
-                                   provider: Provider,
+    /// Подменю аккаунтов приложения: колонки провайдера и «Добавить аккаунт…»
+    /// внизу. Выбор закрывает приложение и открывает его под этим аккаунтом.
+    /// Галочка — на активной колонке (она же подсвечена в панели).
+    private func appAccountSubmenu(provider: Provider,
                                    title: String,
-                                   switchSelector: Selector,
                                    addTitle: String,
                                    addSelector: Selector) -> NSMenuItem {
         let root = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         let submenu = NSMenu()
         let columns = store.columns.filter { $0.provider == provider }
-        let current = switcher.currentAccountKey
         for column in columns {
-            let key = AppAccountSwitcher.key(for: column.id)
-            let isCurrent = current.isEmpty ? column.isActive : (key == current)
-            let entry = item(column.displayName, switchSelector, state: isCurrent ? .on : .off)
-            var payload = [key, column.displayName]
-            if case .codexHome(let home)? = store.source(for: column.id) {
-                payload.append(home.path)
-            }
-            entry.representedObject = payload
+            let entry = item(column.displayName, #selector(switchAppAccount(_:)),
+                             state: column.isActive ? .on : .off)
+            entry.representedObject = column.id
             submenu.addItem(entry)
         }
         if !columns.isEmpty { submenu.addItem(.separator()) }
@@ -407,29 +393,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Аккаунт десктоп-приложения (Claude / Codex)
 
-    @objc private func switchClaudeAppAccount(_ sender: NSMenuItem) {
-        switchAppAccount(sender, switcher: .claude)
-    }
-
-    @objc private func switchCodexAppAccount(_ sender: NSMenuItem) {
-        switchAppAccount(sender, switcher: .codex)
-    }
-
-    private func switchAppAccount(_ sender: NSMenuItem, switcher: AppAccountSwitcher) {
-        guard let payload = sender.representedObject as? [String], payload.count >= 2 else { return }
-        let key = payload[0], name = payload[1]
+    @objc private func switchAppAccount(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let account = store.account(for: id),
+              let column = store.columns.first(where: { $0.id == id }) else { return }
+        let switcher = appAccountSwitcher(for: account.provider)
         let confirm = NSAlert()
         confirm.messageText = L.t("appswitch.confirm.title")
-        confirm.informativeText = L.t("appswitch.confirm.body", switcher.appName, name)
+        confirm.informativeText = L.t("appswitch.confirm.body", switcher.appName, column.displayName)
         confirm.alertStyle = .warning
         let doButton = confirm.addButton(withTitle: L.t("appswitch.confirm.do"))
         let cancel = confirm.addButton(withTitle: L.t("common.cancel"))
         doButton.keyEquivalent = ""
         cancel.keyEquivalent = "\r"
         guard runModalAbovePanel(confirm) == .alertFirstButtonReturn else { return }
-        var codexHome: URL?
-        if payload.count > 2 { codexHome = URL(fileURLWithPath: payload[2]) }
-        switcher.switchTo(accountKey: key, codexHome: codexHome)
+        // Подсветку двигаем, только когда приложение реально открылось под
+        // новым аккаунтом, а не в момент клика.
+        switcher.switchTo(account) { [weak self] result in
+            guard let self else { return }
+            if case .failure(let error) = result {
+                self.errorAlert(L.t("appswitch.error.title"), error)
+            }
+            self.store.rediscover(force: true)
+        }
     }
 
     private func errorAlert(_ title: String, _ error: Error) {

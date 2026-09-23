@@ -110,19 +110,22 @@
 // Добавление аккаунта
 "setup.claude.title" = "Nouveau compte Claude";
 "setup.codex.title" = "Nouveau compte Codex";
-"setup.profile.hint" = "Choisissez un nom court pour ce compte — par exemple work ou personal. Il servira de titre de colonne, et le CLI rangera ses réglages dans un dossier de ce nom.";
+"setup.profile.hint" = "Laissez le nom vide pour vous connecter avec le compte principal — celui qu’utilisent l’app Claude/Codex et la CLI habituelle. Pour un compte supplémentaire, choisissez un nom court, par exemple work : il devient le titre de la colonne, et la CLI range ses réglages dans un dossier de ce nom.";
 "setup.profile.terminal" = "Après « Créer », le Terminal s’ouvre — connectez-vous là.";
 "setup.profile.folder" = "Dossier : %@";
+"setup.profile.main" = "Compte principal : %@";
+"setup.profile.mainReplaces" = "Compte principal %@ — remplace la connexion.";
 "setup.profile.badChars" = "Lettres latines, chiffres, tiret et tiret bas uniquement.";
 "setup.profile.exists" = "Un profil de ce nom existe déjà.";
 "setup.create" = "Créer";
 "setup.badName.title" = "Nom de profil invalide";
-"setup.badName.body" = "Lettres latines, chiffres, tiret et tiret bas uniquement. Le nom ne doit être ni vide ni déjà pris.";
+"setup.badName.body" = "Lettres latines, chiffres, tiret et tiret bas uniquement, et le nom ne doit pas être déjà pris. Laissez vide pour le compte principal.";
 "setup.failed.title" = "Impossible de créer le profil";
 "setup.missing.title" = "Impossible de trouver %@";
 "setup.missing.body" = "Installez le CLI puis réessayez :\n\n%@";
 "setup.script.profile" = "Profil : %@";
 "setup.script.hint" = "Connectez-vous, puis fermez cette fenetre.";
+"setup.script.relogin" = "Déjà connecté — tapez /login pour vous connecter à un autre compte, puis fermez cette fenêtre.";
 "loginItem.failed.title" = "Impossible de modifier le lancement à l’ouverture";
 
 // Статистика под окнами
@@ -159,12 +162,10 @@
 "menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Compte de l’app Claude";
 "appswitch.title.codex" = "Compte de l’app Codex";
-"appswitch.add" = "Ajouter un compte d’app…";
 "appswitch.confirm.title" = "Changer le compte de l’app ?";
 "appswitch.confirm.body" = "%@ va se fermer et rouvrir en « %@ ». La session/le chat en cours se fermera.";
 "appswitch.confirm.do" = "Changer et redémarrer";
-"appswitch.add.title" = "Ajouter un compte d’app";
-"appswitch.add.body" = "Nom en latin. %@ ouvre un nouveau dossier — connecte-toi. La session en cours se fermera.";
-"appswitch.add.do" = "Créer et ouvrir";
-"appswitch.add.badName" = "Nom invalide ou déjà pris";
-"appswitch.add.failed" = "Impossible de créer le compte d’app";
+"appswitch.error.title" = "Impossible de changer de compte";
+"appswitch.error.notInstalled" = "%@ n’est pas installé.";
+"appswitch.error.didNotQuit" = "%@ ne s’est pas fermé — fermez-le et réessayez.";
+"appswitch.error.noAuth" = "Ce compte n’a pas de connexion Codex (auth.json). Reconnectez-vous.";

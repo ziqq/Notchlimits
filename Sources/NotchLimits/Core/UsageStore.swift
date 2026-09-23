@@ -13,11 +13,6 @@ final class UsageStore: ObservableObject {
     var visibleColumns: [AccountColumn] { columns.filter { !hidden.contains($0.id) } }
     var hasHiddenColumns: Bool { !hidden.isEmpty }
 
-    /// Откуда колонка берёт учётные данные (папка codex-профиля и т.п.).
-    func source(for columnID: String) -> AccountSource? {
-        accounts.first(where: { $0.id == columnID })?.source
-    }
-
     var lastUpdatedAt: Date? {
         visibleColumns.compactMap(\.updatedAt).max()
     }
@@ -264,6 +259,15 @@ final class UsageStore: ObservableObject {
             state.backoffStep = 0
             state.nextDue = Date().addingTimeInterval(Schedule.interval)
             columns[index].status = .failed(message)
+
+        case .notAnAccount:
+            // Запись без входа: запоминаем и убираем колонку при пересборке.
+            if case .claudeKeychain(let service, _)? = account(for: id)?.source {
+                ClaudeKeychain.markNoLogin(service: service)
+            }
+            runtime[id] = state
+            rediscover(force: true)
+            return
         }
 
         runtime[id] = state

@@ -110,19 +110,22 @@
 // Добавление аккаунта
 "setup.claude.title" = "Yeni Claude hesabı";
 "setup.codex.title" = "Yeni Codex hesabı";
-"setup.profile.hint" = "Bu hesap için kısa bir ad seç — örneğin work ya da personal. Sütun başlığı olacak ve CLI ayarlarını bu adı taşıyan klasörde tutacak.";
+"setup.profile.hint" = "Ana hesapla giriş yapmak için adı boş bırak — Claude/Codex uygulamasının ve normal CLI'ın kullandığı hesap. Ek hesap için kısa bir ad seç, örneğin work: sütun başlığı olur ve CLI ayarlarını bu adlı klasörde tutar.";
 "setup.profile.terminal" = "“Oluştur”dan sonra Terminal açılır — girişi orada yap.";
 "setup.profile.folder" = "Klasör: %@";
+"setup.profile.main" = "Ana hesap: %@";
+"setup.profile.mainReplaces" = "Ana hesap %@ — mevcut girişin yerine geçer.";
 "setup.profile.badChars" = "Yalnızca Latin harfleri, rakam, tire ve alt çizgi.";
 "setup.profile.exists" = "Bu adda bir profil zaten var.";
 "setup.create" = "Oluştur";
 "setup.badName.title" = "Geçersiz profil adı";
-"setup.badName.body" = "Yalnızca Latin harfleri, rakam, tire ve alt çizgi. Ad boş ya da kullanımda olamaz.";
+"setup.badName.body" = "Yalnızca Latin harfleri, rakamlar, tire ve alt çizgi; ad kullanımda olmamalı. Ana hesap için boş bırak.";
 "setup.failed.title" = "Profil oluşturulamadı";
 "setup.missing.title" = "%@ bulunamadı";
 "setup.missing.body" = "CLI’yi kur ve tekrar dene:\n\n%@";
 "setup.script.profile" = "Profil: %@";
 "setup.script.hint" = "Giris yap, sonra bu pencereyi kapat.";
+"setup.script.relogin" = "Zaten giriş yapılmış — başka bir hesaba girmek için /login yaz, sonra bu pencereyi kapat.";
 "loginItem.failed.title" = "Girişte başlatma değiştirilemedi";
 
 // Статистика под окнами
@@ -159,12 +162,10 @@
 "menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Claude uygulama hesabı";
 "appswitch.title.codex" = "Codex uygulama hesabı";
-"appswitch.add" = "Uygulama hesabı ekle…";
 "appswitch.confirm.title" = "Uygulama hesabı değiştirilsin mi?";
 "appswitch.confirm.body" = "%@ kapanıp “%@” olarak yeniden açılacak. Mevcut oturum/sohbet kapanacak.";
 "appswitch.confirm.do" = "Değiştir ve yeniden başlat";
-"appswitch.add.title" = "Uygulama hesabı ekle";
-"appswitch.add.body" = "Latin ad. %@ yeni bir klasörde açılır — giriş yap. Mevcut oturum kapanacak.";
-"appswitch.add.do" = "Oluştur ve aç";
-"appswitch.add.badName" = "Geçersiz veya kullanılan ad";
-"appswitch.add.failed" = "Uygulama hesabı oluşturulamadı";
+"appswitch.error.title" = "Hesap değiştirilemedi";
+"appswitch.error.notInstalled" = "%@ yüklü değil.";
+"appswitch.error.didNotQuit" = "%@ kapanmadı — kapatıp tekrar dene.";
+"appswitch.error.noAuth" = "Bu hesabın Codex oturumu (auth.json) yok. Yeniden giriş yap.";

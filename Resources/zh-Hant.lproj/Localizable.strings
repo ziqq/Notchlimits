@@ -110,19 +110,22 @@
 // Добавление аккаунта
 "setup.claude.title" = "新的 Claude 帳號";
 "setup.codex.title" = "新的 Codex 帳號";
-"setup.profile.hint" = "為這個帳號取一個簡短的名稱，例如 work 或 personal。它會成為欄標題，CLI 也會把設定放在同名檔案夾裡。";
+"setup.profile.hint" = "名稱留空即以主帳號登入——Claude/Codex App 與一般 CLI 使用的帳號。額外帳號請取一個簡短名稱，例如 work：它會成為欄位標題，CLI 會把設定存放在同名資料夾中。";
 "setup.profile.terminal" = "點按「製作」後會開啟「終端機」，請在那裡登入。";
 "setup.profile.folder" = "檔案夾：%@";
+"setup.profile.main" = "主帳號：%@";
+"setup.profile.mainReplaces" = "主帳號 %@——將取代目前的登入。";
 "setup.profile.badChars" = "僅能使用拉丁字母、數字、連字號和底線。";
 "setup.profile.exists" = "同名的設定檔已存在。";
 "setup.create" = "製作";
 "setup.badName.title" = "設定檔名稱無效";
-"setup.badName.body" = "僅能使用拉丁字母、數字、連字號和底線。名稱不能空白或重複。";
+"setup.badName.body" = "只能使用拉丁字母、數字、連字號與底線，且名稱不能已被使用。主帳號請留空。";
 "setup.failed.title" = "無法製作設定檔";
 "setup.missing.title" = "找不到 %@";
 "setup.missing.body" = "請安裝 CLI 後再試一次：\n\n%@";
 "setup.script.profile" = "設定檔：%@";
 "setup.script.hint" = "登入後請關閉此視窗。";
+"setup.script.relogin" = "已登入——輸入 /login 以登入其他帳號，然後關閉此視窗。";
 "loginItem.failed.title" = "無法更改登入時啟動";
 
 // Статистика под окнами
@@ -159,12 +162,10 @@
 "menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Claude 應用程式帳戶";
 "appswitch.title.codex" = "Codex 應用程式帳戶";
-"appswitch.add" = "新增應用程式帳戶…";
 "appswitch.confirm.title" = "切換應用程式帳戶？";
 "appswitch.confirm.body" = "%@ 將結束並以「%@」重新開啟。目前工作階段/對話將關閉。";
 "appswitch.confirm.do" = "切換並重新啟動";
-"appswitch.add.title" = "新增應用程式帳戶";
-"appswitch.add.body" = "拉丁字母名稱。%@ 會在新資料夾中開啟——請登入帳戶。目前工作階段將關閉。";
-"appswitch.add.do" = "建立並開啟";
-"appswitch.add.badName" = "名稱無效或已被使用";
-"appswitch.add.failed" = "無法建立應用程式帳戶";
+"appswitch.error.title" = "無法切換帳號";
+"appswitch.error.notInstalled" = "未安裝 %@。";
+"appswitch.error.didNotQuit" = "%@ 未結束——請關閉後再試一次。";
+"appswitch.error.noAuth" = "此帳號沒有 Codex 登入資訊 (auth.json)。請重新登入。";

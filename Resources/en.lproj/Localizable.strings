@@ -110,19 +110,22 @@
 // Добавление аккаунта
 "setup.claude.title" = "New Claude account";
 "setup.codex.title" = "New Codex account";
-"setup.profile.hint" = "Pick a short name for this account — for example work or personal. It becomes the column heading, and the CLI keeps its settings in a folder of that name.";
+"setup.profile.hint" = "Leave the name empty to sign in as the main account — the one the Claude/Codex app and the plain CLI use. For an extra account pick a short name, e.g. work: it becomes the column heading, and the CLI keeps its settings in a folder of that name.";
 "setup.profile.terminal" = "After you click Create, Terminal opens — sign in there.";
 "setup.profile.folder" = "Folder: %@";
+"setup.profile.main" = "Main account: %@";
+"setup.profile.mainReplaces" = "Main account %@ — replaces the current sign-in.";
 "setup.profile.badChars" = "Latin letters, digits, hyphen and underscore only.";
 "setup.profile.exists" = "A profile with this name already exists.";
 "setup.create" = "Create";
 "setup.badName.title" = "Bad profile name";
-"setup.badName.body" = "Latin letters, digits, hyphen and underscore only. The name must not be empty or already taken.";
+"setup.badName.body" = "Latin letters, digits, hyphen and underscore only, and the name must not be taken. Leave it empty for the main account.";
 "setup.failed.title" = "Could not create the profile";
 "setup.missing.title" = "Couldn’t find %@";
 "setup.missing.body" = "Install the CLI and try again:\n\n%@";
 "setup.script.profile" = "Profile: %@";
 "setup.script.hint" = "Sign in, then close this window.";
+"setup.script.relogin" = "Already signed in — type /login to sign in to another account, then close this window.";
 "loginItem.failed.title" = "Could not change launch at login";
 
 // Статистика под окнами
@@ -159,12 +162,10 @@
 "menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Claude app account";
 "appswitch.title.codex" = "Codex app account";
-"appswitch.add" = "Add app account…";
 "appswitch.confirm.title" = "Switch app account?";
 "appswitch.confirm.body" = "%@ will quit and reopen as “%@”. The current session/chat will close.";
 "appswitch.confirm.do" = "Switch and restart";
-"appswitch.add.title" = "Add app account";
-"appswitch.add.body" = "Latin name. %@ opens in a new folder — sign in to the account. The current session will close.";
-"appswitch.add.do" = "Create and open";
-"appswitch.add.badName" = "Invalid or taken name";
-"appswitch.add.failed" = "Couldn't create the app account";
+"appswitch.error.title" = "Couldn't switch the account";
+"appswitch.error.notInstalled" = "%@ isn't installed.";
+"appswitch.error.didNotQuit" = "%@ didn't quit — close it and try again.";
+"appswitch.error.noAuth" = "This account has no Codex sign-in (auth.json). Sign in to it again.";
