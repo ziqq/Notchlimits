@@ -102,9 +102,9 @@ jobs:
             echo "Приложение фоновое — иконки в доке нет. Наведи курсор на челку,"
             echo "либо нажми ⌘P. Выход и настройки — правым кликом по панели."
             echo
-            # Раздел версии из CHANGELOG.md — от «## [X.Y.Z]» до следующего «## ».
+            # Раздел версии из CHANGELOG.md — от «## X.Y.Z - ДД/ММ/ГГГГ» до следующего «## ».
             CHANGES=$(awk -v v="${{ steps.meta.outputs.version }}" '
-              index($0, "## [" v "]") == 1 { on = 1; next }
+              $0 == "## " v || index($0, "## " v " ") == 1 { on = 1; next }
               on && /^## / { exit }
               on { print }
             ' CHANGELOG.md 2>/dev/null || true)
