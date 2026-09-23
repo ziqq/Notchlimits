@@ -2,6 +2,8 @@
 
 
 ## Unreleased
+- **ADDED**: Releases ship a drag-to-Applications DMG (`scripts/build_dmg.sh`) next to the `.zip`, which the in-app
+  updater keeps using; `SHA256SUMS.txt` covers both.
 
 
 ## 1.1.1 - 23/09/2026
