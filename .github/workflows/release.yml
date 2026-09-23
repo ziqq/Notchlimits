@@ -102,6 +102,17 @@ jobs:
             echo "Приложение фоновое — иконки в доке нет. Наведи курсор на челку,"
             echo "либо нажми ⌘P. Выход и настройки — правым кликом по панели."
             echo
+            # Раздел версии из CHANGELOG.md — от «## [X.Y.Z]» до следующего «## ».
+            CHANGES=$(awk -v v="${{ steps.meta.outputs.version }}" '
+              index($0, "## [" v "]") == 1 { on = 1; next }
+              on && /^## / { exit }
+              on { print }
+            ' CHANGELOG.md 2>/dev/null || true)
+            if [ -n "$(printf '%s' "$CHANGES" | tr -d '[:space:]')" ]; then
+              echo "## Что нового"
+              printf '%s\n' "$CHANGES"
+              echo
+            fi
             echo "## ${HEADING}"
             echo
             git log --no-merges --pretty='- %s (%h)' ${RANGE} | head -100
