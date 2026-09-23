@@ -1,43 +1,31 @@
-# Список изменений
+# Changelog
 
-Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии —
-[семвер](https://semver.org/lang/ru/). Раздел версии целиком попадает в
-заметки к релизу на GitHub.
 
-## [1.1.0] — 2026-09-23
+## Unreleased
 
-### Добавлено
 
-- **Аккаунт десктоп-приложения Claude и Codex** — подменю в меню панели.
-  Список аккаунтов совпадает с колонками; выбор закрывает приложение и
-  открывает его под этим аккаунтом.
-  - Claude: у каждого аккаунта своя папка данных приложения. Первый переход
-    на аккаунт — один раз войти.
-  - Codex: подменяется только вход в `~/.codex/auth.json`, поэтому проекты,
-    треды и сайдбар остаются на месте. Голый `codex` в терминале работает под
-    тем же аккаунтом, что и приложение.
-- Имя колонки аккаунта, открытого в приложении, подсвечено. Подсветка
-  переезжает, только когда приложение действительно перезапустилось.
-- **Основной аккаунт при добавлении**: пустое имя (или `main`) — вход в
-  стандартное место CLI (`~/.claude` / `~/.codex`) вместо отдельного профиля.
-  Если основной вход уже есть, диалог предупреждает, что он будет заменён.
-- Понятные ошибки переключения: приложение не закрылось, у аккаунта нет входа.
+## 1.1.0 - 23/09/2026
+- **ADDED**: Desktop app account submenus for Claude and Codex. The list mirrors the panel columns; picking an account
+  quits the app and reopens it under that account.
+- **ADDED**: Claude desktop app keeps a separate data folder per account; the first switch to an account asks you to
+  sign in once.
+- **ADDED**: Codex desktop app switching swaps only `~/.codex/auth.json`, so projects, threads, and the sidebar stay in
+  place; the plain `codex` CLI uses the same account as the app.
+- **ADDED**: The column of the account open in the desktop app is highlighted; the highlight moves only after the app
+  has actually relaunched.
+- **ADDED**: Adding an account with an empty name (or `main`) signs in to the CLI's standard location (`~/.claude` /
+  `~/.codex`) instead of creating a profile, with a warning when it replaces an existing sign-in.
+- **ADDED**: Clear errors when switching fails: the app did not quit, or the account has no sign-in.
+- **FIXED**: A phantom Claude "main" column no longer appears: a Keychain entry without a login (bare `claude` writes
+  one) is not treated as an account until someone signs in to it.
+- **FIXED**: Limit windows without a reset date keep their row height, so columns no longer shift against each other.
+- **FIXED**: Codex "Early resets" shows the real number of available resets.
+- **FIXED**: Dialogs open above the notch panel instead of under it.
+- **FIXED**: Incomplete profiles (folder without a sign-in) can be removed from the menu.
+- **REMOVED**: The CLI "active account" switcher that swapped the base credentials; it clashed with the app account and
+  corrupted the shared Claude sign-in.
+- **CHANGED**: Release notes now include the version's section from `CHANGELOG.md`.
 
-### Исправлено
 
-- Лишняя колонка «main» у Claude: запись Keychain без входа (её пишет голый
-  `claude`) больше не считается аккаунтом. Войдут в неё — колонка появится.
-- Окна в колонках не съезжают, когда у окна ещё нет даты сброса.
-- Codex: «Досрочные сбросы» показывают реальное число доступных.
-- Диалоги открываются поверх панели, а не под ней.
-- Незавершённые профили (папка есть, входа нет) можно удалить из меню.
-
-### Убрано
-
-- Переключатель «активного аккаунта CLI» через подмену базовой записи: он
-  путался с аккаунтом приложения и портил общий вход Claude.
-
-## Ранние версии
-
-До 1.1.0 список изменений собирался из коммитов — см.
-[релизы на GitHub](https://github.com/ziqq/Notchlimits/releases).
+## 1.0.2 - 11/09/2026
+- **ADDED**: "About Notch Limits" menu item showing the running version.
