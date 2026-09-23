@@ -136,27 +136,16 @@ private struct FooterView: View {
     @ObservedObject var state: PanelState
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .center, spacing: 5) {
             TimelineView(.periodic(from: .now, by: state.expanded ? 1 : 600)) { context in
                 Text(footerText(now: context.date))
                     .font(.system(size: 10))
                     .foregroundColor(Theme.tertiary)
             }
-            Spacer(minLength: 8)
-            Button {
-                store.refreshAll(force: true)
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(Theme.secondary)
-                    .frame(width: 22, height: 18)
-                    .background(
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(Color.white.opacity(0.08))
-                    )
-            }
-            .buttonStyle(.plain)
-            .help(L.t("panel.refresh.help"))
+            // Кнопка — сразу за временем обновления: это одно действие про
+            // одну цифру, а не отдельный элемент в дальнем углу.
+            RefreshButton { store.refreshAll(force: true) }
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 14)
         .padding(.top, 6)
@@ -165,5 +154,27 @@ private struct FooterView: View {
     private func footerText(now: Date) -> String {
         guard let latest = store.lastUpdatedAt else { return L.t("panel.noData") }
         return L.t("panel.updated", Format.age(latest, now: now))
+    }
+}
+
+/// Обновить сейчас: лёгкая иконка сразу за «Обновлено … назад», в тон тексту.
+/// Без подложки — рядом с мелкой строкой плашка смотрелась кривой. Отклик
+/// на наведение — цветом и едва заметным кругом.
+private struct RefreshButton: View {
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundColor(hovering ? Theme.primary : Theme.tertiary)
+                .frame(width: 18, height: 18)
+                .background(Circle().fill(Color.white.opacity(hovering ? 0.1 : 0)))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(L.t("panel.refresh.help"))
     }
 }
