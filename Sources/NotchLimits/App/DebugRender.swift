@@ -15,7 +15,7 @@ enum DebugRender {
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
         renderPanel(to: root.appendingPathComponent("panel.png"), columns: healthyColumns())
-        renderPanel(to: root.appendingPathComponent("states.png"), columns: mixedColumns())
+        renderPanel(to: root.appendingPathComponent("states.png"), columns: mixedColumns(), extraHeight: 40)
         renderCollapsed(to: root.appendingPathComponent("collapsed.png"))
 
         exit(0)
@@ -24,7 +24,7 @@ enum DebugRender {
     // MARK: - Сцены
 
     @MainActor
-    private static func renderPanel(to url: URL, columns: [AccountColumn]) {
+    private static func renderPanel(to url: URL, columns: [AccountColumn], extraHeight: CGFloat = 16) {
         let store = UsageStore(providers: [:], discovery: MockDiscovery())
         store.setColumnsForRendering(columns)
 
@@ -33,8 +33,8 @@ enum DebugRender {
         state.expanded = true
         state.expandedSize = state.geometry.expandedSize(columnCount: columns.count)
         // ImageRenderer не гоняет цикл предпочтений, поэтому высоту под
-        // перенесённые названия закладываем здесь вручную.
-        state.expandedSize.height += 16
+        // перенесённые названия (и строки под окнами) закладываем здесь вручную.
+        state.expandedSize.height += extraHeight
 
         let panelSize = state.expandedSize
         let scene = ZStack(alignment: .top) {
@@ -101,7 +101,8 @@ enum DebugRender {
 
     private static func healthyColumns() -> [AccountColumn] {
         var main = AccountColumn(id: "claude:main", provider: .claude, profileName: "main")
-        main.subtitle = "user@example.com"
+        main.subtitle = "Pro · user@example.com"
+        main.isActive = true      // открыт в приложении Claude — имя подсвечено
         main.updatedAt = Date()
         main.status = .ok
         main.windows = [
@@ -115,7 +116,7 @@ enum DebugRender {
         ]
 
         var work = AccountColumn(id: "claude:work", provider: .claude, profileName: "work")
-        work.subtitle = "work@example.com"
+        work.subtitle = "Max · work@example.com"
         work.updatedAt = Date()
         work.status = .ok
         work.windows = [
@@ -125,8 +126,10 @@ enum DebugRender {
                         resetsAt: Date().addingTimeInterval(30 * hour))
         ]
 
-        var codex = AccountColumn(id: "codex:default", provider: .codex, profileName: "default")
-        codex.subtitle = "codex@example.com"
+        var codex = AccountColumn(id: "codex:default", provider: .codex,
+                                  profileName: ProfileDirectories.primaryName)
+        codex.subtitle = "Plus · codex@example.com"
+        codex.isActive = true
         codex.updatedAt = Date()
         codex.status = .ok
         codex.windows = [
@@ -137,6 +140,7 @@ enum DebugRender {
             LimitWindow(key: "spark.secondary", title: "GPT-5.3-Codex-Spark · " + L.t("window.week"),
                         utilization: 87, resetsAt: Date().addingTimeInterval(168 * hour))
         ]
+        codex.stats = [UsageStat(key: "resetCredits", label: L.t("stat.resetCredits"), value: "3")]
 
         return [main, work, codex]
     }
