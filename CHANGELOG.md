@@ -2,8 +2,13 @@
 
 
 ## Unreleased
+
+
+## 1.1.2 - 24/09/2026
 - **ADDED**: Releases ship a drag-to-Applications DMG (`scripts/build_dmg.sh`) next to the `.zip`, which the in-app
   updater keeps using; `SHA256SUMS.txt` covers both.
+- **CHANGED**: README screenshots are re-rendered in English and show the current panel: plan in the subtitle, the
+  active-account highlight, and Codex "Early resets".
 
 
 ## 1.1.1 - 23/09/2026
