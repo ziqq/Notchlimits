@@ -1,4 +1,4 @@
-# NotchLimits
+# Notch Limits
 
 **English** · [Русский](README.ru.md)
 
@@ -71,7 +71,7 @@ The primary profile of both providers is labeled `main`, so headers don't diverg
 
 ## Hotkey
 
-Default is **⌘P**. Being a global hotkey, it overrides "Print" elsewhere while NotchLimits runs — so it's configurable via right-click → **Hotkey**:
+Default is **⌘P**. Being a global hotkey, it overrides "Print" elsewhere while Notch Limits runs — so it's configurable via right-click → **Hotkey**:
 
 - **Change…** captures the next keypress. At least one of ⌘, ⌥, ⌃ is required, or a global hotkey would swallow ordinary input.
 - **Default (⌘P)** / **Disable** (leaves only hover and click).
