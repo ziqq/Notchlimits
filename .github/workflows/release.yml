@@ -99,7 +99,7 @@ jobs:
             echo
             echo "## Установка"
             echo
-            echo "Открой **${{ steps.package.outputs.dmg }}** и перетащи NotchLimits в папку"
+            echo "Открой **${{ steps.package.outputs.dmg }}** и перетащи Notch Limits в папку"
             echo "«Программы» (Applications), затем сними карантин и запусти:"
             echo
             echo '```bash'
@@ -172,7 +172,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.meta.outputs.tag }}" -m "NotchLimits ${{ steps.meta.outputs.version }}"
+          git tag -a "${{ steps.meta.outputs.tag }}" -m "Notch Limits ${{ steps.meta.outputs.version }}"
           git push origin "${{ steps.meta.outputs.tag }}"
 
       - name: Публикация
@@ -183,7 +183,7 @@ jobs:
             "${{ steps.package.outputs.dmg }}" \
             "${{ steps.package.outputs.name }}" \
             SHA256SUMS.txt \
-            --title "NotchLimits ${{ steps.meta.outputs.version }}" \
+            --title "Notch Limits ${{ steps.meta.outputs.version }}" \
             --notes-file NOTES.md
 
   notify:
