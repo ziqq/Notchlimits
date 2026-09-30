@@ -20,8 +20,8 @@
 // Колонка
 "column.updating" = "обновляю…";
 "column.stale" = "данные %@";
-"column.reauth.claude" = "re-auth: запусти claude";
-"column.reauth.codex" = "re-auth: запусти codex";
+"column.reauth" = "re-auth";
+"column.reauth.help" = "Открыть Terminal и заново войти в этот аккаунт. Запущенное приложение не трогаем.";
 
 // Панель
 "panel.updated" = "Обновлено %@";
@@ -126,6 +126,7 @@
 "setup.script.profile" = "Профиль: %@";
 "setup.script.hint" = "Войди в аккаунт, затем закрой это окно.";
 "setup.script.relogin" = "Вход уже есть — набери /login, чтобы войти в другой аккаунт, затем закрой это окно.";
+"setup.script.reauth" = "Набери /login и войди, потом закрой это окно.";
 "loginItem.failed.title" = "Не получилось изменить запуск при входе";
 
 // Статистика под окнами

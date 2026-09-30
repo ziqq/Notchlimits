@@ -20,8 +20,8 @@
 // Колонка
 "column.updating" = "yenileniyor…";
 "column.stale" = "%@ verisi";
-"column.reauth.claude" = "yeniden giriş: claude çalıştır";
-"column.reauth.codex" = "yeniden giriş: codex çalıştır";
+"column.reauth" = "Yeniden giriş";
+"column.reauth.help" = "Terminal'i aç ve bu hesaba yeniden giriş yap. Çalışan uygulamaya dokunulmaz.";
 
 // Панель
 "panel.updated" = "Güncellendi %@";
@@ -126,6 +126,7 @@
 "setup.script.profile" = "Profil: %@";
 "setup.script.hint" = "Giris yap, sonra bu pencereyi kapat.";
 "setup.script.relogin" = "Zaten giriş yapılmış — başka bir hesaba girmek için /login yaz, sonra bu pencereyi kapat.";
+"setup.script.reauth" = "/login yaz ve giriş yap, sonra bu pencereyi kapat.";
 "loginItem.failed.title" = "Girişte başlatma değiştirilemedi";
 
 // Статистика под окнами

@@ -92,6 +92,67 @@ enum AccountSetup {
         launch(script: script, in: directory, completion: completion)
     }
 
+    // MARK: - Повторный вход
+
+    /// Войти заново в аккаунт колонки — в Terminal, в его собственном месте.
+    /// Приложение Claude/Codex не переключаем и не перезапускаем: вход
+    /// спящего профиля живёт отдельно от того, что открыто в приложении.
+    static func relogin(_ account: DiscoveredAccount, completion: @escaping () -> Void) {
+        switch account.source {
+        case .claudeKeychain(let service, let configDir):
+            guard let binary = BinaryLocator.claude() else {
+                showMissingBinary(name: "claude",
+                                  install: "curl -fsSL https://claude.ai/install.sh | bash")
+                return
+            }
+            // Без папки конфига — базовая запись, её берёт голая `claude`.
+            // Запись с хэшем, чью папку не нашли, во вход основного не превращаем.
+            guard configDir != nil || service == ClaudeKeychain.baseService else {
+                showAlert(title: L.t("setup.failed.title"), message: L.t("error.unknownSource"))
+                return
+            }
+            let directory = configDir
+                ?? DesktopApp.supportDirectory.appendingPathComponent("login/claude-main")
+            let config = configDir.map { "export CLAUDE_CONFIG_DIR=\"\($0.path)\"" }
+                ?? "unset CLAUDE_CONFIG_DIR"
+            let script = """
+            #!/bin/zsh
+            # NotchLimits: Claude Code re-auth "\(account.profileName)" (\(service)).
+            unset ANTHROPIC_API_KEY
+            \(config)
+            echo "\(L.t("setup.script.profile", configDir?.path ?? Target.claude.mainLabel))"
+            echo "\(L.t("setup.script.reauth"))"
+            "\(binary.path)"
+            """
+            launch(script: script, in: directory, completion: completion)
+
+        case .codexHome(let home):
+            guard let binary = BinaryLocator.codex() else {
+                showMissingBinary(name: "codex", install: "brew install codex")
+                return
+            }
+            // Входим туда, где вход колонки лежит прямо сейчас: для основного
+            // аккаунта это может быть запас, пока в ~/.codex чужой.
+            let live = CodexAuthSwap.liveHome(columnID: account.id, home: home)
+            try? FileManager.default.createDirectory(at: live, withIntermediateDirectories: true)
+            let directory = CodexAuthSwap.isBaseHome(live) || live == CodexAuthSwap.stashHome
+                ? Target.codex.mainScriptDirectory
+                : live
+            let script = """
+            #!/bin/zsh
+            # NotchLimits: Codex re-auth "\(account.profileName)".
+            export CODEX_HOME="\(live.path)"
+            echo "\(L.t("setup.script.profile", live.path))"
+            echo "\(L.t("setup.script.hint"))"
+            "\(binary.path)" login
+            """
+            launch(script: script, in: directory, completion: completion)
+
+        case .mock:
+            return
+        }
+    }
+
     // MARK: - Детали
 
     /// Куда добавляется аккаунт: папка доп. профилей и основное место CLI.

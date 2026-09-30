@@ -20,8 +20,8 @@
 // Колонка
 "column.updating" = "actualizando…";
 "column.stale" = "datos de %@";
-"column.reauth.claude" = "reautenticar: ejecuta claude";
-"column.reauth.codex" = "reautenticar: ejecuta codex";
+"column.reauth" = "Reautenticar";
+"column.reauth.help" = "Abrir Terminal y volver a iniciar sesión en esta cuenta. La app en ejecución no se toca.";
 
 // Панель
 "panel.updated" = "Actualizado %@";
@@ -126,6 +126,7 @@
 "setup.script.profile" = "Perfil: %@";
 "setup.script.hint" = "Inicia sesion y cierra esta ventana.";
 "setup.script.relogin" = "Ya hay una sesión: escribe /login para entrar con otra cuenta y luego cierra esta ventana.";
+"setup.script.reauth" = "Escribe /login, inicia sesión y cierra esta ventana.";
 "loginItem.failed.title" = "No se ha podido cambiar el inicio de sesión";
 
 // Статистика под окнами

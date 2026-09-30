@@ -88,7 +88,8 @@ private struct ExpandedContent: View {
                                 .frame(width: 1)
                                 .padding(.vertical, 2)
                         }
-                        ColumnView(column: column)
+                        ColumnView(column: column,
+                                   onRelogin: state.onRelogin.map { relogin in { relogin(column.id) } })
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 14)
                     }

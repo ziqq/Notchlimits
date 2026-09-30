@@ -20,8 +20,8 @@
 // Колонка
 "column.updating" = "wird aktualisiert…";
 "column.stale" = "Daten von %@";
-"column.reauth.claude" = "Neu anmelden: claude starten";
-"column.reauth.codex" = "Neu anmelden: codex starten";
+"column.reauth" = "Neu anmelden";
+"column.reauth.help" = "Terminal öffnen und dieses Konto neu anmelden. Die laufende App bleibt unberührt.";
 
 // Панель
 "panel.updated" = "Aktualisiert %@";
@@ -126,6 +126,7 @@
 "setup.script.profile" = "Profil: %@";
 "setup.script.hint" = "Melde dich an und schliesse dieses Fenster.";
 "setup.script.relogin" = "Bereits angemeldet – gib /login ein, um dich mit einem anderen Konto anzumelden, und schließe dann dieses Fenster.";
+"setup.script.reauth" = "Gib /login ein, melde dich an und schließe dann dieses Fenster.";
 "loginItem.failed.title" = "Anmeldeobjekt konnte nicht geändert werden";
 
 // Статистика под окнами

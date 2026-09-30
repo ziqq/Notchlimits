@@ -25,6 +25,10 @@ enum CodexAuthSwap {
     private static let activeIDKey = "codexAppAccountID"
     private static let activeHomeKey = "codexAppAccountHome"
 
+    /// Перестановка входов и запись продлённых токенов не должны пересечься:
+    /// иначе в `~/.codex` уедет уже потраченный refresh-токен.
+    private static let lock = NSLock()
+
     /// Базовый CODEX_HOME: его берут голая `codex` и приложение.
     static var baseHome: URL {
         ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }
@@ -51,8 +55,14 @@ enum CodexAuthSwap {
         return home
     }
 
+    static func isBaseHome(_ url: URL) -> Bool {
+        url.standardizedFileURL.path == baseHome.standardizedFileURL.path
+    }
+
     /// Положить в `~/.codex` вход колонки. Приложение должно быть закрыто.
     static func activate(columnID: String, home: URL) throws {
+        lock.lock()
+        defer { lock.unlock() }
         guard columnID != activeColumnID else { return }
         let incoming = columnID == defaultColumnID ? stashHome : home
         // Проверяем до всяких перестановок, чтобы не остаться на полпути.
@@ -74,6 +84,38 @@ enum CodexAuthSwap {
     static func restoreDefault() throws {
         try activate(columnID: defaultColumnID, home: baseHome)
     }
+
+    /// Записать продлённые токены туда, где вход колонки лежит сейчас.
+    /// Пишем, только если в файле всё ещё тот refresh-токен, которым мы
+    /// продлевали: иначе его уже обновил кто-то другой, и наш ответ устарел.
+    static func storeRenewed(columnID: String, home: URL, usedRefreshToken: String,
+                             tokens: CodexOAuth.Tokens) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        let file = auth(liveHome(columnID: columnID, home: home))
+        guard let data = try? Data(contentsOf: file),
+              var root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var stored = root["tokens"] as? [String: Any],
+              stored["refresh_token"] as? String == usedRefreshToken
+        else { return }
+
+        stored["access_token"] = tokens.accessToken
+        if let idToken = tokens.idToken { stored["id_token"] = idToken }
+        if let refreshToken = tokens.refreshToken { stored["refresh_token"] = refreshToken }
+        root["tokens"] = stored
+        root["last_refresh"] = timestamp.string(from: Date())
+
+        let updated = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .withoutEscapingSlashes])
+        try updated.write(to: file, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+    }
+
+    /// Формат `last_refresh`, как у CLI: RFC 3339 с долями секунды.
+    private static let timestamp: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
 
     /// Вход, что сейчас в `~/.codex`, — обратно владельцу.
     private static func giveBackCurrent() throws {

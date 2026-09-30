@@ -20,8 +20,8 @@
 // Колонка
 "column.updating" = "refreshing…";
 "column.stale" = "data from %@";
-"column.reauth.claude" = "re-auth: run claude";
-"column.reauth.codex" = "re-auth: run codex";
+"column.reauth" = "re-auth";
+"column.reauth.help" = "Open Terminal and sign in to this account again. The running app is not touched.";
 
 // Панель
 "panel.updated" = "Updated %@";
@@ -126,6 +126,7 @@
 "setup.script.profile" = "Profile: %@";
 "setup.script.hint" = "Sign in, then close this window.";
 "setup.script.relogin" = "Already signed in — type /login to sign in to another account, then close this window.";
+"setup.script.reauth" = "Type /login and sign in, then close this window.";
 "loginItem.failed.title" = "Could not change launch at login";
 
 // Статистика под окнами
