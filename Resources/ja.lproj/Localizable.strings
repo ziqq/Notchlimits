@@ -20,8 +20,8 @@
 // Колонка
 "column.updating" = "更新中…";
 "column.stale" = "%@のデータ";
-"column.reauth.claude" = "再認証: claude を実行";
-"column.reauth.codex" = "再認証: codex を実行";
+"column.reauth" = "再認証";
+"column.reauth.help" = "ターミナルを開いてこのアカウントに再ログインします。実行中のアプリには影響しません。";
 
 // Панель
 "panel.updated" = "更新 %@";
@@ -126,6 +126,7 @@
 "setup.script.profile" = "プロファイル: %@";
 "setup.script.hint" = "ログインしたら、このウインドウを閉じてください。";
 "setup.script.relogin" = "すでにサインインしています。別のアカウントにするには /login と入力し、その後このウインドウを閉じてください。";
+"setup.script.reauth" = "/login と入力してログインし、このウインドウを閉じてください。";
 "loginItem.failed.title" = "ログイン時の起動を変更できませんでした";
 
 // Статистика под окнами

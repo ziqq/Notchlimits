@@ -31,6 +31,8 @@ enum DebugRender {
         let state = PanelState()
         state.geometry = notchedScreen
         state.expanded = true
+        // Чип re-auth рисуем в рабочем виде, а не выключенным.
+        state.onRelogin = { _ in }
         state.expandedSize = state.geometry.expandedSize(columnCount: columns.count)
         // ImageRenderer не гоняет цикл предпочтений, поэтому высоту под
         // перенесённые названия (и строки под окнами) закладываем здесь вручную.
@@ -152,7 +154,7 @@ enum DebugRender {
         columns[1].windows = []
         columns[1].subtitle = nil
         columns[1].updatedAt = nil
-        columns[1].status = .reauth(L.t("column.reauth.claude"))
+        columns[1].status = .reauth(L.t("column.reauth"))
 
         columns[2].updatedAt = Date().addingTimeInterval(-11 * 60)
         columns[2].status = .waiting(until: Date().addingTimeInterval(180))

@@ -13,4 +13,6 @@ final class PanelState: ObservableObject {
 
     /// Сообщение из вёрстки о фактической высоте колонок.
     var onColumnsHeightChange: ((CGFloat) -> Void)?
+    /// Нажатие на чип re-auth в колонке: id колонки.
+    var onRelogin: ((String) -> Void)?
 }

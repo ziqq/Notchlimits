@@ -25,6 +25,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         store.onColumnsChanged = { [weak self] in self?.panel.recomputeExpandedSize() }
         panel.onWillOpen = { [weak self] in self?.store.refreshStale() }
+        panel.state.onRelogin = { [weak self] id in
+            guard let self, let account = self.store.account(for: id) else { return }
+            AccountSetup.relogin(account) { [weak self] in
+                self?.store.rediscover(force: true)
+                self?.store.refreshAll(force: true)
+            }
+        }
         panel.onContextMenu = { [weak self] event, view in
             self?.showContextMenu(event: event, view: view)
         }

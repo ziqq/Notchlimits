@@ -1,7 +1,7 @@
 import Foundation
 
 /// Сетевые запросы приложения — только официальные эндпоинты Anthropic и
-/// OpenAI: usage у обоих плюс обновление OAuth-токена Anthropic.
+/// OpenAI: usage у обоих плюс обновление OAuth-токенов.
 /// Кэш URLSession отключён, куки не хранятся.
 struct HTTPClient {
 
@@ -36,20 +36,22 @@ struct HTTPClient {
 
     /// POST с телом JSON. Ретрай тот же, что у GET: обновление токена
     /// идемпотентно ровно до тех пор, пока сервер не ответил, — а 5xx и обрыв
-    /// означают, что ответа не было.
-    func post(_ url: URL, headers: [String: String], json: [String: Any]) async -> Result<Response, Failure> {
+    /// означают, что ответа не было. `retry: false` — для одноразовых токенов,
+    /// где повтор после потерянного ответа хуже, чем пропущенный цикл.
+    func post(_ url: URL, headers: [String: String], json: [String: Any],
+              retry: Bool = true) async -> Result<Response, Failure> {
         guard let body = try? JSONSerialization.data(withJSONObject: json) else {
             return .failure(.transport(L.t("error.network")))
         }
         var merged = headers
         merged["Content-Type"] = "application/json"
-        return await send("POST", url, headers: merged, body: body)
+        return await send("POST", url, headers: merged, body: body, attempts: retry ? 2 : 1)
     }
 
-    private func send(_ method: String, _ url: URL,
-                      headers: [String: String], body: Data?) async -> Result<Response, Failure> {
+    private func send(_ method: String, _ url: URL, headers: [String: String],
+                      body: Data?, attempts: Int = 2) async -> Result<Response, Failure> {
         var lastError = L.t("error.unreachable")
-        for attempt in 0..<2 {
+        for attempt in 0..<attempts {
             if attempt > 0 { try? await Task.sleep(nanoseconds: 800_000_000) }
             do {
                 var request = URLRequest(url: url)
@@ -62,7 +64,7 @@ struct HTTPClient {
                     lastError = L.t("error.noHTTP")
                     continue
                 }
-                if (500...599).contains(http.statusCode), attempt == 0 {
+                if (500...599).contains(http.statusCode), attempt < attempts - 1 {
                     lastError = L.t("error.http", http.statusCode)
                     continue
                 }

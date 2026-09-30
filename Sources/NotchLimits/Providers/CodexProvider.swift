@@ -21,13 +21,28 @@ struct CodexProvider: UsageProvider {
             return .failure(L.t("error.unknownSource"))
         }
 
+        // Спящий вход продлеваем заранее, пока приложение на другом аккаунте.
+        if await CodexRenewal.shared.renew(columnID: account.id, home: home, force: false) == .rejected {
+            return .reauth(L.t("column.reauth"))
+        }
+
+        let outcome = await request(account, home: home)
+        guard case .reauth = outcome else { return outcome }
+        // Сервер отверг ещё живой по сроку токен — пробуем продлить и повторить.
+        guard await CodexRenewal.shared.renew(columnID: account.id, home: home, force: true) == .renewed else {
+            return outcome
+        }
+        return await request(account, home: home)
+    }
+
+    private func request(_ account: DiscoveredAccount, home: URL) async -> FetchOutcome {
         // Вход колонки может быть временно в ~/.codex (открыт в приложении).
         let live = CodexAuthSwap.liveHome(columnID: account.id, home: home)
         guard let auth = Self.readAuth(codexHome: live) else {
-            return .reauth(L.t("column.reauth.codex"))
+            return .reauth(L.t("column.reauth"))
         }
         if let expiresAt = auth.expiresAt, expiresAt.timeIntervalSinceNow < 60 {
-            return .reauth(L.t("column.reauth.codex"))
+            return .reauth(L.t("column.reauth"))
         }
 
         let headers = [
@@ -53,7 +68,7 @@ struct CodexProvider: UsageProvider {
                                               windows: windows,
                                               stats: Self.stats(from: response.data)))
             case 401, 403:
-                return .reauth(L.t("column.reauth.codex"))
+                return .reauth(L.t("column.reauth"))
             case 429:
                 return .rateLimited(retryAfter: response.retryAfter)
             default:

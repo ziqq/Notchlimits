@@ -20,8 +20,8 @@
 // Колонка
 "column.updating" = "正在刷新…";
 "column.stale" = "%@的数据";
-"column.reauth.claude" = "重新认证：运行 claude";
-"column.reauth.codex" = "重新认证：运行 codex";
+"column.reauth" = "重新认证";
+"column.reauth.help" = "打开终端并重新登录此账户。正在运行的应用不受影响。";
 
 // Панель
 "panel.updated" = "更新于 %@";
@@ -126,6 +126,7 @@
 "setup.script.profile" = "配置：%@";
 "setup.script.hint" = "登录后关闭此窗口。";
 "setup.script.relogin" = "已登录——输入 /login 以登录其他账户，然后关闭此窗口。";
+"setup.script.reauth" = "输入 /login 并登录，然后关闭此窗口。";
 "loginItem.failed.title" = "无法更改登录时启动";
 
 // Статистика под окнами

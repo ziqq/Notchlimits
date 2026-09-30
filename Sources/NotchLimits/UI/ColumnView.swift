@@ -1,7 +1,10 @@
+import AppKit
 import SwiftUI
 
 struct ColumnView: View {
     let column: AccountColumn
+    /// Повторный вход по нажатию на чип re-auth. nil — чип не нажимается.
+    var onRelogin: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -64,7 +67,10 @@ struct ColumnView: View {
                 // Причину, по которой данные замерли, показываем прямо над
                 // возрастом: иначе протухший токен выглядит просто как старые
                 // цифры, и непонятно, что надо перелогиниться.
-                if let problem = Self.problem(for: column.status) {
+                if case .reauth(let message) = column.status {
+                    ReauthChip(title: message, action: onRelogin)
+                        .padding(.top, 8)
+                } else if let problem = Self.problem(for: column.status) {
                     Text(problem.message)
                         .font(.system(size: 9.5))
                         .foregroundColor(problem.color)
@@ -78,7 +84,7 @@ struct ColumnView: View {
                         .padding(.top, Self.problem(for: column.status) == nil ? 8 : 2)
                 }
             } else {
-                PlaceholderView(status: column.status)
+                PlaceholderView(status: column.status, onRelogin: onRelogin)
             }
 
             Spacer(minLength: 0)
@@ -109,9 +115,12 @@ struct ColumnView: View {
 
 private struct PlaceholderView: View {
     let status: ColumnStatus
+    let onRelogin: (() -> Void)?
 
     var body: some View {
-        if let problem = ColumnView.problem(for: status) {
+        if case .reauth(let message) = status {
+            ReauthChip(title: message, action: onRelogin)
+        } else if let problem = ColumnView.problem(for: status) {
             Text(problem.message)
                 .font(.system(size: 10.5))
                 .foregroundColor(problem.color)
@@ -127,6 +136,43 @@ private struct PlaceholderView: View {
                     .foregroundColor(Theme.tertiary)
             }
         }
+    }
+}
+
+/// Маленький жёлтый чип «re-auth»: по нажатию открывается Terminal со
+/// входом в этот аккаунт. Подложка и рамка — чтобы было видно, что это
+/// кнопка, а не просто надпись; размер — как у мелкого текста колонки.
+private struct ReauthChip: View {
+    let title: String
+    let action: (() -> Void)?
+    @State private var hovering = false
+
+    var body: some View {
+        Button { action?() } label: {
+            Text(title)
+                .font(.system(size: 9.5, weight: .semibold))
+                .lineLimit(1)
+            .foregroundColor(Theme.yellow.opacity(hovering ? 1 : 0.9))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2.5)
+            .background(Capsule().fill(Theme.yellow.opacity(hovering ? 0.24 : 0.13)))
+            .overlay(Capsule().strokeBorder(Theme.yellow.opacity(hovering ? 0.55 : 0.32), lineWidth: 0.5))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(action == nil)
+        .fixedSize()
+        .onHover { inside in
+            // pop — только в пару к своему push, чужой курсор не снимаем.
+            if inside, action != nil, !hovering {
+                hovering = true
+                NSCursor.pointingHand.push()
+            } else if !inside, hovering {
+                hovering = false
+                NSCursor.pop()
+            }
+        }
+        .help(L.t("column.reauth.help"))
     }
 }
 

@@ -20,8 +20,8 @@
 // Колонка
 "column.updating" = "새로고침 중…";
 "column.stale" = "%@ 데이터";
-"column.reauth.claude" = "재인증: claude 실행";
-"column.reauth.codex" = "재인증: codex 실행";
+"column.reauth" = "재인증";
+"column.reauth.help" = "터미널을 열어 이 계정에 다시 로그인합니다. 실행 중인 앱은 건드리지 않습니다.";
 
 // Панель
 "panel.updated" = "업데이트 %@";
@@ -126,6 +126,7 @@
 "setup.script.profile" = "프로파일: %@";
 "setup.script.hint" = "로그인한 다음 이 창을 닫으세요.";
 "setup.script.relogin" = "이미 로그인되어 있습니다. 다른 계정으로 로그인하려면 /login을 입력한 뒤 이 창을 닫으세요.";
+"setup.script.reauth" = "/login을 입력해 로그인한 뒤 이 창을 닫으세요.";
 "loginItem.failed.title" = "로그인 시 실행을 변경하지 못했습니다";
 
 // Статистика под окнами

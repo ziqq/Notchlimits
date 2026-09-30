@@ -20,8 +20,8 @@
 // Колонка
 "column.updating" = "更新中…";
 "column.stale" = "%@的資料";
-"column.reauth.claude" = "重新認證：執行 claude";
-"column.reauth.codex" = "重新認證：執行 codex";
+"column.reauth" = "重新認證";
+"column.reauth.help" = "打開終端機並重新登入此帳號。正在執行的 App 不受影響。";
 
 // Панель
 "panel.updated" = "更新於 %@";
@@ -126,6 +126,7 @@
 "setup.script.profile" = "設定檔：%@";
 "setup.script.hint" = "登入後請關閉此視窗。";
 "setup.script.relogin" = "已登入——輸入 /login 以登入其他帳號，然後關閉此視窗。";
+"setup.script.reauth" = "輸入 /login 並登入，然後關閉此視窗。";
 "loginItem.failed.title" = "無法更改登入時啟動";
 
 // Статистика под окнами

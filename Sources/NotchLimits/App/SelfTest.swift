@@ -20,6 +20,7 @@ enum SelfTest {
         checkWindowTitles()
         checkJWT()
         checkClaudeAuth()
+        checkCodexAuth()
         checkNotifications()
         checkBurnRate()
         checkUpdateCheck()
@@ -313,6 +314,27 @@ enum SelfTest {
         expect("ответ без срока отвергнут",
                ClaudeOAuth.parse(Data(#"{"access_token":"a"}"#.utf8), now: now) == nil)
         expect("мусор не ломает", ClaudeOAuth.parse(Data("не json".utf8), now: now) == nil)
+    }
+
+    private static func checkCodexAuth() {
+        section("Продление входа Codex")
+        let full = CodexOAuth.parse(Data(#"{"id_token":"i","access_token":"a","refresh_token":"r"}"#.utf8))
+        expect("ответ разобран", full?.accessToken == "a" && full?.idToken == "i")
+        expect("ротация подхвачена", full?.refreshToken == "r")
+        let bare = CodexOAuth.parse(Data(#"{"access_token":"a","refresh_token":""}"#.utf8))
+        expect("пустой refresh-токен не затирает прежний", bare != nil && bare?.refreshToken == nil)
+        expect("ответ без access-токена отвергнут",
+               CodexOAuth.parse(Data(#"{"refresh_token":"r"}"#.utf8)) == nil)
+
+        // Окончательный отказ — только invalid_grant и коды про refresh-токен,
+        // в каком бы поле они ни пришли. Прочие 400 — временная беда.
+        expect("invalid_grant строкой", CodexOAuth.isPermanent(Data(#"{"error":"invalid_grant"}"#.utf8)))
+        expect("код в error.code",
+               CodexOAuth.isPermanent(Data(#"{"error":{"code":"refresh_token_reused"}}"#.utf8)))
+        expect("код на верхнем уровне",
+               CodexOAuth.isPermanent(Data(#"{"code":"refresh_token_expired"}"#.utf8)))
+        expect("прочий 400 не приговор", !CodexOAuth.isPermanent(Data(#"{"error":"invalid_request"}"#.utf8)))
+        expect("мусор не приговор", !CodexOAuth.isPermanent(Data("не json".utf8)))
     }
 
     private static func checkNotifications() {
