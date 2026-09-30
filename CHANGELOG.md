@@ -4,6 +4,14 @@
 ## Unreleased
 
 
+## 1.2.0 - 30/09/2026
+- **ADDED**: Codex accounts that aren't open in the desktop app renew their sign-in in the background, two days before
+  the 10-day token runs out, so they no longer go stale until you switch the app to them. The sign-in in `~/.codex` is
+  left to the app and the CLI.
+- **CHANGED**: "re-auth" in a column is now a small button: it opens Terminal and signs in to exactly that account
+  (`codex login` / `claude` in its own folder), without switching or restarting the desktop app.
+
+
 ## 1.1.2 - 24/09/2026
 - **ADDED**: Releases ship a drag-to-Applications DMG (`scripts/build_dmg.sh`) next to the `.zip`, which the in-app
   updater keeps using; `SHA256SUMS.txt` covers both.
