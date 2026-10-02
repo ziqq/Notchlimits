@@ -153,6 +153,8 @@
 "error.unknownSource" = "不明なソース";
 "error.noProvider" = "プロバイダなし";
 "error.unreachable" = "ネットワークに接続できません";
+
+// Переключение приложений
 "switch.activeMark" = "%@ · 使用中";
 "switch.empty" = "アカウントがまだありません";
 "switch.applyHint" = "新しいセッションに適用されます。実行中のもの（ターミナルとこのアプリ）は再起動して反映してください。";

@@ -153,6 +153,8 @@
 "error.unknownSource" = "bilinmeyen kaynak";
 "error.noProvider" = "sağlayıcı yok";
 "error.unreachable" = "ağ kullanılamıyor";
+
+// Переключение приложений
 "switch.activeMark" = "%@ · etkin";
 "switch.empty" = "Henüz hesap yok";
 "switch.applyHint" = "Yeni oturumlara uygulanır. Açık olanları (terminal ve bu uygulama) yeniden başlatın.";

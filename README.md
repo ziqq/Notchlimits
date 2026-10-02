@@ -201,7 +201,7 @@ The app makes no automatic request beyond the two usage endpoints above and Anth
 
 ## CI & releases
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push to `main`, every PR, and on demand: regenerate translations and check `Resources/*.lproj` didn't drift, `plutil -lint` the strings, verify the icon generator produces a valid `.icns`, `./build.sh`, self-test, and bundle checks (`Info.plist` validity, signature, `LSUIElement`, icon, all 14 locales), then upload the `.app` artifact.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push to `main`, every PR, and on demand: regenerate translations and check `Resources/*.lproj` didn't drift, `plutil -lint` the strings, regression-test the generator against all committed translations and repeat generation, verify the icon generator produces a valid `.icns`, `./build.sh`, self-test, and bundle checks (`Info.plist` validity, signature, `LSUIElement`, icon, all 14 locales), then upload the `.app` artifact.
 
 The self-test (`NOTCHLIMITS_SELFTEST=1`) needs no network, Keychain, or window server, and covers Claude/Codex parsing (garbage, `null` windows, unknown keys), window order and titles, JWT claims, time/age/percent formatting, cache and hotkey serialization, and localization completeness — matching key sets, no empty values, and **format specifiers matching English**, or `String(format:)` would crash in another language.
 

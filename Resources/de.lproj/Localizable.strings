@@ -153,6 +153,8 @@
 "error.unknownSource" = "unbekannte Quelle";
 "error.noProvider" = "kein Anbieter";
 "error.unreachable" = "Netzwerk nicht verfügbar";
+
+// Переключение приложений
 "switch.activeMark" = "%@ · aktiv";
 "switch.empty" = "Noch keine Konten";
 "switch.applyHint" = "Gilt für neue Sitzungen. Laufende (Terminal und diese App) neu starten, um es anzuwenden.";

@@ -38,6 +38,9 @@ jobs:
       - name: Синтаксис файлов локализации
         run: plutil -lint Resources/*.lproj/Localizable.strings
 
+      - name: Генератор сохраняет переводы
+        run: python3 -m unittest discover -s Tools -p 'test_*.py'
+
       - name: Генератор иконки работает
         run: |
           swift Tools/make-icon.swift

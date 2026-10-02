@@ -153,6 +153,8 @@
 "error.unknownSource" = "来源未知";
 "error.noProvider" = "没有提供方";
 "error.unreachable" = "网络不可用";
+
+// Переключение приложений
 "switch.activeMark" = "%@ · 使用中";
 "switch.empty" = "暂无账户";
 "switch.applyHint" = "对新会话生效。正在运行的（终端和本应用）需重启才能应用。";
