@@ -186,6 +186,29 @@ jobs:
             --title "Notch Limits ${{ steps.meta.outputs.version }}" \
             --notes-file NOTES.md
 
+  complete-issues:
+    name: Complete issues after successful publication
+    needs: [release]
+    if: needs.release.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    concurrency:
+      group: labels-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Apply semantic release transition
+        uses: ziqq/actions/labeler@a991545704ba3fc43380d2b6024db3ca6935e4a7
+        with:
+          operation: release-completed
+          github-token: ${{ github.token }}
+          config-source: api
+          allow-empty: 'true'
+          allow-pattern-removal: 'true'
+          max-targets: '100'
+
   notify:
     name: Notify release result
     needs: release
