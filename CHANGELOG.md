@@ -2,6 +2,8 @@
 
 
 ## Unreleased
+- **FIXED**: The translation generator now preserves all 141 existing keys and current account-switching text in
+  all 14 languages; CI verifies complete, repeatable generation without dropping translations.
 
 
 ## 1.2.0 - 30/09/2026

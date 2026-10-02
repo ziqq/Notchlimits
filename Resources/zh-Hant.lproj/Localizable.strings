@@ -153,6 +153,8 @@
 "error.unknownSource" = "來源不明";
 "error.noProvider" = "沒有提供者";
 "error.unreachable" = "網路無法使用";
+
+// Переключение приложений
 "switch.activeMark" = "%@ · 使用中";
 "switch.empty" = "尚無帳戶";
 "switch.applyHint" = "對新工作階段生效。正在執行的（終端機和本應用程式）需重新啟動才會套用。";

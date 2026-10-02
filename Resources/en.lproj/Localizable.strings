@@ -153,6 +153,8 @@
 "error.unknownSource" = "unknown source";
 "error.noProvider" = "no provider";
 "error.unreachable" = "network unavailable";
+
+// Переключение приложений
 "switch.activeMark" = "%@ · active";
 "switch.empty" = "No accounts yet";
 "switch.applyHint" = "Applies to new sessions. Restart any running ones (terminal and this app) to apply.";

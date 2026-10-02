@@ -45,6 +45,11 @@ See [GitHub token event rules](https://docs.github.com/en/actions/concepts/secur
 
 ## Notifications
 
+The CI translation generator includes all 141 existing keys in all 14 languages.
+Its regression test generates files in an isolated directory, compares every
+byte with the committed translations, and verifies repeatable generation.
+Existing translation text is preserved; the drift check remains mandatory.
+
 `.github/workflows/notifications.yml` calls
 `ziqq/actions/.github/workflows/notify-events.yml@7737ce8c4d87c656b7ccf5f78138d8d7e53a1b62`
 to send required Discord and Telegram notifications for newly opened issues

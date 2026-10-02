@@ -153,6 +153,8 @@
 "error.unknownSource" = "nieznane źródło";
 "error.noProvider" = "brak dostawcy";
 "error.unreachable" = "sieć niedostępna";
+
+// Переключение приложений
 "switch.activeMark" = "%@ · aktywne";
 "switch.empty" = "Brak kont";
 "switch.applyHint" = "Dotyczy nowych sesji. Uruchom ponownie działające (terminal i tę aplikację), aby zastosować.";

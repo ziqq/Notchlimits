@@ -153,6 +153,8 @@
 "error.unknownSource" = "origen desconocido";
 "error.noProvider" = "sin proveedor";
 "error.unreachable" = "red no disponible";
+
+// Переключение приложений
 "switch.activeMark" = "%@ · activo";
 "switch.empty" = "Aún no hay cuentas";
 "switch.applyHint" = "Se aplica a sesiones nuevas. Reinicia las abiertas (terminal y esta app) para aplicarlo.";
