@@ -4,6 +4,13 @@
 ## Unreleased
 
 
+## 1.2.2 - 05/10/2026
+- **FIXED**: Semantic label events queue per issue, pull request, or discussion instead of in one shared queue, so a
+  burst of events (for example a pull request closing together with a comment) no longer cancels pending runs. Push,
+  branch, and manual runs still share the queue with release issue completion.
+- **CHANGED**: Every workflow pins the labeler to the same version.
+
+
 ## 1.2.1 - 05/10/2026
 - **FIXED**: Renewing a Claude token no longer risks losing the login. NotchLimits checks it can write to the Keychain
   entry before renewing, keeps a renewed token it failed to save and retries, so a revoked refresh token is never left
