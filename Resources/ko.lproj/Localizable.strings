@@ -146,6 +146,7 @@
 
 // Ошибки в колонке
 "error.network" = "네트워크 오류";
+"error.keychainWrite" = "키체인에 쓸 수 없음";
 "error.timeout" = "시간 초과";
 "error.noHTTP" = "HTTP 응답 없음";
 "error.http" = "HTTP %d";

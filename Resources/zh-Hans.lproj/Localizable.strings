@@ -146,6 +146,7 @@
 
 // Ошибки в колонке
 "error.network" = "网络错误";
+"error.keychainWrite" = "无法写入钥匙串";
 "error.timeout" = "超时";
 "error.noHTTP" = "没有 HTTP 响应";
 "error.http" = "HTTP %d";

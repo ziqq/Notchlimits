@@ -24,6 +24,12 @@ actor ClaudeProvider: UsageProvider {
     /// Почта из CLI, по одной на профиль. Пустое значение — «уже пробовали,
     /// не вышло»: подпроцесс на каждый цикл ради косметики гонять незачем.
     private var emails: [String: String] = [:]
+    /// Продлённые токены, которые не удалось записать в Keychain. Сервер уже
+    /// отозвал прежний refresh-токен, так что это единственная живая копия:
+    /// пробуем записать на каждом цикле, пока не выйдет.
+    private var unsaved: [String: ClaudeOAuth.Tokens] = [:]
+    /// Почему токена нет, если дело не во входе (сеть, запись в Keychain).
+    private var issues: [String: String] = [:]
     private let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
 
     func fetch(_ account: DiscoveredAccount) async -> FetchOutcome {
@@ -32,6 +38,7 @@ actor ClaudeProvider: UsageProvider {
         }
 
         guard let token = await token(for: service) else {
+            if let issue = issues[service] { return .failure(issue) }
             let noLogin = await Task.detached(priority: .utility) {
                 ClaudeKeychain.hasNoLogin(service: service)
             }.value
@@ -89,6 +96,11 @@ actor ClaudeProvider: UsageProvider {
     // MARK: - Токен
 
     private func token(for service: String) async -> CachedToken? {
+        issues[service] = nil
+        if let pending = unsaved[service] {
+            // Сначала дописываем то, что не записалось в прошлый раз.
+            if await write(pending, to: service) { unsaved[service] = nil }
+        }
         if let cached = tokens[service], cached.isUsable { return cached }
         tokens[service] = nil
 
@@ -106,19 +118,35 @@ actor ClaudeProvider: UsageProvider {
 
         // Токен протух. Раньше мы просто просили запустить claude; теперь
         // продлеваем сами — CLI мог не запускаться сутками.
-        guard credentials.isRefreshable, let refreshToken = credentials.refreshToken else { return nil }
+        // Не дописанный в Keychain токен новее того, что там лежит.
+        let refreshToken: String
+        if let pending = unsaved[service]?.refreshToken {
+            refreshToken = pending
+        } else if credentials.isRefreshable, let stored = credentials.refreshToken {
+            refreshToken = stored
+        } else {
+            return nil
+        }
+
+        // Сервер при продлении отзывает прежний refresh-токен. Не сможем
+        // записать новый — в Keychain останется мёртвый, и CLI обнулит вход.
+        // Поэтому без права записи не продлеваем вовсе.
+        let writable = await Task.detached(priority: .utility) {
+            ClaudeKeychain.canWrite(service: service)
+        }.value
+        guard writable else {
+            issues[service] = L.t("error.keychainWrite")
+            return nil
+        }
 
         switch await ClaudeOAuth.refresh(refreshToken: refreshToken, scopes: credentials.scopes) {
         case .success(let fresh):
             // В Keychain пишем ТОЛЬКО когда сервер сменил refresh-токен: старый
             // тогда отозван, и без записи сломался бы вход CLI. Если ротации не
             // было — новый refresh-токен не выдан, старый ещё годен, писать
-            // незачем. Это важно: каждая запись дёргает диалог Keychain, а
-            // access-токен и так живёт в памяти до следующего обновления.
+            // незачем: access-токен и так живёт в памяти до следующего обновления.
             if fresh.refreshToken != nil {
-                _ = await Task.detached(priority: .utility) {
-                    ClaudeKeychain.save(service: service, tokens: fresh)
-                }.value
+                unsaved[service] = await write(fresh, to: service) ? nil : fresh
             }
             let cached = CachedToken(value: fresh.accessToken,
                                      expiresAt: fresh.expiresAt,
@@ -137,8 +165,16 @@ actor ClaudeProvider: UsageProvider {
             return nil
 
         case .unavailable:
+            // Сеть — не повод просить войти заново.
+            issues[service] = L.t("error.network")
             return nil
         }
+    }
+
+    private func write(_ fresh: ClaudeOAuth.Tokens, to service: String) async -> Bool {
+        await Task.detached(priority: .utility) {
+            ClaudeKeychain.save(service: service, tokens: fresh)
+        }.value
     }
 
     /// SecItemCopyMatching блокирует поток, пока пользователь отвечает на диалог.

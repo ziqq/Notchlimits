@@ -146,6 +146,7 @@
 
 // Ошибки в колонке
 "error.network" = "ネットワークエラー";
+"error.keychainWrite" = "キーチェーンに書き込めません";
 "error.timeout" = "タイムアウト";
 "error.noHTTP" = "HTTP 応答なし";
 "error.http" = "HTTP %d";

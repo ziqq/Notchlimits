@@ -96,6 +96,18 @@ enum ClaudeKeychain {
         return parse(json)
     }
 
+    /// Код ответа Keychain на чтение секрета — для диагностики (NOTCHLIMITS_PROBE).
+    static func readStatus(service: String) -> OSStatus {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecReturnData as String: true
+        ]
+        var result: CFTypeRef?
+        return SecItemCopyMatching(query as CFDictionary, &result)
+    }
+
     /// Сырой JSON записи. Нужен отдельно, чтобы при записи сохранить поля,
     /// про которые мы не знаем: их пишет CLI, и терять их нельзя.
     private static func rawItem(service: String) -> [String: Any]? {
@@ -160,6 +172,20 @@ enum ClaudeKeychain {
         json["claudeAiOauth"] = oauth
         guard let data = try? JSONSerialization.data(withJSONObject: json) else { return false }
 
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service
+        ]
+        return SecItemUpdate(query as CFDictionary,
+                             [kSecValueData as String: data] as CFDictionary) == errSecSuccess
+    }
+
+    /// Можно ли писать в запись: перезаписываем её же содержимым. Проверяем
+    /// ДО продления — сервер отзывает прежний refresh-токен, и если новый
+    /// потом не записать, в Keychain останется мёртвый, а CLI, наткнувшись
+    /// на него, обнулит вход. Блокирующий вызов — только вне главного потока.
+    static func canWrite(service: String) -> Bool {
+        guard let data = rawData(service: service) else { return false }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service

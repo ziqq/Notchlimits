@@ -146,6 +146,7 @@
 
 // Ошибки в колонке
 "error.network" = "erro de rede";
+"error.keychainWrite" = "sem gravação no Keychain";
 "error.timeout" = "tempo esgotado";
 "error.noHTTP" = "sem resposta HTTP";
 "error.http" = "HTTP %d";

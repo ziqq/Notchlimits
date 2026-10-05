@@ -146,6 +146,7 @@
 
 // Ошибки в колонке
 "error.network" = "errore di rete";
+"error.keychainWrite" = "nessuna scrittura nel portachiavi";
 "error.timeout" = "timeout";
 "error.noHTTP" = "nessuna risposta HTTP";
 "error.http" = "HTTP %d";

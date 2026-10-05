@@ -146,6 +146,7 @@
 
 // Ошибки в колонке
 "error.network" = "Netzwerkfehler";
+"error.keychainWrite" = "kein Schreibzugriff auf den Schlüsselbund";
 "error.timeout" = "Zeitüberschreitung";
 "error.noHTTP" = "keine HTTP-Antwort";
 "error.http" = "HTTP %d";

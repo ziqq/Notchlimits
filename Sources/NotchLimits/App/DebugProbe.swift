@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Security
 
 /// Проверка провайдеров без GUI: `NOTCHLIMITS_PROBE=1 ./NotchLimits`.
 /// Печатает то же, что увидит панель. Токены не печатаются никогда.
@@ -121,6 +122,8 @@ enum DebugProbe {
         checkHotKeyManager()
         checkClaudeParser()
 
+        checkClaudeTokens()
+
         let accounts = RealDiscovery().discover()
         print("найдено аккаунтов: \(accounts.count)")
         for account in accounts {
@@ -165,5 +168,50 @@ enum DebugProbe {
         }
         // Ждём завершения задач в общем runloop.
         return true
+    }
+
+    /// Почему колонка Claude просит re-auth: по шагам, без самих токенов.
+    private static func checkClaudeTokens() {
+        print("\nКлюч Claude в Keychain:")
+        for service in ClaudeKeychain.services() {
+            print("  \(service): запись \(ClaudeKeychain.canWrite(service: service) ? "можно" : "НЕЛЬЗЯ")")
+            guard let credentials = ClaudeKeychain.credentials(service: service) else {
+                let status = ClaudeKeychain.readStatus(service: service)
+                let text = SecCopyErrorMessageString(status, nil) as String? ?? ""
+                print("  \(service): не прочитано, OSStatus \(status) \(text)")
+                print("    форма: \(shape(ClaudeKeychain.rawData(service: service)))")
+                continue
+            }
+            let hours = credentials.expiresAt.map { String(format: "%.1f ч", $0.timeIntervalSinceNow / 3600) } ?? "без срока"
+            let refreshHours = credentials.refreshTokenExpiresAt
+                .map { String(format: "%.1f ч", $0.timeIntervalSinceNow / 3600) } ?? "без срока"
+            print("  \(service): доступ истекает через \(hours), refresh: \(credentials.isRefreshable ? "есть" : "нет") (\(refreshHours)), права: \(credentials.scopes.joined(separator: " "))")
+        }
+    }
+
+    /// Устройство записи без значений: ключи и типы, для не-JSON — вид байтов.
+    private static func shape(_ data: Data?) -> String {
+        guard let data else { return "нет данных" }
+        if let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) {
+            return "JSON " + describe(object)
+        }
+        let text = String(data: data, encoding: .utf8)
+        let isHex = text.map { $0.allSatisfy(\.isHexDigit) } ?? false
+        return "не JSON, \(data.count) байт, utf8: \(text != nil), hex: \(isHex), первый байт: \(data.first.map { String($0) } ?? "-")"
+    }
+
+    private static func describe(_ value: Any) -> String {
+        switch value {
+        case let dict as [String: Any]:
+            return "{" + dict.keys.sorted().map { "\($0): \(describe(dict[$0]!))" }.joined(separator: ", ") + "}"
+        case let array as [Any]: return "[\(array.count)]"
+        case let string as String: return string.isEmpty ? "str(пусто)" : "str"
+        case let number as NSNumber:
+            // Сроки в миллисекундах показываем датой — это не секрет.
+            let value = number.doubleValue
+            return value > 1e12 ? ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: value / 1000)) : "num(\(value))"
+        case is NSNull: return "null"
+        default: return "?"
+        }
     }
 }

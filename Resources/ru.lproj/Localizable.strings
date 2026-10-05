@@ -146,6 +146,7 @@
 
 // Ошибки в колонке
 "error.network" = "сбой сети";
+"error.keychainWrite" = "нет записи в Keychain";
 "error.timeout" = "таймаут";
 "error.noHTTP" = "нет HTTP-ответа";
 "error.http" = "HTTP %d";

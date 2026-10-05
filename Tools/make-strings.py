@@ -79,7 +79,7 @@ ORDER = [
     ("Уведомления", ["notification.title", "notification.body",
                      "notification.reset.title", "notification.reset.body"]),
     ("Ошибки в колонке", [
-        "error.network", "error.timeout", "error.noHTTP", "error.http",
+        "error.network", "error.keychainWrite", "error.timeout", "error.noHTTP", "error.http",
         "error.parse", "error.unknownSource", "error.noProvider",
         "error.unreachable",
     ]),
@@ -1738,6 +1738,10 @@ _ACCOUNT_UPDATES = {
 }
 for _lang, _values in _ACCOUNT_UPDATES.items():
     T[_lang].update(_values)
+# Продление Claude без права записи в Keychain опасно — показываем причину.
+_KEYCHAIN_WRITE = {'en': 'no Keychain write access', 'ru': 'нет записи в Keychain', 'de': 'kein Schreibzugriff auf den Schlüsselbund', 'fr': "pas d'accès en écriture au trousseau", 'es': 'sin escritura en el llavero', 'it': 'nessuna scrittura nel portachiavi', 'pt-BR': 'sem gravação no Keychain', 'uk': 'немає запису в Keychain', 'pl': 'brak zapisu do pęku kluczy', 'tr': "Anahtar Zinciri'ne yazılamıyor", 'ja': 'キーチェーンに書き込めません', 'ko': '키체인에 쓸 수 없음', 'zh-Hans': '无法写入钥匙串', 'zh-Hant': '無法寫入鑰匙圈'}
+for _lang, _text in _KEYCHAIN_WRITE.items():
+    T[_lang]["error.keychainWrite"] = _text
 
 
 def main():

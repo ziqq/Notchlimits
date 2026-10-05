@@ -146,6 +146,7 @@
 
 // Ошибки в колонке
 "error.network" = "ağ hatası";
+"error.keychainWrite" = "Anahtar Zinciri'ne yazılamıyor";
 "error.timeout" = "zaman aşımı";
 "error.noHTTP" = "HTTP yanıtı yok";
 "error.http" = "HTTP %d";

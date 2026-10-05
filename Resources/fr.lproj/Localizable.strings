@@ -146,6 +146,7 @@
 
 // Ошибки в колонке
 "error.network" = "erreur réseau";
+"error.keychainWrite" = "pas d'accès en écriture au trousseau";
 "error.timeout" = "délai dépassé";
 "error.noHTTP" = "pas de réponse HTTP";
 "error.http" = "HTTP %d";

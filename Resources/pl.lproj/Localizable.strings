@@ -146,6 +146,7 @@
 
 // Ошибки в колонке
 "error.network" = "błąd sieci";
+"error.keychainWrite" = "brak zapisu do pęku kluczy";
 "error.timeout" = "przekroczono czas";
 "error.noHTTP" = "brak odpowiedzi HTTP";
 "error.http" = "HTTP %d";

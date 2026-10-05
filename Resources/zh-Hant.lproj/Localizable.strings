@@ -146,6 +146,7 @@
 
 // Ошибки в колонке
 "error.network" = "網路錯誤";
+"error.keychainWrite" = "無法寫入鑰匙圈";
 "error.timeout" = "逾時";
 "error.noHTTP" = "沒有 HTTP 回應";
 "error.http" = "HTTP %d";

@@ -146,6 +146,7 @@
 
 // Ошибки в колонке
 "error.network" = "error de red";
+"error.keychainWrite" = "sin escritura en el llavero";
 "error.timeout" = "tiempo agotado";
 "error.noHTTP" = "sin respuesta HTTP";
 "error.http" = "HTTP %d";
