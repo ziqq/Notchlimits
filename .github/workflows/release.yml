@@ -83,10 +83,10 @@ jobs:
           PREV=$(git tag --sort=-v:refname | grep -v "^${TAG}$" | head -1 || true)
           if [ -n "$PREV" ]; then
             RANGE="${PREV}..HEAD"
-            HEADING="Изменения с ${PREV}"
+            HEADING="Changes since ${PREV}"
           else
             RANGE=""
-            HEADING="Первый релиз"
+            HEADING="First release"
           fi
 
           # paste -sd ', ' на macOS чередует разделители по кругу,
@@ -95,22 +95,22 @@ jobs:
             -exec basename {} .lproj \; | sort | paste -sd ',' - | sed 's/,/, /g')
 
           {
-            echo "Панель с лимитами Claude Code и Codex, выезжающая из челки MacBook."
+            echo "Claude Code and Codex usage limits in a panel that slides out of the MacBook notch."
             echo
-            echo "## Установка"
+            echo "## Install"
             echo
-            echo "Открой **${{ steps.package.outputs.dmg }}** и перетащи Notch Limits в папку"
-            echo "«Программы» (Applications), затем сними карантин и запусти:"
+            echo "Open **${{ steps.package.outputs.dmg }}** and drag Notch Limits to Applications,"
+            echo "then clear the quarantine flag and launch it:"
             echo
             echo '```bash'
             echo "xattr -dr com.apple.quarantine /Applications/NotchLimits.app"
             echo "open /Applications/NotchLimits.app"
             echo '```'
             echo
-            echo "Снять карантин обязательно: сборка подписана ad-hoc, без сертификата"
-            echo "Apple Developer, поэтому Gatekeeper иначе не даст её запустить."
+            echo "Clearing the quarantine flag is required: the build is signed ad-hoc, without an"
+            echo "Apple Developer certificate, so Gatekeeper won't let it start otherwise."
             echo
-            echo "Без DMG — из архива:"
+            echo "Without the DMG, from the archive:"
             echo
             echo '```bash'
             echo "unzip ${{ steps.package.outputs.name }}"
@@ -119,10 +119,10 @@ jobs:
             echo "open /Applications/NotchLimits.app"
             echo '```'
             echo
-            echo "Обновление изнутри приложения («Проверить наличие обновлений») берёт .zip."
+            echo "The in-app updater (\"Check for Updates\") uses the .zip."
             echo
-            echo "Приложение фоновое — иконки в доке нет. Наведи курсор на челку,"
-            echo "либо нажми ⌘P. Выход и настройки — правым кликом по панели."
+            echo "The app runs in the background with no Dock icon. Hover over the notch or"
+            echo "press ⌘P to open it; right-click the panel for settings and Quit."
             echo
             # Раздел версии из CHANGELOG.md — от «## X.Y.Z - ДД/ММ/ГГГГ» до следующего «## ».
             CHANGES=$(awk -v v="${{ steps.meta.outputs.version }}" '
@@ -131,7 +131,7 @@ jobs:
               on { print }
             ' CHANGELOG.md 2>/dev/null || true)
             if [ -n "$(printf '%s' "$CHANGES" | tr -d '[:space:]')" ]; then
-              echo "## Что нового"
+              echo "## What's new"
               printf '%s\n' "$CHANGES"
               echo
             fi
@@ -139,21 +139,21 @@ jobs:
             echo
             git log --no-merges --pretty='- %s (%h)' ${RANGE} | head -100
             echo
-            echo "## Состав"
+            echo "## Details"
             echo
             echo "| | |"
             echo "| --- | --- |"
-            echo "| Версия | ${{ steps.meta.outputs.version }} |"
-            echo "| Минимальная macOS | 13.0 |"
-            echo "| Размер DMG | ${{ steps.package.outputs.dmg_size }} |"
-            echo "| Размер архива | ${{ steps.package.outputs.size }} |"
-            echo "| Языки интерфейса | ${LOCALES} |"
-            echo "| Подпись | ad-hoc |"
+            echo "| Version | ${{ steps.meta.outputs.version }} |"
+            echo "| Minimum macOS | 13.0 |"
+            echo "| DMG size | ${{ steps.package.outputs.dmg_size }} |"
+            echo "| Archive size | ${{ steps.package.outputs.size }} |"
+            echo "| UI languages | ${LOCALES} |"
+            echo "| Signature | ad-hoc |"
             echo
-            echo "Самопроверка (парсеры, JWT, форматирование, полнота локализаций)"
-            echo "пройдена на этой сборке."
+            echo "Self-test (parsers, JWT, formatting, localization completeness)"
+            echo "passed on this build."
             echo
-            echo "## Контрольная сумма"
+            echo "## Checksums"
             echo
             echo '```'
             echo "SHA-256  ${{ steps.package.outputs.dmg_sha }}"
