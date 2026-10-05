@@ -126,7 +126,7 @@
 "setup.script.profile" = "Profil: %@";
 "setup.script.hint" = "Giris yap, sonra bu pencereyi kapat.";
 "setup.script.relogin" = "Zaten giriş yapılmış — başka bir hesaba girmek için /login yaz, sonra bu pencereyi kapat.";
-"setup.script.reauth" = "/login yaz ve giriş yap, sonra bu pencereyi kapat.";
+"setup.script.reauth" = "Tarayıcıda giriş yap. Aşağıdaki durumda \"loggedIn\": true görünmeli; sonra bu pencereyi kapat.";
 "loginItem.failed.title" = "Girişte başlatma değiştirilemedi";
 
 // Статистика под окнами

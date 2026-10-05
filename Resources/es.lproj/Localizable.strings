@@ -126,7 +126,7 @@
 "setup.script.profile" = "Perfil: %@";
 "setup.script.hint" = "Inicia sesion y cierra esta ventana.";
 "setup.script.relogin" = "Ya hay una sesión: escribe /login para entrar con otra cuenta y luego cierra esta ventana.";
-"setup.script.reauth" = "Escribe /login, inicia sesión y cierra esta ventana.";
+"setup.script.reauth" = "Inicia sesión en el navegador. Abajo el estado debe decir \"loggedIn\": true; luego cierra esta ventana.";
 "loginItem.failed.title" = "No se ha podido cambiar el inicio de sesión";
 
 // Статистика под окнами

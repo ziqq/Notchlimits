@@ -126,7 +126,7 @@
 "setup.script.profile" = "Profile: %@";
 "setup.script.hint" = "Sign in, then close this window.";
 "setup.script.relogin" = "Already signed in — type /login to sign in to another account, then close this window.";
-"setup.script.reauth" = "Type /login and sign in, then close this window.";
+"setup.script.reauth" = "Sign in in the browser. The status below must say \"loggedIn\": true; then close this window.";
 "loginItem.failed.title" = "Could not change launch at login";
 
 // Статистика под окнами

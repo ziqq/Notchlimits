@@ -126,7 +126,7 @@
 "setup.script.profile" = "プロファイル: %@";
 "setup.script.hint" = "ログインしたら、このウインドウを閉じてください。";
 "setup.script.relogin" = "すでにサインインしています。別のアカウントにするには /login と入力し、その後このウインドウを閉じてください。";
-"setup.script.reauth" = "/login と入力してログインし、このウインドウを閉じてください。";
+"setup.script.reauth" = "ブラウザでログインしてください。下の状態が \"loggedIn\": true になったら、このウインドウを閉じてください。";
 "loginItem.failed.title" = "ログイン時の起動を変更できませんでした";
 
 // Статистика под окнами

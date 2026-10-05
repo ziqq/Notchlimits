@@ -126,7 +126,7 @@
 "setup.script.profile" = "Profil: %@";
 "setup.script.hint" = "Zaloguj sie, potem zamknij to okno.";
 "setup.script.relogin" = "Już zalogowano — wpisz /login, aby zalogować się na inne konto, potem zamknij to okno.";
-"setup.script.reauth" = "Wpisz /login i zaloguj się, potem zamknij to okno.";
+"setup.script.reauth" = "Zaloguj się w przeglądarce. Poniżej status musi pokazać \"loggedIn\": true, potem zamknij to okno.";
 "loginItem.failed.title" = "Nie udało się zmienić uruchamiania przy logowaniu";
 
 // Статистика под окнами

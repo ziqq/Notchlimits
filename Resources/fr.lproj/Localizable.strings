@@ -126,7 +126,7 @@
 "setup.script.profile" = "Profil : %@";
 "setup.script.hint" = "Connectez-vous, puis fermez cette fenetre.";
 "setup.script.relogin" = "Déjà connecté — tapez /login pour vous connecter à un autre compte, puis fermez cette fenêtre.";
-"setup.script.reauth" = "Tapez /login, connectez-vous, puis fermez cette fenêtre.";
+"setup.script.reauth" = "Connectez-vous dans le navigateur. Le statut ci-dessous doit indiquer \"loggedIn\": true, puis fermez cette fenêtre.";
 "loginItem.failed.title" = "Impossible de modifier le lancement à l’ouverture";
 
 // Статистика под окнами

@@ -126,7 +126,7 @@
 "setup.script.profile" = "프로파일: %@";
 "setup.script.hint" = "로그인한 다음 이 창을 닫으세요.";
 "setup.script.relogin" = "이미 로그인되어 있습니다. 다른 계정으로 로그인하려면 /login을 입력한 뒤 이 창을 닫으세요.";
-"setup.script.reauth" = "/login을 입력해 로그인한 뒤 이 창을 닫으세요.";
+"setup.script.reauth" = "브라우저에서 로그인하세요. 아래 상태에 \"loggedIn\": true가 표시되면 이 창을 닫으세요.";
 "loginItem.failed.title" = "로그인 시 실행을 변경하지 못했습니다";
 
 // Статистика под окнами

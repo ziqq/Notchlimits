@@ -126,7 +126,7 @@
 "setup.script.profile" = "設定檔：%@";
 "setup.script.hint" = "登入後請關閉此視窗。";
 "setup.script.relogin" = "已登入——輸入 /login 以登入其他帳號，然後關閉此視窗。";
-"setup.script.reauth" = "輸入 /login 並登入，然後關閉此視窗。";
+"setup.script.reauth" = "在瀏覽器中登入。下方狀態應顯示 \"loggedIn\": true，然後關閉此視窗。";
 "loginItem.failed.title" = "無法更改登入時啟動";
 
 // Статистика под окнами

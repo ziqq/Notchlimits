@@ -126,7 +126,7 @@
 "setup.script.profile" = "Perfil: %@";
 "setup.script.hint" = "Faca login e feche esta janela.";
 "setup.script.relogin" = "Já existe um login — digite /login para entrar em outra conta e depois feche esta janela.";
-"setup.script.reauth" = "Digite /login, entre e feche esta janela.";
+"setup.script.reauth" = "Entre no navegador. O status abaixo deve mostrar \"loggedIn\": true; depois feche esta janela.";
 "loginItem.failed.title" = "Não foi possível mudar a abertura ao iniciar sessão";
 
 // Статистика под окнами

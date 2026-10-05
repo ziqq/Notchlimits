@@ -121,8 +121,13 @@ enum AccountSetup {
             unset ANTHROPIC_API_KEY
             \(config)
             echo "\(L.t("setup.script.profile", configDir?.path ?? Target.claude.mainLabel))"
-            echo "\(L.t("setup.script.reauth"))"
-            "\(binary.path)"
+            echo "\(L.t("setup.script.reauth").replacingOccurrences(of: "\"", with: "\\\""))"
+            echo
+            # Отдельная команда входа: через `claude` + /login вход однажды не
+            # сохранился, и это было не видно. Статус сразу после — видно.
+            "\(binary.path)" auth login
+            echo
+            "\(binary.path)" auth status
             """
             launch(script: script, in: directory, completion: completion)
 

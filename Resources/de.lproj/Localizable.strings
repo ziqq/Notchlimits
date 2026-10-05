@@ -126,7 +126,7 @@
 "setup.script.profile" = "Profil: %@";
 "setup.script.hint" = "Melde dich an und schliesse dieses Fenster.";
 "setup.script.relogin" = "Bereits angemeldet – gib /login ein, um dich mit einem anderen Konto anzumelden, und schließe dann dieses Fenster.";
-"setup.script.reauth" = "Gib /login ein, melde dich an und schließe dann dieses Fenster.";
+"setup.script.reauth" = "Melde dich im Browser an. Unten muss \"loggedIn\": true stehen; schließe dann dieses Fenster.";
 "loginItem.failed.title" = "Anmeldeobjekt konnte nicht geändert werden";
 
 // Статистика под окнами

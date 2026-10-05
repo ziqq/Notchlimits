@@ -126,7 +126,7 @@
 "setup.script.profile" = "Profilo: %@";
 "setup.script.hint" = "Accedi, poi chiudi questa finestra.";
 "setup.script.relogin" = "Accesso già effettuato: digita /login per accedere a un altro account, poi chiudi questa finestra.";
-"setup.script.reauth" = "Digita /login, accedi, poi chiudi questa finestra.";
+"setup.script.reauth" = "Accedi nel browser. Lo stato qui sotto deve indicare \"loggedIn\": true, poi chiudi questa finestra.";
 "loginItem.failed.title" = "Impossibile modificare l’avvio all’accesso";
 
 // Статистика под окнами
