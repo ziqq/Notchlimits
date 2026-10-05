@@ -2,8 +2,20 @@
 
 
 ## Unreleased
-- **FIXED**: The translation generator now preserves all 141 existing keys and current account-switching text in
+
+
+## 1.2.1 - 05/10/2026
+- **FIXED**: Renewing a Claude token no longer risks losing the login. NotchLimits checks it can write to the Keychain
+  entry before renewing, keeps a renewed token it failed to save and retries, so a revoked refresh token is never left
+  behind for Claude Code to wipe.
+- **FIXED**: A network failure while renewing a Claude token shows as a network error instead of "re-auth".
+- **FIXED**: "re-auth" on a Claude column signs in with `claude auth login` and prints `claude auth status` right
+  after, so you can see whether it worked. Interactive `claude` + `/login` could leave the account signed out silently.
+- **FIXED**: The translation generator now preserves all existing keys and current account-switching text in
   all 14 languages; CI verifies complete, repeatable generation without dropping translations.
+- **CHANGED**: Release notes are written in English.
+- **ADDED**: Self-tests for Codex and Claude token renewal, cleared Claude Keychain entries, and the re-auth scripts;
+  the debug probe shows each Claude Keychain entry's fields and whether it is writable, never the values.
 
 
 ## 1.2.0 - 30/09/2026
