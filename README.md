@@ -258,3 +258,5 @@ A few spots where the implementation is subtle and needs care:
 - Window level is `.popUpMenu`, not `.statusBar + 1`: on recent macOS the menu bar draws higher and the panel would fall behind menu items.
 - `NotchHostingView.safeAreaInsets` is zeroed: the window already sits over the cutout, and an extra safe area would push content down by the notch height again.
 - On close, the window frame shrinks 0.35 s after the animation starts, so its last frames aren't clipped.
+
+<!-- automation check -->
