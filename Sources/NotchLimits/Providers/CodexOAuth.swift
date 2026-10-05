@@ -116,17 +116,12 @@ actor CodexRenewal {
     /// `force` — продлить, даже если срок ещё не подошёл (usage ответил 401).
     func renew(columnID: String, home: URL, force: Bool) async -> Result {
         let live = CodexAuthSwap.liveHome(columnID: columnID, home: home)
-        // Вход в ~/.codex принадлежит приложению и голой `codex`: продлив его
-        // сами, мы бы «сожгли» их refresh-токен.
-        guard !CodexAuthSwap.isBaseHome(live) else { return .skipped }
-
         let file = live.appendingPathComponent("auth.json")
-        guard let refreshToken = Self.refreshToken(file) else { return .skipped }
-        if !force {
-            // Срок не прочитать — не гадаем, ждём 401 от usage.
-            guard let expiresAt = CodexProvider.readAuth(codexHome: live)?.expiresAt,
-                  expiresAt.timeIntervalSinceNow <= Self.window else { return .skipped }
-        }
+        guard let refreshToken = Self.refreshToken(file),
+              Self.shouldRenew(isBaseHome: CodexAuthSwap.isBaseHome(live),
+                               expiresAt: CodexProvider.readAuth(codexHome: live)?.expiresAt,
+                               force: force, now: Date())
+        else { return .skipped }
         guard !rejected.contains(refreshToken) else { return .rejected }
 
         switch await CodexOAuth.refresh(refreshToken: refreshToken) {
@@ -152,6 +147,17 @@ actor CodexRenewal {
         case .unavailable:
             return .unavailable
         }
+    }
+
+    /// Продлевать ли вход. Чистая функция — покрыта самопроверкой.
+    static func shouldRenew(isBaseHome: Bool, expiresAt: Date?, force: Bool, now: Date) -> Bool {
+        // Вход в ~/.codex принадлежит приложению и голой `codex`: продлив его
+        // сами, мы бы «сожгли» их refresh-токен. Даже по 401.
+        guard !isBaseHome else { return false }
+        if force { return true }
+        // Срок не прочитать — не гадаем, ждём 401 от usage.
+        guard let expiresAt else { return false }
+        return expiresAt.timeIntervalSince(now) <= window
     }
 
     static func refreshToken(_ file: URL) -> String? {

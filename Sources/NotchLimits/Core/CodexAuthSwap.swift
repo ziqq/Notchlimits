@@ -94,20 +94,30 @@ enum CodexAuthSwap {
         defer { lock.unlock() }
         let file = auth(liveHome(columnID: columnID, home: home))
         guard let data = try? Data(contentsOf: file),
-              var root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let updated = renewedAuth(data, usedRefreshToken: usedRefreshToken,
+                                        tokens: tokens, now: Date())
+        else { return }
+        try updated.write(to: file, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+    }
+
+    /// auth.json с продлёнными токенами, или nil, если в нём уже другой
+    /// refresh-токен (его обновил кто-то ещё) или файл не разобрать.
+    /// Незнакомые поля сохраняются. Чистая функция — покрыта самопроверкой.
+    static func renewedAuth(_ data: Data, usedRefreshToken: String,
+                            tokens: CodexOAuth.Tokens, now: Date) -> Data? {
+        guard var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               var stored = root["tokens"] as? [String: Any],
               stored["refresh_token"] as? String == usedRefreshToken
-        else { return }
+        else { return nil }
 
         stored["access_token"] = tokens.accessToken
         if let idToken = tokens.idToken { stored["id_token"] = idToken }
         if let refreshToken = tokens.refreshToken { stored["refresh_token"] = refreshToken }
         root["tokens"] = stored
-        root["last_refresh"] = timestamp.string(from: Date())
-
-        let updated = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .withoutEscapingSlashes])
-        try updated.write(to: file, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        root["last_refresh"] = timestamp.string(from: now)
+        return try? JSONSerialization.data(withJSONObject: root,
+                                           options: [.prettyPrinted, .withoutEscapingSlashes])
     }
 
     /// Формат `last_refresh`, как у CLI: RFC 3339 с долями секунды.

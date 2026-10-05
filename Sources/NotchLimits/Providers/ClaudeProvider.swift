@@ -118,15 +118,8 @@ actor ClaudeProvider: UsageProvider {
 
         // Токен протух. Раньше мы просто просили запустить claude; теперь
         // продлеваем сами — CLI мог не запускаться сутками.
-        // Не дописанный в Keychain токен новее того, что там лежит.
-        let refreshToken: String
-        if let pending = unsaved[service]?.refreshToken {
-            refreshToken = pending
-        } else if credentials.isRefreshable, let stored = credentials.refreshToken {
-            refreshToken = stored
-        } else {
-            return nil
-        }
+        guard let refreshToken = Self.refreshToken(pending: unsaved[service],
+                                                   stored: credentials) else { return nil }
 
         // Сервер при продлении отзывает прежний refresh-токен. Не сможем
         // записать новый — в Keychain останется мёртвый, и CLI обнулит вход.
@@ -169,6 +162,16 @@ actor ClaudeProvider: UsageProvider {
             issues[service] = L.t("error.network")
             return nil
         }
+    }
+
+    /// Каким refresh-токеном продлевать. Не дописанный в Keychain новее того,
+    /// что там лежит: старый сервер уже отозвал. Чистая функция — покрыта
+    /// самопроверкой.
+    static func refreshToken(pending: ClaudeOAuth.Tokens?,
+                             stored: ClaudeKeychain.Credentials) -> String? {
+        if let pending = pending?.refreshToken { return pending }
+        guard stored.isRefreshable else { return nil }
+        return stored.refreshToken
     }
 
     private func write(_ fresh: ClaudeOAuth.Tokens, to service: String) async -> Bool {

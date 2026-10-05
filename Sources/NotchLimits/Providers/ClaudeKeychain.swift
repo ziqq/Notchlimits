@@ -66,7 +66,13 @@ enum ClaudeKeychain {
     /// служебное (`trustedDeviceToken`) даже без логина — это не аккаунт.
     static func hasNoLogin(service: String) -> Bool {
         guard let json = rawItem(service: service) else { return false }
-        return json["claudeAiOauth"] == nil
+        return isNoLogin(json)
+    }
+
+    /// Запись, обнулённая самим CLI после `invalid_grant` (пустые токены),
+    /// — это аккаунт, которому нужен вход, а не служебная запись.
+    static func isNoLogin(_ json: [String: Any]) -> Bool {
+        json["claudeAiOauth"] == nil
     }
 
     // MARK: - Записи без входа

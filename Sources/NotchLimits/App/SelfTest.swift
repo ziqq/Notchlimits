@@ -21,6 +21,9 @@ enum SelfTest {
         checkJWT()
         checkClaudeAuth()
         checkCodexAuth()
+        checkCodexRenewal()
+        checkClaudeRenewal()
+        checkReloginScripts()
         checkNotifications()
         checkBurnRate()
         checkUpdateCheck()
@@ -335,6 +338,134 @@ enum SelfTest {
                CodexOAuth.isPermanent(Data(#"{"code":"refresh_token_expired"}"#.utf8)))
         expect("прочий 400 не приговор", !CodexOAuth.isPermanent(Data(#"{"error":"invalid_request"}"#.utf8)))
         expect("мусор не приговор", !CodexOAuth.isPermanent(Data("не json".utf8)))
+    }
+
+    private static func checkCodexRenewal() {
+        section("Продление спящих входов Codex")
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let day: TimeInterval = 24 * 3600
+        func renew(base: Bool = false, in seconds: TimeInterval?, force: Bool = false) -> Bool {
+            CodexRenewal.shouldRenew(isBaseHome: base,
+                                     expiresAt: seconds.map { now.addingTimeInterval($0) },
+                                     force: force, now: now)
+        }
+        expect("свежий вход не трогаем", !renew(in: 5 * day))
+        expect("за два дня до конца продлеваем", renew(in: 2 * day))
+        expect("протухший продлеваем", renew(in: -day))
+        expect("вход в ~/.codex не трогаем никогда", !renew(base: true, in: -day))
+        expect("вход в ~/.codex не трогаем даже по 401", !renew(base: true, in: 5 * day, force: true))
+        expect("по 401 продлеваем свежий спящий", renew(in: 5 * day, force: true))
+        expect("без срока ждём 401", !renew(in: nil))
+
+        let original = #"""
+        {"auth_mode":"chatgpt","OPENAI_API_KEY":null,"last_refresh":"2026-01-01T00:00:00Z",
+         "tokens":{"id_token":"id0","access_token":"a0","refresh_token":"r0","account_id":"acc"}}
+        """#
+        let rotated = CodexOAuth.Tokens(idToken: "id1", accessToken: "a1", refreshToken: "r1")
+        let merged = CodexAuthSwap.renewedAuth(Data(original.utf8), usedRefreshToken: "r0",
+                                               tokens: rotated, now: now)
+        let root = merged.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let tokens = root?["tokens"] as? [String: Any]
+        expect("продлённый auth.json разобран", root != nil)
+        expect("новые токены записаны",
+               tokens?["access_token"] as? String == "a1" && tokens?["id_token"] as? String == "id1")
+        expect("ротация refresh-токена записана", tokens?["refresh_token"] as? String == "r1")
+        expect("account_id сохранён", tokens?["account_id"] as? String == "acc")
+        expect("незнакомые поля сохранены",
+               root?["auth_mode"] as? String == "chatgpt" && root?["OPENAI_API_KEY"] is NSNull)
+        let stamp = (root?["last_refresh"] as? String).flatMap(ISO8601.date)
+        expect("last_refresh обновлён", stamp.map { abs($0.timeIntervalSince(now)) < 1 } ?? false)
+        expect("файл остаётся без экранированных слешей",
+               merged.map { !String(decoding: $0, as: UTF8.self).contains("\\/") } ?? false)
+
+        let noRotation = CodexOAuth.Tokens(idToken: nil, accessToken: "a1", refreshToken: nil)
+        let kept = CodexAuthSwap.renewedAuth(Data(original.utf8), usedRefreshToken: "r0",
+                                             tokens: noRotation, now: now)
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["tokens"] as? [String: Any]
+        expect("без ротации прежний refresh-токен на месте", kept?["refresh_token"] as? String == "r0")
+        expect("без нового id_token прежний на месте", kept?["id_token"] as? String == "id0")
+        expect("чужой refresh-токен в файле не затираем",
+               CodexAuthSwap.renewedAuth(Data(original.utf8), usedRefreshToken: "other",
+                                         tokens: rotated, now: now) == nil)
+        expect("мусор не ломает",
+               CodexAuthSwap.renewedAuth(Data("не json".utf8), usedRefreshToken: "r0",
+                                         tokens: rotated, now: now) == nil)
+    }
+
+    private static func checkClaudeRenewal() {
+        section("Продление Claude и обнулённые записи")
+        func credentials(refresh: String?, expiresIn: TimeInterval? = nil) -> ClaudeKeychain.Credentials {
+            ClaudeKeychain.Credentials(accessToken: "a", expiresAt: nil, plan: nil,
+                                       refreshToken: refresh,
+                                       refreshTokenExpiresAt: expiresIn.map { Date().addingTimeInterval($0) },
+                                       scopes: [])
+        }
+        let pending = ClaudeOAuth.Tokens(accessToken: "a1", expiresAt: Date(), refreshToken: "new",
+                                         refreshTokenExpiresAt: nil, scopes: nil)
+        expect("недописанный токен главнее записи",
+               ClaudeProvider.refreshToken(pending: pending, stored: credentials(refresh: "old")) == "new")
+        expect("без недописанного — из записи",
+               ClaudeProvider.refreshToken(pending: nil, stored: credentials(refresh: "old")) == "old")
+        let noRotation = ClaudeOAuth.Tokens(accessToken: "a1", expiresAt: Date(), refreshToken: nil,
+                                            refreshTokenExpiresAt: nil, scopes: nil)
+        expect("недописанный без ротации не мешает записи",
+               ClaudeProvider.refreshToken(pending: noRotation, stored: credentials(refresh: "old")) == "old")
+        expect("протухший refresh-токен не используем",
+               ClaudeProvider.refreshToken(pending: nil, stored: credentials(refresh: "old", expiresIn: -10)) == nil)
+
+        // Так Claude Code оставляет запись после invalid_grant: поля на месте, токены пустые.
+        let wiped: [String: Any] = ["claudeAiOauth": [
+            "accessToken": "", "refreshToken": "", "expiresAt": 0,
+            "refreshTokenExpiresAt": 1_800_000_000_000, "scopes": ["user:inference"],
+            "subscriptionType": "pro"]]
+        expect("обнулённая запись — не токен", ClaudeKeychain.parse(wiped) == nil)
+        expect("обнулённая запись — аккаунт, ему нужен вход", !ClaudeKeychain.isNoLogin(wiped))
+        expect("служебная запись без входа — не аккаунт",
+               ClaudeKeychain.isNoLogin(["trustedDeviceToken": "t"]))
+    }
+
+    private static func checkReloginScripts() {
+        section("Повторный вход из колонки")
+        let claude = URL(fileURLWithPath: "/opt/claude bin/claude")
+        let profile = URL(fileURLWithPath: "/Users/u/.claude-profiles/work")
+        let script = AccountSetup.claudeReloginScript(binary: claude, profileName: "work",
+                                                      service: "Claude Code-credentials-ab", configDir: profile)
+        let lines = script.split(separator: "\n").map(String.init)
+        expect("вход отдельной командой", lines.contains("\"/opt/claude bin/claude\" auth login"))
+        expect("статус сразу после входа", lines.contains("\"/opt/claude bin/claude\" auth status"))
+        expect("интерактивный claude не запускаем", !lines.contains("\"/opt/claude bin/claude\""))
+        expect("вход в папку профиля", lines.contains("export CLAUDE_CONFIG_DIR=\"\(profile.path)\""))
+        expect("токен Desktop-сессии не мешает",
+               lines.contains("unset CLAUDE_CODE_OAUTH_TOKEN") && lines.contains("unset ANTHROPIC_API_KEY"))
+        let statusLine = lines.firstIndex(of: "\"/opt/claude bin/claude\" auth status") ?? 0
+        let loginLine = lines.firstIndex(of: "\"/opt/claude bin/claude\" auth login") ?? 0
+        expect("статус после входа, а не до", statusLine > loginLine)
+
+        let main = AccountSetup.claudeReloginScript(binary: claude, profileName: "main",
+                                                    service: ClaudeKeychain.baseService, configDir: nil)
+        expect("основной — в стандартное место CLI", main.contains("unset CLAUDE_CONFIG_DIR"))
+
+        let codex = AccountSetup.codexReloginScript(binary: URL(fileURLWithPath: "/usr/local/bin/codex"),
+                                                    profileName: "najkll",
+                                                    home: URL(fileURLWithPath: "/Users/u/.codex-profiles/najkll"))
+        expect("Codex входит в папку колонки",
+               codex.contains("export CODEX_HOME=\"/Users/u/.codex-profiles/najkll\""))
+        expect("Codex — штатный login", codex.contains("\"/usr/local/bin/codex\" login"))
+
+        expect("кавычки и $ в подсказке не ломают echo",
+               AccountSetup.shellEscaped(#"say "hi" $HOME `x` \n"#) == #"say \"hi\" \$HOME \`x\` \\n"#)
+        // Каждая строка echo в скрипте — с закрытой кавычкой: число неэкранированных
+        // кавычек чётное, иначе zsh склеит остаток скрипта в одну строку.
+        let echoes = lines.filter { $0.hasPrefix("echo \"") }
+        let balanced = echoes.allSatisfy { line in
+            var count = 0, escaped = false
+            for character in line {
+                if escaped { escaped = false; continue }
+                if character == "\\" { escaped = true } else if character == "\"" { count += 1 }
+            }
+            return count % 2 == 0
+        }
+        expect("строки echo с парными кавычками", !echoes.isEmpty && balanced)
     }
 
     private static func checkNotifications() {

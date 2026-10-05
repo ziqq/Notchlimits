@@ -113,22 +113,8 @@ enum AccountSetup {
             }
             let directory = configDir
                 ?? DesktopApp.supportDirectory.appendingPathComponent("login/claude-main")
-            let config = configDir.map { "export CLAUDE_CONFIG_DIR=\"\($0.path)\"" }
-                ?? "unset CLAUDE_CONFIG_DIR"
-            let script = """
-            #!/bin/zsh
-            # NotchLimits: Claude Code re-auth "\(account.profileName)" (\(service)).
-            unset ANTHROPIC_API_KEY
-            \(config)
-            echo "\(L.t("setup.script.profile", configDir?.path ?? Target.claude.mainLabel))"
-            echo "\(L.t("setup.script.reauth").replacingOccurrences(of: "\"", with: "\\\""))"
-            echo
-            # Отдельная команда входа: через `claude` + /login вход однажды не
-            # сохранился, и это было не видно. Статус сразу после — видно.
-            "\(binary.path)" auth login
-            echo
-            "\(binary.path)" auth status
-            """
+            let script = claudeReloginScript(binary: binary, profileName: account.profileName,
+                                             service: service, configDir: configDir)
             launch(script: script, in: directory, completion: completion)
 
         case .codexHome(let home):
@@ -143,19 +129,56 @@ enum AccountSetup {
             let directory = CodexAuthSwap.isBaseHome(live) || live == CodexAuthSwap.stashHome
                 ? Target.codex.mainScriptDirectory
                 : live
-            let script = """
-            #!/bin/zsh
-            # NotchLimits: Codex re-auth "\(account.profileName)".
-            export CODEX_HOME="\(live.path)"
-            echo "\(L.t("setup.script.profile", live.path))"
-            echo "\(L.t("setup.script.hint"))"
-            "\(binary.path)" login
-            """
+            let script = codexReloginScript(binary: binary, profileName: account.profileName, home: live)
             launch(script: script, in: directory, completion: completion)
 
         case .mock:
             return
         }
+    }
+
+    /// Скрипт повторного входа в Claude. Отдельная команда `auth login`:
+    /// через `claude` + /login вход однажды не сохранился, и этого не было
+    /// видно. Статус сразу после — видно. Чистая функция — покрыта самопроверкой.
+    nonisolated static func claudeReloginScript(binary: URL, profileName: String,
+                                    service: String, configDir: URL?) -> String {
+        let config = configDir.map { "export CLAUDE_CONFIG_DIR=\"\($0.path)\"" }
+            ?? "unset CLAUDE_CONFIG_DIR"
+        return """
+        #!/bin/zsh
+        # NotchLimits: Claude Code re-auth "\(profileName)" (\(service)).
+        unset ANTHROPIC_API_KEY
+        unset CLAUDE_CODE_OAUTH_TOKEN
+        \(config)
+        echo "\(shellEscaped(L.t("setup.script.profile", configDir?.path ?? Target.claude.mainLabel)))"
+        echo "\(shellEscaped(L.t("setup.script.reauth")))"
+        echo
+        "\(binary.path)" auth login
+        echo
+        "\(binary.path)" auth status
+        """
+    }
+
+    /// Скрипт повторного входа в Codex — в ту папку, где вход колонки сейчас.
+    nonisolated static func codexReloginScript(binary: URL, profileName: String, home: URL) -> String {
+        """
+        #!/bin/zsh
+        # NotchLimits: Codex re-auth "\(profileName)".
+        export CODEX_HOME="\(home.path)"
+        echo "\(shellEscaped(L.t("setup.script.profile", home.path)))"
+        echo "\(shellEscaped(L.t("setup.script.hint")))"
+        "\(binary.path)" login
+        """
+    }
+
+    /// Текст внутри `echo "…"`: кавычки, `$` и обратные кавычки — буквально.
+    nonisolated static func shellEscaped(_ text: String) -> String {
+        var result = ""
+        for character in text {
+            if "\\\"$`".contains(character) { result.append("\\") }
+            result.append(character)
+        }
+        return result
     }
 
     // MARK: - Детали
