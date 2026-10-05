@@ -65,8 +65,17 @@ on:
 permissions:
   contents: read
 
+# Очередь — на каждый issue, PR или обсуждение: GitHub держит в группе лишь
+# один ждущий запуск и отменяет его при следующем, так что общая очередь
+# теряла события, пришедшие пачкой. События без номера (push, ветка, ручной
+# запуск) остаются в общей очереди `labels-<repo>` — вместе с «Complete
+# issues» из release.yml.
 concurrency:
-  group: labels-${{ github.repository }}
+  group: >-
+    ${{ (github.event.issue.number || github.event.pull_request.number || github.event.discussion.number)
+    && format('labels-{0}-{1}', github.repository,
+    github.event.issue.number || github.event.pull_request.number || github.event.discussion.number)
+    || format('labels-{0}', github.repository) }}
   cancel-in-progress: false
 
 jobs:
