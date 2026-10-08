@@ -62,7 +62,6 @@
 "update.availableBody" = "Відкрийте сторінку релізу, щоб завантажити.";
 "update.open" = "Відкрити реліз";
 "update.upToDate" = "Встановлено найновішу версію (%@)";
-"update.checking" = "Перевіряю…";
 "update.failed" = "Не вдалося перевірити оновлення";
 "update.install" = "Оновити зараз";
 "update.installing" = "Завантажую оновлення…";
@@ -72,23 +71,6 @@
 "update.err.checksum" = "Контрольна сума не збіглася — завантаженню не можна довіряти.";
 "update.err.unpack" = "Не вдалося розпакувати оновлення.";
 "update.err.notWritable" = "Немає прав замінити застосунок тут.";
-
-// Переключение аккаунтов
-"switch.codex" = "Активний акаунт Codex";
-"switch.claude" = "Активний акаунт Claude";
-"switch.saveCurrent" = "Зберегти поточний";
-"switch.saved" = "Збережено: %@";
-"switch.saveFailed" = "Не вдалося зберегти акаунт";
-"switch.confirm.title" = "Перемкнути активний акаунт?";
-"switch.confirm.do" = "Перемкнути";
-"switch.confirm.codex" = "Команда codex перемкнеться на цей акаунт. Поточний збережеться у списку.";
-"switch.confirm.claude" = "Команда claude перемкнеться на цей акаунт. Поточний збережеться у списку.";
-"switch.failed" = "Не вдалося перемкнути акаунт";
-"switch.err.noActive" = "Немає активного акаунта";
-"switch.err.notFound" = "Збережений акаунт не знайдено";
-"switch.err.io" = "Помилка читання/запису";
-"switch.running" = "Запущено сесій: %d — можуть зламатися.";
-"switch.saved.hint" = "Додано до списку — вибери його в цьому меню, щоб перемкнутися.";
 
 // Горячая клавиша
 "hotkey.disabled" = "вимкнено";
@@ -156,14 +138,6 @@
 "error.unreachable" = "мережа недоступна";
 
 // Переключение приложений
-"switch.activeMark" = "%@ · активний";
-"switch.empty" = "Ще немає акаунтів";
-"switch.applyHint" = "Застосується до нових сесій. Уже запущені (термінал і цей застосунок) перезапусти, щоб застосувати.";
-"switch.restart.title" = "Перезапустити Claude?";
-"switch.restart.body" = "Новий акаунт застосується до вже відкритого застосунку Claude лише після перезапуску. Поточна сесія закриється.";
-"switch.restart.now" = "Перезапустити зараз";
-"switch.restart.later" = "Пізніше";
-"menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Акаунт застосунку Claude";
 "appswitch.title.codex" = "Акаунт застосунку Codex";
 "appswitch.confirm.title" = "Перемкнути акаунт застосунку?";

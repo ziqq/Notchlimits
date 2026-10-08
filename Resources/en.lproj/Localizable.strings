@@ -62,7 +62,6 @@
 "update.availableBody" = "Open the release page to download it.";
 "update.open" = "Open release";
 "update.upToDate" = "You're on the latest version (%@)";
-"update.checking" = "Checking…";
 "update.failed" = "Couldn't check for updates";
 "update.install" = "Update now";
 "update.installing" = "Downloading the update…";
@@ -72,23 +71,6 @@
 "update.err.checksum" = "Checksum didn't match — download not trusted.";
 "update.err.unpack" = "Couldn't unpack the update.";
 "update.err.notWritable" = "No permission to replace the app here.";
-
-// Переключение аккаунтов
-"switch.codex" = "Active Codex account";
-"switch.claude" = "Active Claude account";
-"switch.saveCurrent" = "Save current";
-"switch.saved" = "Saved: %@";
-"switch.saveFailed" = "Couldn't save the account";
-"switch.confirm.title" = "Switch active account?";
-"switch.confirm.do" = "Switch";
-"switch.confirm.codex" = "The codex command will switch to this account. The current one is saved to the list.";
-"switch.confirm.claude" = "The claude command will switch to this account. The current one is saved to the list.";
-"switch.failed" = "Couldn't switch the account";
-"switch.err.noActive" = "No active account to save";
-"switch.err.notFound" = "Saved account not found";
-"switch.err.io" = "Read/write error";
-"switch.running" = "%d session(s) running — they may break.";
-"switch.saved.hint" = "Added to the list — pick it in this menu to switch.";
 
 // Горячая клавиша
 "hotkey.disabled" = "off";
@@ -156,14 +138,6 @@
 "error.unreachable" = "network unavailable";
 
 // Переключение приложений
-"switch.activeMark" = "%@ · active";
-"switch.empty" = "No accounts yet";
-"switch.applyHint" = "Applies to new sessions. Restart any running ones (terminal and this app) to apply.";
-"switch.restart.title" = "Restart Claude?";
-"switch.restart.body" = "The new account applies to the already-open Claude app only after a restart. The current session will close.";
-"switch.restart.now" = "Restart now";
-"switch.restart.later" = "Later";
-"menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Claude app account";
 "appswitch.title.codex" = "Codex app account";
 "appswitch.confirm.title" = "Switch app account?";

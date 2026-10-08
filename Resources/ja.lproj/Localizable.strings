@@ -62,7 +62,6 @@
 "update.availableBody" = "リリースページを開いてダウンロードしてください。";
 "update.open" = "リリースを開く";
 "update.upToDate" = "最新バージョンです (%@)";
-"update.checking" = "確認中…";
 "update.failed" = "アップデートを確認できませんでした";
 "update.install" = "今すぐ更新";
 "update.installing" = "アップデートをダウンロード中…";
@@ -72,23 +71,6 @@
 "update.err.checksum" = "チェックサムが一致しません — ダウンロードは信頼できません。";
 "update.err.unpack" = "アップデートを展開できませんでした。";
 "update.err.notWritable" = "ここでアプリを置き換える権限がありません。";
-
-// Переключение аккаунтов
-"switch.codex" = "アクティブな Codex アカウント";
-"switch.claude" = "アクティブな Claude アカウント";
-"switch.saveCurrent" = "現在のを保存";
-"switch.saved" = "保存しました: %@";
-"switch.saveFailed" = "アカウントを保存できませんでした";
-"switch.confirm.title" = "アクティブなアカウントを切り替えますか？";
-"switch.confirm.do" = "切り替える";
-"switch.confirm.codex" = "codex コマンドがこのアカウントに切り替わります。現在のアカウントは一覧に保存されます。";
-"switch.confirm.claude" = "claude コマンドがこのアカウントに切り替わります。現在のアカウントは一覧に保存されます。";
-"switch.failed" = "アカウントを切り替えできませんでした";
-"switch.err.noActive" = "アクティブなアカウントがありません";
-"switch.err.notFound" = "保存済みアカウントが見つかりません";
-"switch.err.io" = "読み書きエラー";
-"switch.running" = "%d 件のセッションが実行中 — 壊れる可能性があります。";
-"switch.saved.hint" = "一覧に追加しました。このメニューで選ぶと切り替わります。";
 
 // Горячая клавиша
 "hotkey.disabled" = "オフ";
@@ -156,14 +138,6 @@
 "error.unreachable" = "ネットワークに接続できません";
 
 // Переключение приложений
-"switch.activeMark" = "%@ · 使用中";
-"switch.empty" = "アカウントがまだありません";
-"switch.applyHint" = "新しいセッションに適用されます。実行中のもの（ターミナルとこのアプリ）は再起動して反映してください。";
-"switch.restart.title" = "Claude を再起動しますか？";
-"switch.restart.body" = "新しいアカウントは、すでに開いている Claude アプリには再起動後にのみ適用されます。現在のセッションは閉じます。";
-"switch.restart.now" = "今すぐ再起動";
-"switch.restart.later" = "あとで";
-"menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Claude アプリのアカウント";
 "appswitch.title.codex" = "Codex アプリのアカウント";
 "appswitch.confirm.title" = "アプリのアカウントを切り替えますか？";
