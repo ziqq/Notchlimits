@@ -62,7 +62,6 @@
 "update.availableBody" = "다운로드하려면 릴리스 페이지를 여세요.";
 "update.open" = "릴리스 열기";
 "update.upToDate" = "최신 버전입니다 (%@)";
-"update.checking" = "확인 중…";
 "update.failed" = "업데이트를 확인하지 못했습니다";
 "update.install" = "지금 업데이트";
 "update.installing" = "업데이트 다운로드 중…";
@@ -72,23 +71,6 @@
 "update.err.checksum" = "체크섬이 일치하지 않습니다 — 다운로드를 신뢰할 수 없습니다.";
 "update.err.unpack" = "업데이트의 압축을 풀지 못했습니다.";
 "update.err.notWritable" = "여기에서 앱을 교체할 권한이 없습니다.";
-
-// Переключение аккаунтов
-"switch.codex" = "활성 Codex 계정";
-"switch.claude" = "활성 Claude 계정";
-"switch.saveCurrent" = "현재 계정 저장";
-"switch.saved" = "저장됨: %@";
-"switch.saveFailed" = "계정을 저장하지 못했습니다";
-"switch.confirm.title" = "활성 계정을 전환할까요?";
-"switch.confirm.do" = "전환";
-"switch.confirm.codex" = "codex 명령이 이 계정으로 전환됩니다. 현재 계정은 목록에 저장됩니다.";
-"switch.confirm.claude" = "claude 명령이 이 계정으로 전환됩니다. 현재 계정은 목록에 저장됩니다.";
-"switch.failed" = "계정을 전환하지 못했습니다";
-"switch.err.noActive" = "활성 계정이 없습니다";
-"switch.err.notFound" = "저장된 계정을 찾을 수 없습니다";
-"switch.err.io" = "읽기/쓰기 오류";
-"switch.running" = "%d개 세션 실행 중 — 중단될 수 있습니다.";
-"switch.saved.hint" = "목록에 추가됨 — 이 메뉴에서 선택하면 전환됩니다.";
 
 // Горячая клавиша
 "hotkey.disabled" = "꺼짐";
@@ -156,14 +138,6 @@
 "error.unreachable" = "네트워크 사용 불가";
 
 // Переключение приложений
-"switch.activeMark" = "%@ · 사용 중";
-"switch.empty" = "아직 계정이 없습니다";
-"switch.applyHint" = "새 세션에 적용됩니다. 실행 중인 것(터미널과 이 앱)은 재시작해야 적용됩니다.";
-"switch.restart.title" = "Claude를 재시작할까요?";
-"switch.restart.body" = "새 계정은 이미 열려 있는 Claude 앱에는 재시작 후에만 적용됩니다. 현재 세션은 닫힙니다.";
-"switch.restart.now" = "지금 재시작";
-"switch.restart.later" = "나중에";
-"menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Claude 앱 계정";
 "appswitch.title.codex" = "Codex 앱 계정";
 "appswitch.confirm.title" = "앱 계정을 전환할까요?";

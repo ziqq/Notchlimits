@@ -62,7 +62,6 @@
 "update.availableBody" = "İndirmek için sürüm sayfasını aç.";
 "update.open" = "Sürümü aç";
 "update.upToDate" = "En son sürümü kullanıyorsun (%@)";
-"update.checking" = "Denetleniyor…";
 "update.failed" = "Güncellemeler denetlenemedi";
 "update.install" = "Şimdi güncelle";
 "update.installing" = "Güncelleme indiriliyor…";
@@ -72,23 +71,6 @@
 "update.err.checksum" = "Sağlama toplamı uyuşmadı — indirme güvenilir değil.";
 "update.err.unpack" = "Güncelleme açılamadı.";
 "update.err.notWritable" = "Uygulamayı burada değiştirme izni yok.";
-
-// Переключение аккаунтов
-"switch.codex" = "Etkin Codex hesabı";
-"switch.claude" = "Etkin Claude hesabı";
-"switch.saveCurrent" = "Geçerli olanı kaydet";
-"switch.saved" = "Kaydedildi: %@";
-"switch.saveFailed" = "Hesap kaydedilemedi";
-"switch.confirm.title" = "Etkin hesap değiştirilsin mi?";
-"switch.confirm.do" = "Değiştir";
-"switch.confirm.codex" = "codex komutu bu hesaba geçer. Mevcut hesap listeye kaydedilir.";
-"switch.confirm.claude" = "claude komutu bu hesaba geçer. Mevcut hesap listeye kaydedilir.";
-"switch.failed" = "Hesap değiştirilemedi";
-"switch.err.noActive" = "Etkin hesap yok";
-"switch.err.notFound" = "Kayıtlı hesap bulunamadı";
-"switch.err.io" = "Okuma/yazma hatası";
-"switch.running" = "%d oturum açık — bozulabilir.";
-"switch.saved.hint" = "Listeye eklendi — geçmek için bu menüden seç.";
 
 // Горячая клавиша
 "hotkey.disabled" = "kapalı";
@@ -156,14 +138,6 @@
 "error.unreachable" = "ağ kullanılamıyor";
 
 // Переключение приложений
-"switch.activeMark" = "%@ · etkin";
-"switch.empty" = "Henüz hesap yok";
-"switch.applyHint" = "Yeni oturumlara uygulanır. Açık olanları (terminal ve bu uygulama) yeniden başlatın.";
-"switch.restart.title" = "Claude yeniden başlatılsın mı?";
-"switch.restart.body" = "Yeni hesap, zaten açık olan Claude uygulamasına ancak yeniden başlatınca uygulanır. Mevcut oturum kapanacak.";
-"switch.restart.now" = "Şimdi yeniden başlat";
-"switch.restart.later" = "Sonra";
-"menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Claude uygulama hesabı";
 "appswitch.title.codex" = "Codex uygulama hesabı";
 "appswitch.confirm.title" = "Uygulama hesabı değiştirilsin mi?";

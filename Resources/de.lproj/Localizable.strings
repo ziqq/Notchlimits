@@ -62,7 +62,6 @@
 "update.availableBody" = "Öffne die Release-Seite zum Download.";
 "update.open" = "Release öffnen";
 "update.upToDate" = "Du hast die neueste Version (%@)";
-"update.checking" = "Prüfe…";
 "update.failed" = "Update-Prüfung fehlgeschlagen";
 "update.install" = "Jetzt aktualisieren";
 "update.installing" = "Update wird geladen…";
@@ -72,23 +71,6 @@
 "update.err.checksum" = "Prüfsumme stimmt nicht — Download nicht vertrauenswürdig.";
 "update.err.unpack" = "Update konnte nicht entpackt werden.";
 "update.err.notWritable" = "Keine Berechtigung, die App hier zu ersetzen.";
-
-// Переключение аккаунтов
-"switch.codex" = "Aktives Codex-Konto";
-"switch.claude" = "Aktives Claude-Konto";
-"switch.saveCurrent" = "Aktuelles speichern";
-"switch.saved" = "Gespeichert: %@";
-"switch.saveFailed" = "Konto konnte nicht gespeichert werden";
-"switch.confirm.title" = "Aktives Konto wechseln?";
-"switch.confirm.do" = "Wechseln";
-"switch.confirm.codex" = "Der Befehl codex wechselt zu diesem Konto. Das aktuelle wird in der Liste gespeichert.";
-"switch.confirm.claude" = "Der Befehl claude wechselt zu diesem Konto. Das aktuelle wird in der Liste gespeichert.";
-"switch.failed" = "Konto konnte nicht gewechselt werden";
-"switch.err.noActive" = "Kein aktives Konto";
-"switch.err.notFound" = "Gespeichertes Konto nicht gefunden";
-"switch.err.io" = "Lese-/Schreibfehler";
-"switch.running" = "%d Sitzung(en) aktiv – könnten kaputtgehen.";
-"switch.saved.hint" = "Zur Liste hinzugefügt — in diesem Menü auswählen, um zu wechseln.";
 
 // Горячая клавиша
 "hotkey.disabled" = "aus";
@@ -156,14 +138,6 @@
 "error.unreachable" = "Netzwerk nicht verfügbar";
 
 // Переключение приложений
-"switch.activeMark" = "%@ · aktiv";
-"switch.empty" = "Noch keine Konten";
-"switch.applyHint" = "Gilt für neue Sitzungen. Laufende (Terminal und diese App) neu starten, um es anzuwenden.";
-"switch.restart.title" = "Claude neu starten?";
-"switch.restart.body" = "Das neue Konto gilt für die bereits geöffnete Claude-App erst nach einem Neustart. Die aktuelle Sitzung wird geschlossen.";
-"switch.restart.now" = "Jetzt neu starten";
-"switch.restart.later" = "Später";
-"menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Claude-App-Konto";
 "appswitch.title.codex" = "Codex-App-Konto";
 "appswitch.confirm.title" = "App-Konto wechseln?";

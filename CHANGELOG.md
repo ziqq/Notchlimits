@@ -2,6 +2,8 @@
 
 
 ## Unreleased
+- **REMOVED**: Unused translations — the old CLI account switcher (`switch.*`), `menu.liquidGlass` and
+  `update.checking` — from the generator and all 14 languages.
 
 
 ## 1.2.2 - 05/10/2026

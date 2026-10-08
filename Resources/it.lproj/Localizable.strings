@@ -62,7 +62,6 @@
 "update.availableBody" = "Apri la pagina della release per scaricarla.";
 "update.open" = "Apri release";
 "update.upToDate" = "Hai l'ultima versione (%@)";
-"update.checking" = "Controllo…";
 "update.failed" = "Impossibile cercare aggiornamenti";
 "update.install" = "Aggiorna ora";
 "update.installing" = "Download dell'aggiornamento…";
@@ -72,23 +71,6 @@
 "update.err.checksum" = "Checksum non corrispondente — download non attendibile.";
 "update.err.unpack" = "Impossibile decomprimere l'aggiornamento.";
 "update.err.notWritable" = "Nessun permesso per sostituire l'app qui.";
-
-// Переключение аккаунтов
-"switch.codex" = "Account Codex attivo";
-"switch.claude" = "Account Claude attivo";
-"switch.saveCurrent" = "Salva l'attuale";
-"switch.saved" = "Salvato: %@";
-"switch.saveFailed" = "Impossibile salvare l'account";
-"switch.confirm.title" = "Cambiare account attivo?";
-"switch.confirm.do" = "Cambia";
-"switch.confirm.codex" = "Il comando codex passerà a questo account. Quello attuale viene salvato nell’elenco.";
-"switch.confirm.claude" = "Il comando claude passerà a questo account. Quello attuale viene salvato nell’elenco.";
-"switch.failed" = "Impossibile cambiare account";
-"switch.err.noActive" = "Nessun account attivo";
-"switch.err.notFound" = "Account salvato non trovato";
-"switch.err.io" = "Errore di lettura/scrittura";
-"switch.running" = "%d sessione/i attive: potrebbero rompersi.";
-"switch.saved.hint" = "Aggiunto all'elenco: sceglilo in questo menu per cambiare.";
 
 // Горячая клавиша
 "hotkey.disabled" = "disattivata";
@@ -156,14 +138,6 @@
 "error.unreachable" = "rete non disponibile";
 
 // Переключение приложений
-"switch.activeMark" = "%@ · attivo";
-"switch.empty" = "Ancora nessun account";
-"switch.applyHint" = "Vale per le nuove sessioni. Riavvia quelle attive (terminale e questa app) per applicarlo.";
-"switch.restart.title" = "Riavviare Claude?";
-"switch.restart.body" = "Il nuovo account si applica all’app Claude già aperta solo dopo il riavvio. La sessione attuale si chiuderà.";
-"switch.restart.now" = "Riavvia ora";
-"switch.restart.later" = "Più tardi";
-"menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Account app Claude";
 "appswitch.title.codex" = "Account app Codex";
 "appswitch.confirm.title" = "Cambiare account dell’app?";

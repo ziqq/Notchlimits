@@ -62,7 +62,6 @@
 "update.availableBody" = "Abra a página da versão para baixar.";
 "update.open" = "Abrir versão";
 "update.upToDate" = "Você está na versão mais recente (%@)";
-"update.checking" = "Verificando…";
 "update.failed" = "Não foi possível procurar atualizações";
 "update.install" = "Atualizar agora";
 "update.installing" = "Baixando a atualização…";
@@ -72,23 +71,6 @@
 "update.err.checksum" = "A soma de verificação não confere — download não confiável.";
 "update.err.unpack" = "Não foi possível descompactar a atualização.";
 "update.err.notWritable" = "Sem permissão para substituir o app aqui.";
-
-// Переключение аккаунтов
-"switch.codex" = "Conta Codex ativa";
-"switch.claude" = "Conta Claude ativa";
-"switch.saveCurrent" = "Salvar a atual";
-"switch.saved" = "Salva: %@";
-"switch.saveFailed" = "Não foi possível salvar a conta";
-"switch.confirm.title" = "Trocar a conta ativa?";
-"switch.confirm.do" = "Trocar";
-"switch.confirm.codex" = "O comando codex vai mudar para esta conta. A atual é salva na lista.";
-"switch.confirm.claude" = "O comando claude vai mudar para esta conta. A atual é salva na lista.";
-"switch.failed" = "Não foi possível trocar a conta";
-"switch.err.noActive" = "Nenhuma conta ativa";
-"switch.err.notFound" = "Conta salva não encontrada";
-"switch.err.io" = "Erro de leitura/gravação";
-"switch.running" = "%d sessão(ões) em execução — podem quebrar.";
-"switch.saved.hint" = "Adicionada à lista — escolha-a neste menu para trocar.";
 
 // Горячая клавиша
 "hotkey.disabled" = "desativado";
@@ -156,14 +138,6 @@
 "error.unreachable" = "rede indisponível";
 
 // Переключение приложений
-"switch.activeMark" = "%@ · ativo";
-"switch.empty" = "Nenhuma conta ainda";
-"switch.applyHint" = "Vale para novas sessões. Reinicie as abertas (terminal e este app) para aplicar.";
-"switch.restart.title" = "Reiniciar o Claude?";
-"switch.restart.body" = "A nova conta se aplica ao app Claude já aberto somente após reiniciar. A sessão atual será fechada.";
-"switch.restart.now" = "Reiniciar agora";
-"switch.restart.later" = "Depois";
-"menu.liquidGlass" = "Liquid Glass";
 "appswitch.title" = "Conta do app Claude";
 "appswitch.title.codex" = "Conta do app Codex";
 "appswitch.confirm.title" = "Trocar a conta do app?";
