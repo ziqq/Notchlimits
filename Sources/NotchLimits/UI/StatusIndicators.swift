@@ -9,13 +9,12 @@ struct StatusIndicators: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            if keepAwake.isActive {
-                Chip(help: keepAwakeHelp) {
-                    Image(systemName: "cup.and.saucer.fill")
-                    if keepAwake.keepDisplayOn {
-                        Image(systemName: "display")
-                    }
-                }
+            // Оба режима видны всегда: включён — ярко, выключен — приглушённо.
+            Chip(help: L.t("keepAwake.sleep.help"), isOn: keepAwake.isActive, tint: Theme.primary) {
+                Image(systemName: keepAwake.isActive ? "cup.and.saucer.fill" : "cup.and.saucer")
+            }
+            Chip(help: L.t("keepAwake.display.help"), isOn: displayKeptOn, tint: Theme.primary) {
+                Image(systemName: "display")
             }
             if let snapshot = power.snapshot {
                 PowerChips(snapshot: snapshot)
@@ -24,52 +23,52 @@ struct StatusIndicators: View {
         .fixedSize()
     }
 
-    private var keepAwakeHelp: String {
-        var lines = [L.t("keepAwake.sleep.help")]
-        if keepAwake.keepDisplayOn { lines.append(L.t("keepAwake.display.help")) }
-        return lines.joined(separator: "\n")
-    }
+    /// Экран держится, только пока включён основной режим.
+    private var displayKeptOn: Bool { keepAwake.isActive && keepAwake.keepDisplayOn }
 }
 
 /// Капсула индикатора: иконки и короткое значение, в тон подписи «Обновлено».
+/// `isOn: false` — приглушённая капсула выключенного режима; `tint` — цвет
+/// иконки и значения, когда капсула включена.
 private struct Chip<Content: View>: View {
     var help: String?
+    var isOn = true
+    var tint: Color = Theme.secondary
     @ViewBuilder var content: Content
 
     var body: some View {
         HStack(spacing: 4) { content }
             .font(.system(size: 9.5, weight: .semibold))
-            .foregroundColor(Theme.secondary)
+            .foregroundColor(isOn ? tint : Theme.tertiary.opacity(0.7))
             .monospacedDigit()
             .lineLimit(1)
             .padding(.horizontal, 7)
             .frame(height: 18)
-            .background(Capsule().fill(Color.white.opacity(0.08)))
+            .background(Capsule().fill(Color.white.opacity(isOn ? 0.1 : 0.04)))
             .help(help ?? "")
     }
 }
 
-/// Питание тремя капсулами: заряд, мощность от зарядки, температура аккумулятора.
+/// Питание двумя капсулами: аккумулятор (заряд и температура) и зарядка
+/// («сколько берёт сейчас / на сколько рассчитан адаптер»).
 private struct PowerChips: View {
     let snapshot: PowerSnapshot
 
     var body: some View {
-        Chip(help: batteryHelp) {
-            Image(systemName: symbol).foregroundColor(symbolColor)
+        Chip(help: batteryHelp, tint: levelColor) {
+            Image(systemName: symbol)
             if let percent = snapshot.percent {
                 Text(Format.percent(Double(percent)))
+            }
+            if let temperature = snapshot.temperature {
+                Text("· " + Format.unit(temperature, digits: 0, "°C"))
+                    .foregroundColor(Theme.secondary)
             }
         }
         if let watts = chargerWatts {
             Chip(help: chargerHelp) {
                 Image(systemName: "bolt.fill")
                 Text(watts)
-            }
-        }
-        if let temperature = snapshot.temperature {
-            Chip(help: L.t("power.battery")) {
-                Image(systemName: "thermometer.medium")
-                Text(Format.unit(temperature, digits: 0, "°C"))
             }
         }
     }
@@ -89,19 +88,24 @@ private struct PowerChips: View {
         }
     }
 
-    private var symbolColor: Color {
+    /// Зелёный — от сети (заряжается или уже полон), красный — мало заряда.
+    private var levelColor: Color {
         switch snapshot.state {
-        case .charging: return Theme.green
+        case .charging, .charged, .notCharging: return Theme.green
         case .onBattery where (snapshot.percent ?? 100) <= 20: return Theme.red
-        default: return Theme.secondary
+        case .onBattery: return Theme.secondary
         }
     }
 
-    /// Сколько Mac берёт от зарядки сейчас, а без телеметрии — паспорт адаптера.
+    /// «37,2 / 94 W»: сколько Mac берёт от зарядки сейчас из паспортной мощности
+    /// адаптера. Без телеметрии — только паспорт, без адаптера — ничего.
     private var chargerWatts: String? {
-        if let input = snapshot.input { return Format.unit(input.watts, digits: 1, "W") }
-        if let watts = snapshot.adapter?.watts { return Format.unit(Double(watts), digits: 0, "W") }
-        return nil
+        let rated = snapshot.adapter?.watts
+        guard let input = snapshot.input else {
+            return rated.map { Format.unit(Double($0), digits: 0, "W") }
+        }
+        guard let rated else { return Format.unit(input.watts, digits: 1, "W") }
+        return Format.number(input.watts, digits: 1) + " / " + Format.unit(Double(rated), digits: 0, "W")
     }
 
     private var stateTitle: String {
