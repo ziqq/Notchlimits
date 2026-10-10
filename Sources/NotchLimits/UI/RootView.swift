@@ -100,7 +100,7 @@ private struct ExpandedContent: View {
                 if store.visibleColumns.isEmpty {
                     // Без аккаунтов панель — просто «Управление» и тихая подсказка.
                     ControlsSection(keepAwake: keepAwake)
-                        .padding(.top, 12)
+                        .padding(.top, 10)
                     EmptyHint(store: store)
                 } else {
                     columns
@@ -114,9 +114,12 @@ private struct ExpandedContent: View {
                         .padding(.horizontal, 14)
                         .padding(.top, 12)
                     ControlsSection(keepAwake: keepAwake)
-                        .padding(.top, 12)
+                        .padding(.top, 10)
                 }
             }
+            // Блок берёт свою естественную высоту, а не ту, что предложила
+            // панель: иначе колонки растягиваются, а плитки уходят за край.
+            .fixedSize(horizontal: false, vertical: true)
             .background(
                 GeometryReader { proxy in
                     Color.clear.preference(key: ColumnsHeightKey.self,
@@ -127,7 +130,7 @@ private struct ExpandedContent: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 6)
-        .padding(.bottom, 10)
+        .padding(.bottom, Layout.contentBottomPadding)
     }
 
     private var columns: some View {

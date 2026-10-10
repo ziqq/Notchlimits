@@ -5,7 +5,7 @@ struct ControlsSection: View {
     @ObservedObject var keepAwake: KeepAwake
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .center, spacing: 18) {
             ControlTile(symbol: "cup.and.saucer",
                         activeSymbol: "cup.and.saucer.fill",
                         title: L.t("keepAwake.sleep"),
@@ -29,7 +29,8 @@ struct ControlsSection: View {
     }
 }
 
-/// Круглая кнопка с подписью. Включена — белый круг и тёмная иконка.
+/// Кнопка-переключатель: круг с иконкой и подпись справа. Включена — белый
+/// круг и тёмная иконка. Круг стоит по левому краю, вровень с текстом колонок.
 private struct ControlTile: View {
     let symbol: String
     let activeSymbol: String
@@ -41,20 +42,19 @@ private struct ControlTile: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 6) {
+            HStack(spacing: 9) {
                 Image(systemName: isOn ? activeSymbol : symbol)
-                    .font(.system(size: 17, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundColor(isOn ? .black : Theme.primary)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 32, height: 32)
                     .background(Circle().fill(circleFill))
                 Text(title)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundColor(Theme.primary)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
+                    .fixedSize()
             }
-            .frame(width: 104)
+            .padding(.trailing, 6)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

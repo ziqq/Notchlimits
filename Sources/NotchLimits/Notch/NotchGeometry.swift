@@ -77,7 +77,7 @@ enum Layout {
     static let contentHeight: CGFloat = 252
     static let maxContentHeight: CGFloat = 560
     static let columnsFooterGap: CGFloat = 6
-    static let contentBottomPadding: CGFloat = 10
+    static let contentBottomPadding: CGFloat = 14
     static let collapsedCornerRadius: CGFloat = 8
     static let expandedCornerRadius: CGFloat = 20
     /// Ширина «ушка» свёрнутой панели с индикатором Keep Awake.

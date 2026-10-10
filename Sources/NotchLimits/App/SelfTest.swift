@@ -31,6 +31,7 @@ enum SelfTest {
         checkFormatting()
         checkCodableRoundTrips()
         checkLocalizations()
+        checkDefaultsMigration()
 
         if failures.isEmpty {
             print("\nсамопроверка пройдена")
@@ -642,6 +643,30 @@ enum SelfTest {
         expect("заголовок по имени профиля", column.header == "CODEX · main")
         column.customName = "work"
         expect("заголовок по своему имени", column.header == "CODEX · work")
+    }
+
+    // MARK: - Перенос настроек
+
+    private static func checkDefaultsMigration() {
+        section("Перенос настроек со старого ID")
+        let legacy: [String: Any] = ["hotKey": "cmd+p", "column.names": ["a": "work"], "shared": 1]
+        let existing: [String: Any] = ["shared": 2]
+        let moved = DefaultsMigration.missingValues(legacy: legacy, existing: existing)
+        expect("недостающие ключи переносятся", Set(moved.keys) == ["hotKey", "column.names"],
+               "\(moved.keys.sorted())")
+        expect("новые значения не перетираются", moved["shared"] == nil)
+        expect("пустой старый домен — ничего", DefaultsMigration.missingValues(legacy: [:], existing: existing).isEmpty)
+
+        // Настоящий прогон на временных доменах.
+        let suite = "dev.ustinoff.notchlimits.selftest.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            expect("временный домен создан", false)
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: DefaultsMigration.doneKey)
+        DefaultsMigration.runIfNeeded(defaults: defaults)
+        expect("повторный перенос не выполняется", defaults.dictionaryRepresentation()["hotKey"] == nil)
     }
 
     // MARK: - Локализации
