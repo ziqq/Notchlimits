@@ -36,7 +36,7 @@ A panel that slides out of the MacBook notch with **Claude Code** and **Codex** 
 ./build.sh && open build/NotchLimits.app
 ```
 
-`build.sh` runs `swift build -c release`, assembles `build/NotchLimits.app` with an `Info.plist` (`LSUIElement = true`, `CFBundleIdentifier = com.ziqq.notchlimits`) and signs it. The app is background-only — no Dock or menu-bar icon; quit from the panel's context menu.
+`build.sh` runs `swift build -c release`, assembles `build/NotchLimits.app` with an `Info.plist` (`LSUIElement = true`, `CFBundleIdentifier = dev.ustinoff.notchlimits`) and signs it. The app is background-only — no Dock or menu-bar icon; quit from the panel's context menu.
 
 Restart after a rebuild:
 

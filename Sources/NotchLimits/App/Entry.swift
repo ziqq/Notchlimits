@@ -10,6 +10,8 @@ enum NotchLimitsApp {
         // Самопроверка не поднимает NSApplication: на CI-раннере оконный
         // сервер трогать незачем.
         if SelfTest.runIfRequested() { return }
+        // До первого чтения настроек: колонки, хоткей и кэш читают UserDefaults сразу.
+        DefaultsMigration.runIfNeeded()
 
         let application = NSApplication.shared
         let delegate = AppDelegate()

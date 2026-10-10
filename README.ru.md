@@ -36,7 +36,7 @@
 ./build.sh && open build/NotchLimits.app
 ```
 
-`build.sh` делает `swift build -c release`, собирает `build/NotchLimits.app` с `Info.plist` (`LSUIElement = true`, `CFBundleIdentifier = com.ziqq.notchlimits`) и подписывает бандл. Приложение фоновое — иконки в доке и меню-баре нет; выход через контекстное меню панели.
+`build.sh` делает `swift build -c release`, собирает `build/NotchLimits.app` с `Info.plist` (`LSUIElement = true`, `CFBundleIdentifier = dev.ustinoff.notchlimits`) и подписывает бандл. Приложение фоновое — иконки в доке и меню-баре нет; выход через контекстное меню панели.
 
 Перезапуск после пересборки:
 
