@@ -27,10 +27,14 @@
 "panel.updated" = "更新于 %@";
 "panel.noData" = "暂无数据";
 "panel.refresh.help" = "刷新所有列";
-"panel.empty.title" = "没有账户";
 "panel.empty.hint" = "右键点击 →「添加 Claude 账户…」或「添加 Codex 账户…」";
-"panel.hidden.title" = "所有列已隐藏";
 "panel.hidden.hint" = "右键点击 →「显示隐藏的列」";
+
+// Управление
+"keepAwake.sleep" = "防止 Mac 睡眠";
+"keepAwake.sleep.help" = "闲置时不让 Mac 进入睡眠";
+"keepAwake.display" = "保持屏幕常亮";
+"keepAwake.display.help" = "防止 Mac 睡眠时不关闭显示器";
 
 // Контекстное меню
 "menu.refresh" = "刷新";

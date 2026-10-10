@@ -21,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             : [.claude: ClaudeProvider(), .codex: CodexProvider()]
 
         store = UsageStore(providers: providers, discovery: discovery)
-        panel = PanelController(store: store)
+        panel = PanelController(store: store, keepAwake: .shared)
 
         store.onColumnsChanged = { [weak self] in self?.panel.recomputeExpandedSize() }
         panel.onWillOpen = { [weak self] in self?.store.refreshStale() }
@@ -69,6 +69,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
+        menu.addItem(item(L.t("keepAwake.sleep"), #selector(toggleKeepAwake),
+                          state: KeepAwake.shared.isActive ? .on : .off))
+        menu.addItem(item(L.t("keepAwake.display"), #selector(toggleKeepDisplayOn),
+                          state: KeepAwake.shared.keepDisplayOn ? .on : .off))
+        menu.addItem(.separator())
         menu.addItem(item(L.t("menu.refresh"), #selector(refresh)))
         menu.addItem(.separator())
 
@@ -335,6 +340,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func disableHotKey() {
         hotKeys.apply(nil)
+    }
+
+    @objc private func toggleKeepAwake() {
+        KeepAwake.shared.toggle()
+    }
+
+    @objc private func toggleKeepDisplayOn() {
+        KeepAwake.shared.keepDisplayOn.toggle()
     }
 
     @objc private func toggleLoginItem() {

@@ -27,10 +27,14 @@
 "panel.updated" = "업데이트 %@";
 "panel.noData" = "아직 데이터 없음";
 "panel.refresh.help" = "모든 열 새로고침";
-"panel.empty.title" = "계정 없음";
 "panel.empty.hint" = "오른쪽 클릭 → ‘Claude 계정 추가…’ 또는 ‘Codex 계정 추가…’";
-"panel.hidden.title" = "모든 열 숨김";
 "panel.hidden.hint" = "오른쪽 클릭 → ‘숨긴 열 보기’";
+
+// Управление
+"keepAwake.sleep" = "Mac 잠자기 방지";
+"keepAwake.sleep.help" = "사용하지 않을 때 Mac이 잠자기에 들어가지 않도록 함";
+"keepAwake.display" = "디스플레이 켜 두기";
+"keepAwake.display.help" = "Mac 잠자기를 막는 동안 디스플레이를 끄지 않음";
 
 // Контекстное меню
 "menu.refresh" = "새로고침";

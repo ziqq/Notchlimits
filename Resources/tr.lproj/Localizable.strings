@@ -27,10 +27,14 @@
 "panel.updated" = "Güncellendi %@";
 "panel.noData" = "Henüz veri yok";
 "panel.refresh.help" = "Tüm sütunları yenile";
-"panel.empty.title" = "Hesap yok";
 "panel.empty.hint" = "Sağ tık → “Claude hesabı ekle…” ya da “Codex hesabı ekle…”";
-"panel.hidden.title" = "Tüm sütunlar gizli";
 "panel.hidden.hint" = "Sağ tık → “Gizli sütunları göster”";
+
+// Управление
+"keepAwake.sleep" = "Mac’i uyanık tut";
+"keepAwake.sleep.help" = "Mac’in boştayken uyumasını engelle";
+"keepAwake.display" = "Ekranı açık tut";
+"keepAwake.display.help" = "Mac uyanık tutulurken ekranı kapatma";
 
 // Контекстное меню
 "menu.refresh" = "Yenile";

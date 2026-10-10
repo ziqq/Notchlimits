@@ -2,6 +2,10 @@
 
 
 ## Unreleased
+- **ADDED**: Keep Awake — a "Controls" section in the panel with **Keep Mac awake** and **Keep display on** tiles (also
+  in the context menu). Uses standard IOKit power assertions: no administrator password, and a crash or quit always
+  lets the Mac sleep again. While it's on, the collapsed notch shows a cup (and a display icon) on either side.
+- **CHANGED**: Without any accounts, the panel shows the Controls section with a short hint instead of an empty state.
 - **REMOVED**: Unused translations — the old CLI account switcher (`switch.*`), `menu.liquidGlass` and
   `update.checking` — from the generator and all 14 languages.
 
