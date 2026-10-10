@@ -21,25 +21,27 @@ enum DebugRender {
         renderPanel(to: root.appendingPathComponent("panel.png"), columns: healthyColumns())
         renderPanel(to: root.appendingPathComponent("states.png"), columns: mixedColumns(), extraHeight: 40)
         renderCollapsed(to: root.appendingPathComponent("collapsed.png"))
+        KeepAwake.shared.setActive(true)
         renderPanel(to: root.appendingPathComponent("controls.png"), columns: [],
-                    extraHeight: Self.controlsHeight + 30 - Layout.contentHeight)
+                    extraHeight: Self.indicatorsOnlyHeight - Layout.contentHeight)
+        KeepAwake.shared.setActive(false)
         renderCollapsedNotch(to: root.appendingPathComponent("collapsed-awake.png"))
 
         PowerMonitor.shared.setSnapshotForRendering(batteryPower)
         renderPanel(to: root.appendingPathComponent("power-battery.png"), columns: [],
-                    extraHeight: Self.controlsHeight + 30 - Layout.contentHeight)
+                    extraHeight: Self.indicatorsOnlyHeight - Layout.contentHeight)
 
         exit(0)
     }
 
     // MARK: - Сцены
 
-    /// Высота секции «Управление» под колонками: разделитель и плитки.
-    private static let controlsHeight: CGFloat = 104
+    /// Высота панели без колонок: строка индикаторов и подсказка.
+    /// ImageRenderer не гоняет цикл предпочтений, поэтому задаём её вручную.
+    private static let indicatorsOnlyHeight: CGFloat = 66
 
     @MainActor
     private static func renderPanel(to url: URL, columns: [AccountColumn], extraHeight: CGFloat = 16) {
-        let extraHeight = columns.isEmpty ? extraHeight : extraHeight + controlsHeight
         let store = UsageStore(providers: [:], discovery: MockDiscovery())
         store.setColumnsForRendering(columns)
 

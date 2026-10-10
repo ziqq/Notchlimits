@@ -100,27 +100,20 @@ private struct ExpandedContent: View {
             // перенесённые строки упёрлись бы в нижнюю кромку панели.
             VStack(spacing: 0) {
                 if store.visibleColumns.isEmpty {
-                    // Без аккаунтов панель — просто «Управление» и тихая подсказка.
-                    ControlsSection(keepAwake: keepAwake, power: power)
+                    // Без аккаунтов — только индикаторы и тихая подсказка.
+                    StatusIndicators(keepAwake: keepAwake, power: power)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
                         .padding(.top, 10)
                     EmptyHint(store: store)
                 } else {
                     columns
-                    // «Обновлено …» — про лимиты, поэтому сразу под колонками,
-                    // а не под «Управлением».
-                    FooterView(store: store, state: state)
+                    FooterView(store: store, state: state, keepAwake: keepAwake, power: power)
                         .padding(.top, Layout.columnsFooterGap)
-                    Rectangle()
-                        .fill(Theme.divider)
-                        .frame(height: 1)
-                        .padding(.horizontal, 14)
-                        .padding(.top, 12)
-                    ControlsSection(keepAwake: keepAwake, power: power)
-                        .padding(.top, 10)
                 }
             }
             // Блок берёт свою естественную высоту, а не ту, что предложила
-            // панель: иначе колонки растягиваются, а плитки уходят за край.
+            // панель: иначе колонки растягиваются, а подвал уходит за край.
             .fixedSize(horizontal: false, vertical: true)
             .background(
                 GeometryReader { proxy in
@@ -171,6 +164,8 @@ private struct EmptyHint: View {
 private struct FooterView: View {
     @ObservedObject var store: UsageStore
     @ObservedObject var state: PanelState
+    let keepAwake: KeepAwake
+    let power: PowerMonitor
 
     var body: some View {
         HStack(alignment: .center, spacing: 5) {
@@ -182,7 +177,8 @@ private struct FooterView: View {
             // Кнопка — сразу за временем обновления: это одно действие про
             // одну цифру, а не отдельный элемент в дальнем углу.
             RefreshButton { store.refreshAll(force: true) }
-            Spacer(minLength: 0)
+            Spacer(minLength: 12)
+            StatusIndicators(keepAwake: keepAwake, power: power)
         }
         .padding(.horizontal, 14)
         .padding(.top, 6)
@@ -213,5 +209,6 @@ private struct RefreshButton: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help(L.t("panel.refresh.help"))
+        .reportsControlFrame()
     }
 }
