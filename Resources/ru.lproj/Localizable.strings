@@ -36,6 +36,19 @@
 "keepAwake.display" = "Не гасить экран";
 "keepAwake.display.help" = "Не выключать экран, пока Mac не даёт уснуть";
 
+// Питание
+"power.charging" = "Заряжается";
+"power.charged" = "Заряжен";
+"power.notCharging" = "Не заряжается";
+"power.onBattery" = "От аккумулятора";
+"power.charger" = "Зарядка";
+"power.input" = "Вход";
+"power.input.help" = "Сколько Mac берёт от зарядки прямо сейчас";
+"power.battery" = "Аккумулятор";
+"power.health" = "Здоровье";
+"power.health.value" = "%@ · циклов: %d";
+"power.health.help" = "Полная ёмкость: %d из %d мА·ч по паспорту";
+
 // Контекстное меню
 "menu.refresh" = "Обновить";
 "menu.addClaude" = "Добавить аккаунт Claude…";

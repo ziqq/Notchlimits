@@ -36,6 +36,19 @@
 "keepAwake.display" = "디스플레이 켜 두기";
 "keepAwake.display.help" = "Mac 잠자기를 막는 동안 디스플레이를 끄지 않음";
 
+// Питание
+"power.charging" = "충전 중";
+"power.charged" = "충전 완료";
+"power.notCharging" = "충전 안 됨";
+"power.onBattery" = "배터리 사용 중";
+"power.charger" = "충전기";
+"power.input" = "입력";
+"power.input.help" = "Mac이 지금 충전기에서 받고 있는 전력";
+"power.battery" = "배터리";
+"power.health" = "상태";
+"power.health.value" = "%@ · 사이클: %d";
+"power.health.help" = "완전 충전 용량: 설계 %2$d mAh 중 %1$d mAh";
+
 // Контекстное меню
 "menu.refresh" = "새로고침";
 "menu.addClaude" = "Claude 계정 추가…";

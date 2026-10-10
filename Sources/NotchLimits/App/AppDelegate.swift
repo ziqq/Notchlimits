@@ -21,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             : [.claude: ClaudeProvider(), .codex: CodexProvider()]
 
         store = UsageStore(providers: providers, discovery: discovery)
-        panel = PanelController(store: store, keepAwake: .shared)
+        panel = PanelController(store: store, keepAwake: .shared, power: .shared)
 
         store.onColumnsChanged = { [weak self] in self?.panel.recomputeExpandedSize() }
         panel.onWillOpen = { [weak self] in self?.store.refreshStale() }

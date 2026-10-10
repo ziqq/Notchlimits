@@ -35,6 +35,11 @@ ORDER = [
         "keepAwake.sleep", "keepAwake.sleep.help",
         "keepAwake.display", "keepAwake.display.help",
     ]),
+    ("Питание", [
+        "power.charging", "power.charged", "power.notCharging", "power.onBattery",
+        "power.charger", "power.input", "power.input.help", "power.battery",
+        "power.health", "power.health.value", "power.health.help",
+    ]),
     ("Контекстное меню", [
         "menu.refresh", "menu.addClaude", "menu.addCodex", "menu.hideColumn",
         "menu.noColumns", "menu.renameColumn", "menu.removeColumn", "menu.showHidden",
@@ -1415,6 +1420,60 @@ _KEEP_AWAKE = {
 for _lang, _values in _KEEP_AWAKE.items():
     T[_lang].update(zip(("keepAwake.sleep", "keepAwake.sleep.help",
                          "keepAwake.display", "keepAwake.display.help"), _values))
+
+
+# «Управление»: сводка питания рядом с плитками (AppleSmartBattery).
+# Единицы W, V, A, °C не переводятся. Циклы — через двоеточие там, где
+# иначе понадобилось бы множественное число.
+_POWER_KEYS = ("power.charging", "power.charged", "power.notCharging", "power.onBattery",
+               "power.charger", "power.input", "power.input.help", "power.battery",
+               "power.health", "power.health.value", "power.health.help")
+_POWER = {
+    "en": ("Charging", "Charged", "Not charging", "On battery", "Charger", "Input",
+           "Power the Mac is drawing from the charger right now", "Battery",
+           "Health", "%@ · %d cycles", "Full charge capacity: %d of %d mAh by design"),
+    "ru": ("Заряжается", "Заряжен", "Не заряжается", "От аккумулятора", "Зарядка", "Вход",
+           "Сколько Mac берёт от зарядки прямо сейчас", "Аккумулятор",
+           "Здоровье", "%@ · циклов: %d", "Полная ёмкость: %d из %d мА·ч по паспорту"),
+    "uk": ("Заряджається", "Заряджено", "Не заряджається", "Від акумулятора", "Зарядка", "Вхід",
+           "Скільки Mac бере від зарядки просто зараз", "Акумулятор",
+           "Стан", "%@ · циклів: %d", "Повна ємність: %d з %d мА·год за паспортом"),
+    "de": ("Lädt", "Geladen", "Lädt nicht", "Batteriebetrieb", "Netzteil", "Eingang",
+           "Leistung, die der Mac gerade vom Netzteil bezieht", "Batterie",
+           "Zustand", "%@ · Zyklen: %d", "Volle Ladekapazität: %d von %d mAh laut Spezifikation"),
+    "es": ("Cargando", "Cargada", "No se está cargando", "Con batería", "Cargador", "Entrada",
+           "Potencia que el Mac toma ahora del cargador", "Batería",
+           "Salud", "%@ · ciclos: %d", "Capacidad de carga completa: %d de %d mAh de diseño"),
+    "fr": ("En charge", "Chargée", "Pas en charge", "Sur batterie", "Chargeur", "Entrée",
+           "Puissance que le Mac tire du chargeur en ce moment", "Batterie",
+           "État", "%@ · cycles : %d", "Capacité de charge complète : %d sur %d mAh d’origine"),
+    "it": ("In carica", "Carica", "Non in carica", "A batteria", "Alimentatore", "Ingresso",
+           "Potenza che il Mac sta prelevando ora dall’alimentatore", "Batteria",
+           "Salute", "%@ · cicli: %d", "Capacità di carica completa: %d di %d mAh di progetto"),
+    "pl": ("Ładowanie", "Naładowana", "Nie ładuje", "Na baterii", "Ładowarka", "Wejście",
+           "Moc, którą Mac pobiera teraz z ładowarki", "Bateria",
+           "Kondycja", "%@ · cykle: %d", "Pełna pojemność: %d z %d mAh fabrycznie"),
+    "pt-BR": ("Carregando", "Carregada", "Não está carregando", "Na bateria", "Carregador", "Entrada",
+              "Potência que o Mac está puxando do carregador agora", "Bateria",
+              "Saúde", "%@ · ciclos: %d", "Capacidade de carga total: %d de %d mAh de fábrica"),
+    "tr": ("Şarj oluyor", "Şarj oldu", "Şarj olmuyor", "Pilde", "Şarj aleti", "Giriş",
+           "Mac’in şu anda şarj aletinden çektiği güç", "Pil",
+           "Sağlık", "%@ · döngü: %d", "Tam şarj kapasitesi: tasarımdaki %2$d mAh’nin %1$d mAh’i"),
+    "ja": ("充電中", "充電完了", "充電していません", "バッテリー駆動", "充電器", "入力",
+           "Macが今充電器から受け取っている電力", "バッテリー",
+           "状態", "%@ · 充放電回数: %d", "フル充電容量: 設計値 %2$d mAh 中 %1$d mAh"),
+    "ko": ("충전 중", "충전 완료", "충전 안 됨", "배터리 사용 중", "충전기", "입력",
+           "Mac이 지금 충전기에서 받고 있는 전력", "배터리",
+           "상태", "%@ · 사이클: %d", "완전 충전 용량: 설계 %2$d mAh 중 %1$d mAh"),
+    "zh-Hans": ("正在充电", "已充满", "未在充电", "使用电池", "充电器", "输入",
+                "Mac 当前从充电器获取的功率", "电池",
+                "健康", "%@ · 循环 %d 次", "满充容量：%d / 设计 %d mAh"),
+    "zh-Hant": ("正在充電", "已充滿", "未在充電", "使用電池", "充電器", "輸入",
+                "Mac 目前從充電器取得的功率", "電池",
+                "健康度", "%@ · 循環 %d 次", "完整充電容量：%d / 設計 %d mAh"),
+}
+for _lang, _values in _POWER.items():
+    T[_lang].update(zip(_POWER_KEYS, _values))
 
 
 def main():

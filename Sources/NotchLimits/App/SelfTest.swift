@@ -29,6 +29,7 @@ enum SelfTest {
         checkUpdateCheck()
         checkAccountSwitcher()
         checkFormatting()
+        checkPowerParser()
         checkCodableRoundTrips()
         checkLocalizations()
         checkDefaultsMigration()
@@ -667,6 +668,73 @@ enum SelfTest {
         defaults.set(true, forKey: DefaultsMigration.doneKey)
         DefaultsMigration.runIfNeeded(defaults: defaults)
         expect("повторный перенос не выполняется", defaults.dictionaryRepresentation()["hotKey"] == nil)
+    }
+
+    // MARK: - Питание
+
+    private static func checkPowerParser() {
+        section("Питание: разбор AppleSmartBattery")
+
+        // Срез `ioreg -rc AppleSmartBattery` с MacBook Pro на Apple Silicon
+        // от 96-ваттного адаптера: заряд в процентах, ёмкость — в AppleRaw…
+        let appleSilicon: [String: Any] = [
+            "BatteryInstalled": true, "ExternalConnected": true,
+            "IsCharging": false, "FullyCharged": true,
+            "CurrentCapacity": 100, "MaxCapacity": 100,
+            "AppleRawMaxCapacity": 5017, "DesignCapacity": 6075,
+            "Voltage": 12606, "Amperage": 0, "Temperature": 3080, "CycleCount": 309,
+            "AdapterDetails": ["Name": "96W USB-C Power Adapter", "Watts": 94,
+                               "AdapterVoltage": 20000, "Current": 4690,
+                               "FamilyCode": NSNumber(value: UInt64(18446744073172697098))],
+            "PowerTelemetryData": ["SystemPowerIn": 51509, "SystemVoltageIn": 20229,
+                                   "SystemCurrentIn": 2546],
+            "ChargerData": ["ChargingVoltage": 4253, "ChargingCurrent": 0]
+        ]
+        if let power = PowerSnapshot.parse(appleSilicon) {
+            expect("AS: заряжен от сети", power.state == .charged)
+            expect("AS: 100 %", power.percent == 100)
+            expect("AS: 12,606 В", power.voltage == 12.606)
+            expect("AS: 30,8 °C", power.temperature == 30.8)
+            expect("AS: 309 циклов", power.cycleCount == 309)
+            expect("AS: здоровье по AppleRaw", power.maxCapacity == 5017
+                   && abs((power.health ?? 0) - 82.58) < 0.01, "\(String(describing: power.health))")
+            expect("AS: адаптер 94 Вт, 20 В, 4,69 А",
+                   power.adapter == .init(name: "96W USB-C Power Adapter", watts: 94,
+                                          voltage: 20, current: 4.69))
+            expect("AS: вход 51,509 Вт", power.input == .init(watts: 51.509, voltage: 20.229, current: 2.546))
+        } else {
+            expect("AS: словарь разобран", false)
+        }
+
+        // Intel: ёмкость в мА·ч, разряд, ток пришёл беззнаковым образом −1500.
+        let intel: [String: Any] = [
+            "ExternalConnected": false, "IsCharging": false, "FullyCharged": false,
+            "CurrentCapacity": 2600, "MaxCapacity": 5200, "DesignCapacity": 6000,
+            "Voltage": 11400, "Amperage": NSNumber(value: UInt64.max - 1499),
+            "Temperature": 2950, "CycleCount": 12,
+            "AdapterDetails": ["FamilyCode": 0]
+        ]
+        if let power = PowerSnapshot.parse(intel) {
+            expect("Intel: от аккумулятора", power.state == .onBattery)
+            expect("Intel: 50 %", power.percent == 50)
+            expect("Intel: ток −1,5 А", power.current == -1.5, "\(String(describing: power.current))")
+            expect("Intel: ёмкость из MaxCapacity", power.maxCapacity == 5200)
+            expect("Intel: без адаптера и входа", power.adapter == nil && power.input == nil)
+        } else {
+            expect("Intel: словарь разобран", false)
+        }
+
+        var charging = intel
+        charging["ExternalConnected"] = true
+        charging["IsCharging"] = true
+        charging["Amperage"] = 2100
+        expect("заряжается", PowerSnapshot.parse(charging)?.state == .charging)
+        charging["IsCharging"] = false
+        expect("от сети, но держит заряд", PowerSnapshot.parse(charging)?.state == .notCharging)
+
+        expect("без аккумулятора — nil", PowerSnapshot.parse(["BatteryInstalled": false, "Voltage": 0]) == nil)
+        expect("пустой словарь — nil", PowerSnapshot.parse([:]) == nil)
+        expect("единицы по локали", Format.unit(-1.5, digits: 2, "A").hasSuffix("\u{00A0}A"))
     }
 
     // MARK: - Локализации

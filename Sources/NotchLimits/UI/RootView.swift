@@ -4,6 +4,7 @@ struct RootView: View {
     @ObservedObject var store: UsageStore
     @ObservedObject var state: PanelState
     @ObservedObject var keepAwake: KeepAwake
+    let power: PowerMonitor
 
     private var shapeWidth: CGFloat { state.expanded ? state.expandedSize.width : state.collapsedSize.width }
     private var shapeHeight: CGFloat { state.expanded ? state.expandedSize.height : state.collapsedSize.height }
@@ -20,7 +21,7 @@ struct RootView: View {
                     .frame(width: state.collapsedSize.width, height: state.collapsedSize.height)
                     .opacity(state.expanded ? 0 : 1)
 
-                ExpandedContent(store: store, state: state, keepAwake: keepAwake)
+                ExpandedContent(store: store, state: state, keepAwake: keepAwake, power: power)
                     .frame(width: state.expandedSize.width, height: state.expandedSize.height)
                     .opacity(state.expanded ? 1 : 0)
                     // Появляемся с задержкой, гаснем быстро: так текст не успевает
@@ -88,6 +89,7 @@ private struct ExpandedContent: View {
     @ObservedObject var store: UsageStore
     @ObservedObject var state: PanelState
     @ObservedObject var keepAwake: KeepAwake
+    let power: PowerMonitor
 
     var body: some View {
         VStack(spacing: 0) {
@@ -99,7 +101,7 @@ private struct ExpandedContent: View {
             VStack(spacing: 0) {
                 if store.visibleColumns.isEmpty {
                     // Без аккаунтов панель — просто «Управление» и тихая подсказка.
-                    ControlsSection(keepAwake: keepAwake)
+                    ControlsSection(keepAwake: keepAwake, power: power)
                         .padding(.top, 10)
                     EmptyHint(store: store)
                 } else {
@@ -113,7 +115,7 @@ private struct ExpandedContent: View {
                         .frame(height: 1)
                         .padding(.horizontal, 14)
                         .padding(.top, 12)
-                    ControlsSection(keepAwake: keepAwake)
+                    ControlsSection(keepAwake: keepAwake, power: power)
                         .padding(.top, 10)
                 }
             }

@@ -14,12 +14,20 @@ enum DebugRender {
         let root = URL(fileURLWithPath: directory, isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
+        // Питание — из фикстуры, а не с этого Mac: картинки не должны зависеть
+        // от того, где их рендерят (и есть ли там аккумулятор).
+        PowerMonitor.shared.setSnapshotForRendering(chargingPower)
+
         renderPanel(to: root.appendingPathComponent("panel.png"), columns: healthyColumns())
         renderPanel(to: root.appendingPathComponent("states.png"), columns: mixedColumns(), extraHeight: 40)
         renderCollapsed(to: root.appendingPathComponent("collapsed.png"))
         renderPanel(to: root.appendingPathComponent("controls.png"), columns: [],
                     extraHeight: Self.controlsHeight + 30 - Layout.contentHeight)
         renderCollapsedNotch(to: root.appendingPathComponent("collapsed-awake.png"))
+
+        PowerMonitor.shared.setSnapshotForRendering(batteryPower)
+        renderPanel(to: root.appendingPathComponent("power-battery.png"), columns: [],
+                    extraHeight: Self.controlsHeight + 30 - Layout.contentHeight)
 
         exit(0)
     }
@@ -48,7 +56,7 @@ enum DebugRender {
         let panelSize = state.expandedSize
         let scene = ZStack(alignment: .top) {
             desktop
-            RootView(store: store, state: state, keepAwake: .shared)
+            RootView(store: store, state: state, keepAwake: .shared, power: .shared)
                 .frame(width: panelSize.width, height: panelSize.height)
         }
         .frame(width: panelSize.width + 48, height: panelSize.height + 40, alignment: .top)
@@ -69,7 +77,7 @@ enum DebugRender {
 
         let scene = ZStack(alignment: .top) {
             desktop
-            RootView(store: store, state: state, keepAwake: .shared)
+            RootView(store: store, state: state, keepAwake: .shared, power: .shared)
                 .frame(width: 190, height: 30)
         }
         .frame(width: 420, height: 96, alignment: .top)
@@ -92,7 +100,7 @@ enum DebugRender {
 
         let scene = ZStack(alignment: .top) {
             desktop
-            RootView(store: store, state: state, keepAwake: .shared)
+            RootView(store: store, state: state, keepAwake: .shared, power: .shared)
                 .frame(width: size.width, height: size.height)
         }
         .frame(width: 420, height: 96, alignment: .top)
@@ -128,6 +136,30 @@ enum DebugRender {
     }
 
     // MARK: - Данные для картинок
+
+    private static let chargingPower: PowerSnapshot = {
+        var power = PowerSnapshot(state: .charging, percent: 84)
+        power.voltage = 12.41
+        power.current = 2.13
+        power.temperature = 31.6
+        power.cycleCount = 309
+        power.maxCapacity = 5017
+        power.designCapacity = 6075
+        power.adapter = .init(name: "96W USB-C Power Adapter", watts: 94, voltage: 20, current: 4.69)
+        power.input = .init(watts: 51.5, voltage: 20.2, current: 2.55)
+        return power
+    }()
+
+    private static let batteryPower: PowerSnapshot = {
+        var power = PowerSnapshot(state: .onBattery, percent: 18)
+        power.voltage = 11.38
+        power.current = -1.2
+        power.temperature = 29.4
+        power.cycleCount = 309
+        power.maxCapacity = 5017
+        power.designCapacity = 6075
+        return power
+    }()
 
     private static let hour: TimeInterval = 3_600
 
