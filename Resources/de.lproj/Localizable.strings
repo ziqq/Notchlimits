@@ -36,6 +36,19 @@
 "keepAwake.display" = "Display anlassen";
 "keepAwake.display.help" = "Display nicht ausschalten, solange der Mac wach gehalten wird";
 
+// Питание
+"power.charging" = "Lädt";
+"power.charged" = "Geladen";
+"power.notCharging" = "Lädt nicht";
+"power.onBattery" = "Batteriebetrieb";
+"power.charger" = "Netzteil";
+"power.input" = "Eingang";
+"power.input.help" = "Leistung, die der Mac gerade vom Netzteil bezieht";
+"power.battery" = "Batterie";
+"power.health" = "Zustand";
+"power.health.value" = "%@ · Zyklen: %d";
+"power.health.help" = "Volle Ladekapazität: %d von %d mAh laut Spezifikation";
+
 // Контекстное меню
 "menu.refresh" = "Aktualisieren";
 "menu.addClaude" = "Claude-Account hinzufügen…";

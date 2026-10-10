@@ -36,6 +36,19 @@
 "keepAwake.display" = "保持屏幕常亮";
 "keepAwake.display.help" = "防止 Mac 睡眠时不关闭显示器";
 
+// Питание
+"power.charging" = "正在充电";
+"power.charged" = "已充满";
+"power.notCharging" = "未在充电";
+"power.onBattery" = "使用电池";
+"power.charger" = "充电器";
+"power.input" = "输入";
+"power.input.help" = "Mac 当前从充电器获取的功率";
+"power.battery" = "电池";
+"power.health" = "健康";
+"power.health.value" = "%@ · 循环 %d 次";
+"power.health.help" = "满充容量：%d / 设计 %d mAh";
+
 // Контекстное меню
 "menu.refresh" = "刷新";
 "menu.addClaude" = "添加 Claude 账户…";

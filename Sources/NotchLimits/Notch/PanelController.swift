@@ -10,6 +10,8 @@ final class PanelController {
     private let store: UsageStore
     private let keepAwake: KeepAwake
     private var keepAwakeObserver: AnyCancellable?
+    private let power: PowerMonitor
+    private var expandedObserver: AnyCancellable?
     private var panel: NotchPanel!
     private var hosting: NotchHostingView<RootView>!
 
@@ -32,9 +34,10 @@ final class PanelController {
     var onContextMenu: ((NSEvent, NSView) -> Void)?
     var onWillOpen: (() -> Void)?
 
-    init(store: UsageStore, keepAwake: KeepAwake) {
+    init(store: UsageStore, keepAwake: KeepAwake, power: PowerMonitor) {
         self.store = store
         self.keepAwake = keepAwake
+        self.power = power
     }
 
     // MARK: - Жизненный цикл
@@ -47,7 +50,7 @@ final class PanelController {
         }
         recomputeExpandedSize()
 
-        let root = RootView(store: store, state: state, keepAwake: keepAwake)
+        let root = RootView(store: store, state: state, keepAwake: keepAwake, power: power)
         hosting = NotchHostingView(rootView: root)
         hosting.onRightClick = { [weak self] event in
             guard let self else { return }
@@ -63,6 +66,16 @@ final class PanelController {
         startMonitors()
         observeScreenChanges()
         observeKeepAwake()
+        observeExpanded()
+    }
+
+    /// Питание опрашиваем, только пока панель раскрыта.
+    private func observeExpanded() {
+        expandedObserver = state.$expanded
+            .removeDuplicates()
+            .sink { [weak self] expanded in
+                MainActor.assumeIsolated { self?.power.setActive(expanded) }
+            }
     }
 
     /// Индикатор в свёрнутой панели меняет её ширину: рамку окна подгоняем,

@@ -16,6 +16,8 @@ A panel that slides out of the MacBook notch with **Claude Code** and **Codex** 
 - Works without a notch too (external display, Mac mini, iMac).
 - **Keep Awake**: the "Controls" section keeps the Mac from sleeping and, optionally, the display from turning off —
   standard IOKit power assertions, no admin password. While it's on, the collapsed notch shows a cup on its side.
+- **Power**: next to the Controls tiles — charging state, charger watts and voltage, live input power, battery voltage,
+  current, temperature, health and cycle count. Read from IORegistry while the panel is open; hidden without a battery.
 - Notifications when any window crosses 80 % and 95 %, and when a heavily-used window resets and frees up.
 - A burn-rate forecast: if the current pace would hit 100 % before the window resets, the row shows when.
 - One-click self-update from GitHub releases: **Check for updates** downloads the new build, verifies its SHA-256, swaps the bundle and relaunches — no browser needed (opening the release page stays as a fallback).

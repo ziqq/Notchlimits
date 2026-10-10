@@ -9,6 +9,10 @@
   cached percentages, usage history) move over from `com.ziqq.notchlimits` on first launch. macOS treats it as a new
   app, so it asks once more for Keychain access and notifications, and **Launch at login** has to be turned on again.
 - **CHANGED**: Without any accounts, the panel shows the Controls section with a short hint instead of an empty state.
+- **ADDED**: Power readout next to the Keep Awake tiles: charging state and level, charger rating and negotiated
+  voltage, live input power (Apple Silicon), battery voltage, current and temperature, health and cycle count. Read from
+  IORegistry `AppleSmartBattery` without admin rights, every 5 seconds and only while the panel is open; hidden on Macs
+  without a battery.
 - **REMOVED**: Unused translations — the old CLI account switcher (`switch.*`), `menu.liquidGlass` and
   `update.checking` — from the generator and all 14 languages.
 
