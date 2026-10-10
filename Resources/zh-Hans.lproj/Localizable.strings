@@ -34,7 +34,7 @@
 "keepAwake.sleep" = "防止 Mac 睡眠";
 "keepAwake.sleep.help" = "闲置时不让 Mac 进入睡眠";
 "keepAwake.display" = "保持屏幕常亮";
-"keepAwake.display.help" = "防止 Mac 睡眠时不关闭显示器";
+"keepAwake.display.help" = "闲置时不关闭显示器";
 
 // Питание
 "power.charging" = "正在充电";
@@ -48,6 +48,11 @@
 "power.health" = "健康";
 "power.health.value" = "%@ · 循环 %d 次";
 "power.health.help" = "满充容量：%d / 设计 %d mAh";
+"power.port" = "端口";
+"power.modes" = "充电器模式";
+"ports.charging" = "充电";
+"ports.free" = "空闲";
+"ports.connected" = "已连接";
 
 // Контекстное меню
 "menu.refresh" = "刷新";

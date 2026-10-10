@@ -80,6 +80,4 @@ enum Layout {
     static let contentBottomPadding: CGFloat = 14
     static let collapsedCornerRadius: CGFloat = 8
     static let expandedCornerRadius: CGFloat = 20
-    /// Ширина «ушка» свёрнутой панели с индикатором Keep Awake.
-    static let earWidth: CGFloat = 26
 }

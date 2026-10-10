@@ -1,11 +1,13 @@
 import SwiftUI
 
-/// Маленькие индикаторы состояния в строке «Обновлено …»: Keep Awake и питание.
-/// Только показывают — включается всё из контекстного меню. Подробности —
-/// во всплывающей подсказке, чтобы капсулы оставались короткими.
+/// Маленькие индикаторы состояния в строке «Обновлено …»: Keep Awake, питание, порты.
+/// Только показывают — включается всё из контекстного меню. Подробности по
+/// наведению пишутся в `hint`: системные подсказки (`.help`) в неактивной
+/// панели не появляются, поэтому текст рисует сама панель.
 struct StatusIndicators: View {
     @ObservedObject var keepAwake: KeepAwake
     @ObservedObject var power: PowerMonitor
+    @Binding var hint: String?
 
     var body: some View {
         HStack(spacing: 6) {
@@ -13,18 +15,15 @@ struct StatusIndicators: View {
             Chip(help: L.t("keepAwake.sleep.help"), isOn: keepAwake.isActive, tint: Theme.primary) {
                 Image(systemName: keepAwake.isActive ? "cup.and.saucer.fill" : "cup.and.saucer")
             }
-            Chip(help: L.t("keepAwake.display.help"), isOn: displayKeptOn, tint: Theme.primary) {
+            Chip(help: L.t("keepAwake.display.help"), isOn: keepAwake.keepDisplayOn, tint: Theme.primary) {
                 Image(systemName: "display")
             }
-            if let snapshot = power.snapshot {
-                PowerChips(snapshot: snapshot)
-            }
+            PowerChips(snapshot: power.snapshot, ports: power.ports)
         }
         .fixedSize()
+        .environment(\.chipHint, $hint)
     }
 
-    /// Экран держится, только пока включён основной режим.
-    private var displayKeptOn: Bool { keepAwake.isActive && keepAwake.keepDisplayOn }
 }
 
 /// Капсула индикатора: иконки и короткое значение, в тон подписи «Обновлено».
@@ -35,6 +34,7 @@ private struct Chip<Content: View>: View {
     var isOn = true
     var tint: Color = Theme.secondary
     @ViewBuilder var content: Content
+    @Environment(\.chipHint) private var hint
 
     var body: some View {
         HStack(spacing: 4) { content }
@@ -45,13 +45,176 @@ private struct Chip<Content: View>: View {
             .padding(.horizontal, 7)
             .frame(height: 18)
             .background(Capsule().fill(Color.white.opacity(isOn ? 0.1 : 0.04)))
-            .help(help ?? "")
+            .contentShape(Capsule())
+            .onHover { inside in
+                guard let hint, let help, !help.isEmpty else { return }
+                if inside {
+                    hint.wrappedValue = help
+                } else if hint.wrappedValue == help {
+                    hint.wrappedValue = nil
+                }
+            }
     }
 }
 
-/// Питание двумя капсулами: аккумулятор (заряд и температура) и зарядка
-/// («сколько берёт сейчас / на сколько рассчитан адаптер»).
+/// Куда капсулы пишут подсказку при наведении.
+private struct ChipHintKey: EnvironmentKey {
+    static let defaultValue: Binding<String?>? = nil
+}
+
+extension EnvironmentValues {
+    var chipHint: Binding<String?>? {
+        get { self[ChipHintKey.self] }
+        set { self[ChipHintKey.self] = newValue }
+    }
+}
+
+/// Подсказка капсулы: плашка в тон панели.
+struct ChipHintBubble: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10))
+            .foregroundColor(Theme.secondary)
+            .lineSpacing(2)
+            .fixedSize()
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color(white: 0.13)))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.divider))
+            .allowsHitTesting(false)
+    }
+}
+
+/// Питание и порты: аккумулятор (заряд и температура), зарядка («порт · сколько
+/// берёт сейчас / на сколько рассчитан адаптер») и занятость разъёмов USB-C.
 private struct PowerChips: View {
+    let snapshot: PowerSnapshot?
+    let ports: PortsSnapshot?
+
+    var body: some View {
+        if let snapshot {
+            BatteryChip(snapshot: snapshot)
+        }
+        if let charger = chargerText {
+            Chip(help: chargerHelp) {
+                Image(systemName: "bolt.fill")
+                Text(charger)
+            }
+        }
+        if let ports, ports.ports.contains(where: { !$0.isMagSafe }) {
+            PortsChip(ports: ports)
+        }
+    }
+
+    private var contract: PortsSnapshot.Contract? { ports?.contract }
+
+    /// «MagSafe · 37,2 / 94 W»: порт питания и мощность.
+    private var chargerText: String? {
+        let parts = [contract.map(Self.shortName), chargerWatts].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// «MagSafe», «USB-C 2» — коротко, для капсулы.
+    static func shortName(_ contract: PortsSnapshot.Contract) -> String {
+        contract.portKind.hasPrefix("MagSafe") ? "MagSafe" : "\(contract.portKind) \(contract.portNumber)"
+    }
+
+    /// «37,2 / 94 W»: сколько Mac берёт от зарядки сейчас из паспортной мощности
+    /// адаптера. Без телеметрии — только паспорт, без адаптера — ничего.
+    private var chargerWatts: String? {
+        let rated = snapshot?.adapter?.watts ?? contract.map { Int($0.watts.rounded()) }
+        guard let input = snapshot?.input else {
+            return rated.map { Format.unit(Double($0), digits: 0, "W") }
+        }
+        guard let rated else { return Format.unit(input.watts, digits: 1, "W") }
+        return Format.number(input.watts, digits: 1) + " / " + Format.unit(Double(rated), digits: 0, "W")
+    }
+
+    /// Порт и контракт, адаптер по паспорту и что Mac берёт от него прямо сейчас.
+    private var chargerHelp: String {
+        var lines: [String] = []
+        if let contract {
+            lines.append(L.t("power.port") + ": " + joined([
+                "\(contract.portKind) \(contract.portNumber)",
+                Format.unit(contract.voltage, digits: contract.voltage == contract.voltage.rounded() ? 0 : 1, "V"),
+                Format.unit(contract.current, digits: 2, "A"),
+                Format.unit(contract.watts, digits: 1, "W")
+            ]))
+            if contract.offeredVoltages.count > 1 {
+                lines.append(L.t("power.modes") + ": "
+                             + contract.offeredVoltages.map { Format.number($0, digits: 0) }.joined(separator: " / ")
+                             + "\u{00A0}V")
+            }
+        }
+        if let adapter = snapshot?.adapter {
+            let value = joined([adapter.name,
+                                adapter.watts.map { Format.unit(Double($0), digits: 0, "W") }])
+            lines.append(L.t("power.charger") + ": " + value)
+        }
+        if let input = snapshot?.input {
+            let value = joined([Format.unit(input.watts, digits: 1, "W"),
+                                input.voltage.map { Format.unit($0, digits: 1, "V") },
+                                input.current.map { Format.unit($0, digits: 2, "A") }])
+            lines.append(L.t("power.input") + ": " + value)
+            lines.append(L.t("power.input.help"))
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func joined(_ parts: [String?]) -> String {
+        parts.compactMap { $0 }.joined(separator: " · ")
+    }
+}
+
+/// Разъёмы USB-C цифрами: занятые — ярко, свободные — приглушённо.
+private struct PortsChip: View {
+    let ports: PortsSnapshot
+
+    private var usbC: [PortsSnapshot.Port] { ports.ports.filter { !$0.isMagSafe } }
+
+    var body: some View {
+        Chip(help: help) {
+            Image(systemName: "cable.connector")
+            Text("USB-C")
+            ForEach(usbC) { port in
+                Text("\(port.number)")
+                    .foregroundColor(port.connected ? Theme.primary : Theme.tertiary.opacity(0.6))
+            }
+        }
+    }
+
+    /// «USB-C 1: USB 2 / USB-C 3: свободен / MagSafe 3: зарядка».
+    private var help: String {
+        ports.ports.map { port in
+            let state: String
+            if ports.contract?.portKind == port.kind && ports.contract?.portNumber == port.number {
+                state = L.t("ports.charging")
+            } else if !port.connected {
+                state = L.t("ports.free")
+            } else if port.transports.isEmpty {
+                state = L.t("ports.connected")
+            } else {
+                state = port.transports.map(Self.transportName).joined(separator: " · ")
+            }
+            return "\(port.kind) \(port.number): \(state)"
+        }
+        .joined(separator: "\n")
+    }
+
+    private static func transportName(_ raw: String) -> String {
+        switch raw {
+        case "USB2": return "USB 2"
+        case "USB3": return "USB 3"
+        case "CIO": return "Thunderbolt"
+        default: return raw
+        }
+    }
+}
+
+/// Аккумулятор: заряд и температура, цвет — от сети или мало заряда.
+private struct BatteryChip: View {
     let snapshot: PowerSnapshot
 
     var body: some View {
@@ -63,12 +226,6 @@ private struct PowerChips: View {
             if let temperature = snapshot.temperature {
                 Text("· " + Format.unit(temperature, digits: 0, "°C"))
                     .foregroundColor(Theme.secondary)
-            }
-        }
-        if let watts = chargerWatts {
-            Chip(help: chargerHelp) {
-                Image(systemName: "bolt.fill")
-                Text(watts)
             }
         }
     }
@@ -97,17 +254,6 @@ private struct PowerChips: View {
         }
     }
 
-    /// «37,2 / 94 W»: сколько Mac берёт от зарядки сейчас из паспортной мощности
-    /// адаптера. Без телеметрии — только паспорт, без адаптера — ничего.
-    private var chargerWatts: String? {
-        let rated = snapshot.adapter?.watts
-        guard let input = snapshot.input else {
-            return rated.map { Format.unit(Double($0), digits: 0, "W") }
-        }
-        guard let rated else { return Format.unit(input.watts, digits: 1, "W") }
-        return Format.number(input.watts, digits: 1) + " / " + Format.unit(Double(rated), digits: 0, "W")
-    }
-
     private var stateTitle: String {
         switch snapshot.state {
         case .charging: return L.t("power.charging")
@@ -131,26 +277,6 @@ private struct PowerChips: View {
         return lines.joined(separator: "\n")
     }
 
-    /// Адаптер по паспорту и что Mac берёт от него прямо сейчас.
-    private var chargerHelp: String {
-        var lines: [String] = []
-        if let adapter = snapshot.adapter {
-            let value = joined([adapter.name,
-                                adapter.watts.map { Format.unit(Double($0), digits: 0, "W") },
-                                adapter.voltage.map { Format.unit($0, digits: $0 == $0.rounded() ? 0 : 1, "V") },
-                                adapter.current.map { Format.unit($0, digits: 2, "A") }])
-            lines.append(L.t("power.charger") + ": " + value)
-        }
-        if let input = snapshot.input {
-            let value = joined([Format.unit(input.watts, digits: 1, "W"),
-                                input.voltage.map { Format.unit($0, digits: 1, "V") },
-                                input.current.map { Format.unit($0, digits: 2, "A") }])
-            lines.append(L.t("power.input") + ": " + value)
-            lines.append(L.t("power.input.help"))
-        }
-        return lines.joined(separator: "\n")
-    }
-
     private var healthValue: String? {
         switch (snapshot.health, snapshot.cycleCount) {
         case let (health?, cycles?): return L.t("power.health.value", Format.percent(health), cycles)
@@ -161,29 +287,6 @@ private struct PowerChips: View {
 
     private func joined(_ parts: [String?]) -> String {
         parts.compactMap { $0 }.joined(separator: " · ")
-    }
-}
-
-/// Индикатор Keep Awake в «ушках» свёрнутой панели: чашка слева,
-/// справа — экран, если он тоже не гаснет.
-struct KeepAwakeEars: View {
-    @ObservedObject var keepAwake: KeepAwake
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ear("cup.and.saucer.fill")
-            Spacer(minLength: 0)
-            if keepAwake.keepDisplayOn {
-                ear("display")
-            }
-        }
-    }
-
-    private func ear(_ symbol: String) -> some View {
-        Image(systemName: symbol)
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundColor(Theme.primary)
-            .frame(width: Layout.earWidth)
     }
 }
 

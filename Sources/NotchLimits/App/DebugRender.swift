@@ -16,16 +16,17 @@ enum DebugRender {
 
         // Питание — из фикстуры, а не с этого Mac: картинки не должны зависеть
         // от того, где их рендерят (и есть ли там аккумулятор).
-        PowerMonitor.shared.setSnapshotForRendering(chargingPower)
+        PowerMonitor.shared.setSnapshotForRendering(chargingPower, ports: ports)
 
         renderPanel(to: root.appendingPathComponent("panel.png"), columns: healthyColumns())
         renderPanel(to: root.appendingPathComponent("states.png"), columns: mixedColumns(), extraHeight: 40)
         renderCollapsed(to: root.appendingPathComponent("collapsed.png"))
         KeepAwake.shared.setActive(true)
+        KeepAwake.shared.setKeepDisplayOn(true)
         renderPanel(to: root.appendingPathComponent("controls.png"), columns: [],
                     extraHeight: Self.indicatorsOnlyHeight - Layout.contentHeight)
         KeepAwake.shared.setActive(false)
-        renderCollapsedNotch(to: root.appendingPathComponent("collapsed-awake.png"))
+        KeepAwake.shared.setKeepDisplayOn(false)
 
         PowerMonitor.shared.setSnapshotForRendering(batteryPower)
         renderPanel(to: root.appendingPathComponent("power-battery.png"), columns: [],
@@ -87,29 +88,6 @@ enum DebugRender {
         write(scene, to: url)
     }
 
-    /// Свёрнутая челка с включённым Keep Awake: индикаторы в «ушках».
-    @MainActor
-    private static func renderCollapsedNotch(to url: URL) {
-        let store = UsageStore(providers: [:], discovery: MockDiscovery())
-        KeepAwake.shared.setActive(true)
-        defer { KeepAwake.shared.setActive(false) }
-
-        let state = PanelState()
-        state.expanded = false
-        state.geometry = notchedScreen
-        state.keepAwakeIndicator = true
-        let size = state.collapsedSize
-
-        let scene = ZStack(alignment: .top) {
-            desktop
-            RootView(store: store, state: state, keepAwake: .shared, power: .shared)
-                .frame(width: size.width, height: size.height)
-        }
-        .frame(width: 420, height: 96, alignment: .top)
-
-        write(scene, to: url)
-    }
-
     private static var desktop: some View {
         LinearGradient(colors: [Color(red: 0.16, green: 0.17, blue: 0.21),
                                 Color(red: 0.09, green: 0.10, blue: 0.13)],
@@ -151,6 +129,15 @@ enum DebugRender {
         power.input = .init(watts: 51.5, voltage: 20.2, current: 2.55)
         return power
     }()
+
+    private static let ports = PortsSnapshot(
+        ports: [.init(kind: "MagSafe 3", number: 1, connected: true, transports: []),
+                .init(kind: "USB-C", number: 1, connected: true, transports: ["USB3"]),
+                .init(kind: "USB-C", number: 2, connected: false, transports: []),
+                .init(kind: "USB-C", number: 3, connected: true, transports: ["DisplayPort"])],
+        contract: .init(portKind: "MagSafe 3", portNumber: 1, voltage: 20, current: 4.69, watts: 93.8,
+                        offeredVoltages: [5, 9, 15, 20])
+    )
 
     private static let batteryPower: PowerSnapshot = {
         var power = PowerSnapshot(state: .onBattery, percent: 18)

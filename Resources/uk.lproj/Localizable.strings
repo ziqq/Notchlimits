@@ -34,7 +34,7 @@
 "keepAwake.sleep" = "Не давати Mac заснути";
 "keepAwake.sleep.help" = "Не давати Mac засинати під час бездіяльності";
 "keepAwake.display" = "Не гасити екран";
-"keepAwake.display.help" = "Не вимикати екран, поки Mac не дає заснути";
+"keepAwake.display.help" = "Не вимикати екран під час бездіяльності";
 
 // Питание
 "power.charging" = "Заряджається";
@@ -48,6 +48,11 @@
 "power.health" = "Стан";
 "power.health.value" = "%@ · циклів: %d";
 "power.health.help" = "Повна ємність: %d з %d мА·год за паспортом";
+"power.port" = "Порт";
+"power.modes" = "Режими зарядки";
+"ports.charging" = "зарядка";
+"ports.free" = "вільний";
+"ports.connected" = "підключено";
 
 // Контекстное меню
 "menu.refresh" = "Оновити";

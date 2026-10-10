@@ -1,7 +1,8 @@
 import Foundation
 import IOKit.pwr_mgt
 
-/// «Не давать Mac уснуть»: штатные power assertions IOKit, как у `caffeinate`.
+/// «Не давать Mac уснуть» и «Не гасить экран»: штатные power assertions IOKit,
+/// как у `caffeinate`. Режимы независимы и живут, пока работает приложение.
 ///
 /// Прав администратора не нужно. Assertion живёт ровно столько, сколько процесс:
 /// если приложение упадёт или его закроют, система снимет его сама, и Mac
@@ -10,55 +11,37 @@ import IOKit.pwr_mgt
 final class KeepAwake: ObservableObject {
     static let shared = KeepAwake()
 
-    private enum Key {
-        static let keepDisplayOn = "keepAwake.keepDisplayOn"
-    }
-
-    /// Сессия включена: система не уходит в сон по бездействию.
+    /// Система не уходит в сон по бездействию.
     @Published private(set) var isActive = false
+    /// Экран не гаснет по бездействию (а значит, не засыпает и Mac).
+    @Published private(set) var keepDisplayOn = false
 
-    /// Заодно не гасить экран. Настройка переживает перезапуск; по умолчанию — да.
-    @Published var keepDisplayOn: Bool {
-        didSet {
-            guard keepDisplayOn != oldValue else { return }
-            UserDefaults.standard.set(keepDisplayOn, forKey: Key.keepDisplayOn)
-            syncAssertions()
-        }
-    }
+    var anyActive: Bool { isActive || keepDisplayOn }
 
     private var systemAssertion: PowerAssertion?
     private var displayAssertion: PowerAssertion?
 
-    private init() {
-        let defaults = UserDefaults.standard
-        keepDisplayOn = defaults.object(forKey: Key.keepDisplayOn) as? Bool ?? true
-    }
+    private init() {}
 
-    func toggle() {
-        setActive(!isActive)
-    }
+    func toggle() { setActive(!isActive) }
+    func toggleDisplay() { setKeepDisplayOn(!keepDisplayOn) }
 
     func setActive(_ active: Bool) {
         guard active != isActive else { return }
         isActive = active
-        syncAssertions()
+        systemAssertion = active
+            ? PowerAssertion(type: kIOPMAssertPreventUserIdleSystemSleep,
+                             reason: "Notch Limits: keep the Mac awake")
+            : nil
     }
 
-    private func syncAssertions() {
-        if isActive, systemAssertion == nil {
-            systemAssertion = PowerAssertion(type: kIOPMAssertPreventUserIdleSystemSleep,
-                                             reason: "Notch Limits: keep the Mac awake")
-        } else if !isActive {
-            systemAssertion = nil
-        }
-
-        let wantsDisplay = isActive && keepDisplayOn
-        if wantsDisplay, displayAssertion == nil {
-            displayAssertion = PowerAssertion(type: kIOPMAssertPreventUserIdleDisplaySleep,
-                                              reason: "Notch Limits: keep the display on")
-        } else if !wantsDisplay {
-            displayAssertion = nil
-        }
+    func setKeepDisplayOn(_ on: Bool) {
+        guard on != keepDisplayOn else { return }
+        keepDisplayOn = on
+        displayAssertion = on
+            ? PowerAssertion(type: kIOPMAssertPreventUserIdleDisplaySleep,
+                             reason: "Notch Limits: keep the display on")
+            : nil
     }
 }
 

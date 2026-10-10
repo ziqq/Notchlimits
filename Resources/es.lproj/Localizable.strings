@@ -34,7 +34,7 @@
 "keepAwake.sleep" = "Mantener el Mac despierto";
 "keepAwake.sleep.help" = "Evitar que el Mac entre en reposo por inactividad";
 "keepAwake.display" = "Mantener pantalla encendida";
-"keepAwake.display.help" = "No apagar la pantalla mientras el Mac se mantiene despierto";
+"keepAwake.display.help" = "No apagar la pantalla por inactividad";
 
 // Питание
 "power.charging" = "Cargando";
@@ -48,6 +48,11 @@
 "power.health" = "Salud";
 "power.health.value" = "%@ · ciclos: %d";
 "power.health.help" = "Capacidad de carga completa: %d de %d mAh de diseño";
+"power.port" = "Puerto";
+"power.modes" = "Modos del cargador";
+"ports.charging" = "cargando";
+"ports.free" = "libre";
+"ports.connected" = "conectado";
 
 // Контекстное меню
 "menu.refresh" = "Actualizar";
