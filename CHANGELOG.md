@@ -2,15 +2,15 @@
 
 
 ## Unreleased
-- **ADDED**: Keep Awake — a "Controls" section in the panel with **Keep Mac awake** and **Keep display on** tiles (also
-  in the context menu). Uses standard IOKit power assertions: no administrator password, and a crash or quit always
+- **ADDED**: Keep Awake — **Keep Mac awake** and **Keep display on** in the context menu, with a small indicator in the
+  panel footer. Uses standard IOKit power assertions: no administrator password, and a crash or quit always
   lets the Mac sleep again. While it's on, the collapsed notch shows a cup (and a display icon) on either side.
 - **CHANGED**: The bundle identifier is now `dev.ustinoff.notchlimits`. Settings (column names, hidden columns, hotkey,
   cached percentages, usage history) move over from `com.ziqq.notchlimits` on first launch. macOS treats it as a new
   app, so it asks once more for Keychain access and notifications, and **Launch at login** has to be turned on again.
-- **CHANGED**: Without any accounts, the panel shows the Controls section with a short hint instead of an empty state.
-- **ADDED**: Power readout next to the Keep Awake tiles: charging state and level, charger rating and negotiated
-  voltage, live input power (Apple Silicon), battery voltage, current and temperature, health and cycle count. Read from
+- **CHANGED**: Without any accounts, the panel shows the indicators with a short hint instead of an empty state.
+- **ADDED**: Power indicators in the panel footer: charge level, live input power (Apple Silicon) or charger rating, and
+  battery temperature; the tooltip adds charger voltage, battery voltage and current, health and cycle count. Read from
   IORegistry `AppleSmartBattery` without admin rights, every 5 seconds and only while the panel is open; hidden on Macs
   without a battery.
 - **REMOVED**: Unused translations — the old CLI account switcher (`switch.*`), `menu.liquidGlass` and
