@@ -6,8 +6,8 @@ struct RootView: View {
     @ObservedObject var keepAwake: KeepAwake
     let power: PowerMonitor
 
-    private var shapeWidth: CGFloat { state.expanded ? state.expandedSize.width : state.notchSize.width }
-    private var shapeHeight: CGFloat { state.expanded ? state.expandedSize.height : state.notchSize.height }
+    private var shapeWidth: CGFloat { state.expanded ? state.expandedSize.width : state.collapsedSize.width }
+    private var shapeHeight: CGFloat { state.expanded ? state.expandedSize.height : state.collapsedSize.height }
     private var cornerRadius: CGFloat {
         state.expanded ? Layout.expandedCornerRadius : Layout.collapsedCornerRadius
     }
@@ -18,7 +18,7 @@ struct RootView: View {
                 panelBackground
 
                 CollapsedContent(store: store, state: state)
-                    .frame(width: state.notchSize.width, height: state.notchSize.height)
+                    .frame(width: state.collapsedSize.width, height: state.collapsedSize.height)
                     .opacity(state.expanded ? 0 : 1)
 
                 ExpandedContent(store: store, state: state, keepAwake: keepAwake, power: power)
@@ -34,6 +34,7 @@ struct RootView: View {
             }
             .frame(width: shapeWidth, height: shapeHeight, alignment: .top)
             .clipShape(BottomRoundedRectangle(radius: cornerRadius))
+            .offset(x: state.collapsedOffset)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .ignoresSafeArea()
@@ -50,7 +51,24 @@ struct RootView: View {
     }
 }
 
-/// Свёрнутое состояние. На маке с челкой — ровно чёрный вырез, панели не видно.
+/// Значки включённых режимов размером со значки строки меню.
+private struct EarIcons: View {
+    let symbols: [String]
+
+    var body: some View {
+        HStack(spacing: Layout.earIconSpacing - 16) {
+            ForEach(symbols, id: \.self) { symbol in
+                Image(systemName: symbol)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(Theme.primary)
+                    .frame(width: 16)
+            }
+        }
+    }
+}
+
+/// Свёрнутое состояние. На маке с челкой — ровно чёрный вырез, панели не видно;
+/// включённые режимы Keep Awake — значками в ушке слева от выреза.
 /// На внешнем мониторе — маленькая пилюля с точкой на каждый аккаунт.
 private struct CollapsedContent: View {
     @ObservedObject var store: UsageStore
@@ -58,9 +76,14 @@ private struct CollapsedContent: View {
 
     var body: some View {
         if state.hasNotch {
-            Color.clear
+            HStack(spacing: 0) {
+                EarIcons(symbols: state.indicatorSymbols)
+                    .frame(width: state.earWidth)
+                Spacer(minLength: 0)
+            }
         } else {
             HStack(spacing: 5) {
+                EarIcons(symbols: state.indicatorSymbols)
                 ForEach(store.visibleColumns) { column in
                     Circle()
                         .fill(Theme.color(for: column.peakUtilization))

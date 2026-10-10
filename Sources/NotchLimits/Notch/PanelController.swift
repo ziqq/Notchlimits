@@ -11,6 +11,7 @@ final class PanelController {
     private let keepAwake: KeepAwake
     private let power: PowerMonitor
     private var expandedObserver: AnyCancellable?
+    private var keepAwakeObserver: AnyCancellable?
     private var panel: NotchPanel!
     private var hosting: NotchHostingView<RootView>!
 
@@ -56,14 +57,41 @@ final class PanelController {
             self.onContextMenu?(event, self.hosting)
         }
 
-        panel = NotchPanel(contentRect: state.geometry.notchRect)
+        state.indicatorSymbols = Self.indicatorSymbols(keepAwake)
+        panel = NotchPanel(contentRect: state.collapsedRect)
         panel.contentView = hosting
-        panel.setFrame(state.geometry.notchRect, display: true)
+        panel.setFrame(state.collapsedRect, display: true)
         panel.orderFrontRegardless()
 
         startMonitors()
         observeScreenChanges()
         observeExpanded()
+        observeKeepAwake()
+    }
+
+    private static func indicatorSymbols(_ keepAwake: KeepAwake) -> [String] {
+        var symbols: [String] = []
+        if keepAwake.isActive { symbols.append("cup.and.saucer.fill") }
+        if keepAwake.keepDisplayOn { symbols.append("display") }
+        return symbols
+    }
+
+    /// Значки режимов меняют ширину свёрнутой панели: рамку окна подгоняем,
+    /// только пока панель свёрнута — раскрытую рамку они не трогают.
+    private func observeKeepAwake() {
+        keepAwakeObserver = keepAwake.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    let symbols = Self.indicatorSymbols(self.keepAwake)
+                    guard symbols != self.state.indicatorSymbols else { return }
+                    withAnimation(Timing.openSpring) { self.state.indicatorSymbols = symbols }
+                    if !self.state.expanded {
+                        self.panel.setFrame(self.state.collapsedRect, display: true)
+                    }
+                }
+            }
     }
 
     /// Питание опрашиваем, только пока панель раскрыта.
@@ -89,7 +117,7 @@ final class PanelController {
     private func screenParametersChanged() {
         state.geometry = NotchGeometry.current()
         recomputeExpandedSize()
-        panel.setFrame(state.expanded ? expandedRect() : state.geometry.notchRect, display: true)
+        panel.setFrame(state.expanded ? expandedRect() : state.collapsedRect, display: true)
     }
 
     /// Ширина зависит от числа колонок. Высоту сюда не трогаем — её задаёт
@@ -138,6 +166,7 @@ final class PanelController {
         onWillOpen?()
         recomputeExpandedSize()
         // Рамка сразу становится раскрытой — иначе анимация обрежется по старому окну.
+        state.windowExpanded = true
         panel.setFrame(expandedRect(), display: true)
         panel.orderFrontRegardless()
 
@@ -157,7 +186,8 @@ final class PanelController {
 
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.state.expanded else { return }
-            self.panel.setFrame(self.state.geometry.notchRect, display: true)
+            self.state.windowExpanded = false
+            self.panel.setFrame(self.state.collapsedRect, display: true)
         }
         shrinkWork = work
         // Ужимаем рамку позже конца анимации, чтобы не срезать последние кадры.
@@ -300,7 +330,7 @@ final class PanelController {
             }
         } else {
             // Небольшой допуск по бокам: попасть точно в вырез мышью тяжело.
-            let zone = state.geometry.notchRect.insetBy(dx: -4, dy: 0)
+            let zone = state.collapsedRect.insetBy(dx: -4, dy: 0)
             if zone.contains(point) { open() }
         }
     }
