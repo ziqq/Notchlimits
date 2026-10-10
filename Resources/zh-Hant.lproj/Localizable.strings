@@ -27,10 +27,14 @@
 "panel.updated" = "更新於 %@";
 "panel.noData" = "尚無資料";
 "panel.refresh.help" = "重新整理所有欄";
-"panel.empty.title" = "沒有帳號";
 "panel.empty.hint" = "右鍵點按 →「加入 Claude 帳號…」或「加入 Codex 帳號…」";
-"panel.hidden.title" = "所有欄皆已隱藏";
 "panel.hidden.hint" = "右鍵點按 →「顯示隱藏的欄」";
+
+// Управление
+"keepAwake.sleep" = "防止 Mac 睡眠";
+"keepAwake.sleep.help" = "閒置時不讓 Mac 進入睡眠";
+"keepAwake.display" = "保持螢幕常亮";
+"keepAwake.display.help" = "防止 Mac 睡眠時不關閉顯示器";
 
 // Контекстное меню
 "menu.refresh" = "重新整理";

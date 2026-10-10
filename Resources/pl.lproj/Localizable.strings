@@ -27,10 +27,14 @@
 "panel.updated" = "Zaktualizowano %@";
 "panel.noData" = "Jeszcze brak danych";
 "panel.refresh.help" = "Odśwież wszystkie kolumny";
-"panel.empty.title" = "Brak kont";
 "panel.empty.hint" = "Prawy przycisk → „Dodaj konto Claude…” lub „Dodaj konto Codex…”";
-"panel.hidden.title" = "Wszystkie kolumny ukryte";
 "panel.hidden.hint" = "Prawy przycisk → „Pokaż ukryte kolumny”";
+
+// Управление
+"keepAwake.sleep" = "Nie usypiaj Maca";
+"keepAwake.sleep.help" = "Nie pozwalaj Macowi usypiać przy bezczynności";
+"keepAwake.display" = "Nie wygaszaj ekranu";
+"keepAwake.display.help" = "Nie wyłączaj ekranu, dopóki Mac nie śpi";
 
 // Контекстное меню
 "menu.refresh" = "Odśwież";

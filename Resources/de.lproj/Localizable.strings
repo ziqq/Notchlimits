@@ -27,10 +27,14 @@
 "panel.updated" = "Aktualisiert %@";
 "panel.noData" = "Noch keine Daten";
 "panel.refresh.help" = "Alle Spalten aktualisieren";
-"panel.empty.title" = "Keine Accounts";
 "panel.empty.hint" = "Rechtsklick → „Claude-Account hinzufügen…“ oder „Codex-Account hinzufügen…“";
-"panel.hidden.title" = "Alle Spalten ausgeblendet";
 "panel.hidden.hint" = "Rechtsklick → „Ausgeblendete Spalten zeigen“";
+
+// Управление
+"keepAwake.sleep" = "Mac wach halten";
+"keepAwake.sleep.help" = "Ruhezustand bei Inaktivität verhindern";
+"keepAwake.display" = "Display anlassen";
+"keepAwake.display.help" = "Display nicht ausschalten, solange der Mac wach gehalten wird";
 
 // Контекстное меню
 "menu.refresh" = "Aktualisieren";

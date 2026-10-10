@@ -3,9 +3,10 @@ import SwiftUI
 struct RootView: View {
     @ObservedObject var store: UsageStore
     @ObservedObject var state: PanelState
+    @ObservedObject var keepAwake: KeepAwake
 
-    private var shapeWidth: CGFloat { state.expanded ? state.expandedSize.width : state.notchSize.width }
-    private var shapeHeight: CGFloat { state.expanded ? state.expandedSize.height : state.notchSize.height }
+    private var shapeWidth: CGFloat { state.expanded ? state.expandedSize.width : state.collapsedSize.width }
+    private var shapeHeight: CGFloat { state.expanded ? state.expandedSize.height : state.collapsedSize.height }
     private var cornerRadius: CGFloat {
         state.expanded ? Layout.expandedCornerRadius : Layout.collapsedCornerRadius
     }
@@ -15,11 +16,11 @@ struct RootView: View {
             ZStack(alignment: .top) {
                 panelBackground
 
-                CollapsedContent(store: store, state: state)
-                    .frame(width: state.notchSize.width, height: state.notchSize.height)
+                CollapsedContent(store: store, state: state, keepAwake: keepAwake)
+                    .frame(width: state.collapsedSize.width, height: state.collapsedSize.height)
                     .opacity(state.expanded ? 0 : 1)
 
-                ExpandedContent(store: store, state: state)
+                ExpandedContent(store: store, state: state, keepAwake: keepAwake)
                     .frame(width: state.expandedSize.width, height: state.expandedSize.height)
                     .opacity(state.expanded ? 1 : 0)
                     // Появляемся с задержкой, гаснем быстро: так текст не успевает
@@ -38,6 +39,9 @@ struct RootView: View {
         .onPreferenceChange(ColumnsHeightKey.self) { height in
             state.onColumnsHeightChange?(height)
         }
+        .onPreferenceChange(ControlFramesKey.self) { frames in
+            state.controlFrames = frames
+        }
     }
 
     private var panelBackground: some View {
@@ -45,17 +49,29 @@ struct RootView: View {
     }
 }
 
-/// Свёрнутое состояние. На маке с челкой — ровно чёрный вырез, панели не видно.
+/// Свёрнутое состояние. На маке с челкой — ровно чёрный вырез, панели не видно;
+/// с включённым Keep Awake по бокам выреза появляются «ушки» с индикатором.
 /// На внешнем мониторе — маленькая пилюля с точкой на каждый аккаунт.
 private struct CollapsedContent: View {
     @ObservedObject var store: UsageStore
     @ObservedObject var state: PanelState
+    @ObservedObject var keepAwake: KeepAwake
 
     var body: some View {
         if state.hasNotch {
-            Color.clear
+            if state.keepAwakeIndicator {
+                KeepAwakeEars(keepAwake: keepAwake)
+            } else {
+                Color.clear
+            }
         } else {
             HStack(spacing: 5) {
+                if state.keepAwakeIndicator {
+                    Image(systemName: "cup.and.saucer.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(Theme.primary)
+                        .padding(.trailing, 2)
+                }
                 ForEach(store.visibleColumns) { column in
                     Circle()
                         .fill(Theme.color(for: column.peakUtilization))
@@ -71,64 +87,79 @@ private struct CollapsedContent: View {
 private struct ExpandedContent: View {
     @ObservedObject var store: UsageStore
     @ObservedObject var state: PanelState
+    @ObservedObject var keepAwake: KeepAwake
 
     var body: some View {
         VStack(spacing: 0) {
             // Зона выреза — под ней ничего не рисуем.
             Color.clear.frame(height: state.notchSize.height)
 
-            if store.visibleColumns.isEmpty {
-                EmptyStateView(store: store)
-            } else {
-                HStack(alignment: .top, spacing: 0) {
-                    ForEach(Array(store.visibleColumns.enumerated()), id: \.element.id) { index, column in
-                        if index > 0 {
-                            Rectangle()
-                                .fill(Theme.divider)
-                                .frame(width: 1)
-                                .padding(.vertical, 2)
-                        }
-                        ColumnView(column: column,
-                                   onRelogin: state.onRelogin.map { relogin in { relogin(column.id) } })
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 14)
-                    }
+            // Высоту блока меряем здесь и по ней растим окно, иначе
+            // перенесённые строки упёрлись бы в нижнюю кромку панели.
+            VStack(spacing: 0) {
+                if store.visibleColumns.isEmpty {
+                    // Без аккаунтов панель — просто «Управление» и тихая подсказка.
+                    ControlsSection(keepAwake: keepAwake)
+                        .padding(.top, 12)
+                    EmptyHint(store: store)
+                } else {
+                    columns
+                    // «Обновлено …» — про лимиты, поэтому сразу под колонками,
+                    // а не под «Управлением».
+                    FooterView(store: store, state: state)
+                        .padding(.top, Layout.columnsFooterGap)
+                    Rectangle()
+                        .fill(Theme.divider)
+                        .frame(height: 1)
+                        .padding(.horizontal, 14)
+                        .padding(.top, 12)
+                    ControlsSection(keepAwake: keepAwake)
+                        .padding(.top, 12)
                 }
-                .padding(.top, 10)
-                // Высоту колонок меряем здесь и по ней растим окно, иначе
-                // перенесённые строки упёрлись бы в нижнюю кромку панели.
-                .background(
-                    GeometryReader { proxy in
-                        Color.clear.preference(key: ColumnsHeightKey.self,
-                                               value: proxy.size.height)
-                    }
-                )
             }
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(key: ColumnsHeightKey.self,
+                                           value: proxy.size.height)
+                }
+            )
 
-            Spacer(minLength: Layout.columnsFooterGap)
-
-            FooterView(store: store, state: state)
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 6)
         .padding(.bottom, 10)
     }
+
+    private var columns: some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(Array(store.visibleColumns.enumerated()), id: \.element.id) { index, column in
+                if index > 0 {
+                    Rectangle()
+                        .fill(Theme.divider)
+                        .frame(width: 1)
+                        .padding(.vertical, 2)
+                }
+                ColumnView(column: column,
+                           onRelogin: state.onRelogin.map { relogin in { relogin(column.id) } })
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+            }
+        }
+        .padding(.top, 10)
+    }
 }
 
-private struct EmptyStateView: View {
+/// Подсказка под «Управлением», пока нет ни одной видимой колонки лимитов.
+private struct EmptyHint: View {
     @ObservedObject var store: UsageStore
 
     var body: some View {
-        VStack(spacing: 8) {
-            Text(L.t(store.hasHiddenColumns ? "panel.hidden.title" : "panel.empty.title"))
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(Theme.primary)
-            Text(L.t(store.hasHiddenColumns ? "panel.hidden.hint" : "panel.empty.hint"))
-                .font(.system(size: 11))
-                .foregroundColor(Theme.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 340)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        Text(L.t(store.hasHiddenColumns ? "panel.hidden.hint" : "panel.empty.hint"))
+            .font(.system(size: 10))
+            .foregroundColor(Theme.tertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
     }
 }
 

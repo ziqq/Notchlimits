@@ -27,10 +27,14 @@
 "panel.updated" = "更新 %@";
 "panel.noData" = "データがまだありません";
 "panel.refresh.help" = "すべての列を更新";
-"panel.empty.title" = "アカウントなし";
 "panel.empty.hint" = "右クリック →「Claude アカウントを追加…」または「Codex アカウントを追加…」";
-"panel.hidden.title" = "すべての列が非表示";
 "panel.hidden.hint" = "右クリック →「非表示の列を表示」";
+
+// Управление
+"keepAwake.sleep" = "Macをスリープさせない";
+"keepAwake.sleep.help" = "操作がなくてもMacをスリープさせない";
+"keepAwake.display" = "ディスプレイをオンのまま";
+"keepAwake.display.help" = "Macのスリープを防いでいる間はディスプレイを消さない";
 
 // Контекстное меню
 "menu.refresh" = "更新";

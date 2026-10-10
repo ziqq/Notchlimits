@@ -17,14 +17,21 @@ enum DebugRender {
         renderPanel(to: root.appendingPathComponent("panel.png"), columns: healthyColumns())
         renderPanel(to: root.appendingPathComponent("states.png"), columns: mixedColumns(), extraHeight: 40)
         renderCollapsed(to: root.appendingPathComponent("collapsed.png"))
+        renderPanel(to: root.appendingPathComponent("controls.png"), columns: [],
+                    extraHeight: Self.controlsHeight + 30 - Layout.contentHeight)
+        renderCollapsedNotch(to: root.appendingPathComponent("collapsed-awake.png"))
 
         exit(0)
     }
 
     // MARK: - Сцены
 
+    /// Высота секции «Управление» под колонками: разделитель и плитки.
+    private static let controlsHeight: CGFloat = 106
+
     @MainActor
     private static func renderPanel(to url: URL, columns: [AccountColumn], extraHeight: CGFloat = 16) {
+        let extraHeight = columns.isEmpty ? extraHeight : extraHeight + controlsHeight
         let store = UsageStore(providers: [:], discovery: MockDiscovery())
         store.setColumnsForRendering(columns)
 
@@ -41,7 +48,7 @@ enum DebugRender {
         let panelSize = state.expandedSize
         let scene = ZStack(alignment: .top) {
             desktop
-            RootView(store: store, state: state)
+            RootView(store: store, state: state, keepAwake: .shared)
                 .frame(width: panelSize.width, height: panelSize.height)
         }
         .frame(width: panelSize.width + 48, height: panelSize.height + 40, alignment: .top)
@@ -62,8 +69,31 @@ enum DebugRender {
 
         let scene = ZStack(alignment: .top) {
             desktop
-            RootView(store: store, state: state)
+            RootView(store: store, state: state, keepAwake: .shared)
                 .frame(width: 190, height: 30)
+        }
+        .frame(width: 420, height: 96, alignment: .top)
+
+        write(scene, to: url)
+    }
+
+    /// Свёрнутая челка с включённым Keep Awake: индикаторы в «ушках».
+    @MainActor
+    private static func renderCollapsedNotch(to url: URL) {
+        let store = UsageStore(providers: [:], discovery: MockDiscovery())
+        KeepAwake.shared.setActive(true)
+        defer { KeepAwake.shared.setActive(false) }
+
+        let state = PanelState()
+        state.expanded = false
+        state.geometry = notchedScreen
+        state.keepAwakeIndicator = true
+        let size = state.collapsedSize
+
+        let scene = ZStack(alignment: .top) {
+            desktop
+            RootView(store: store, state: state, keepAwake: .shared)
+                .frame(width: size.width, height: size.height)
         }
         .frame(width: 420, height: 96, alignment: .top)
 

@@ -27,10 +27,14 @@
 "panel.updated" = "Updated %@";
 "panel.noData" = "No data yet";
 "panel.refresh.help" = "Refresh all columns";
-"panel.empty.title" = "No accounts";
 "panel.empty.hint" = "Right-click → “Add Claude account…” or “Add Codex account…”";
-"panel.hidden.title" = "All columns hidden";
 "panel.hidden.hint" = "Right-click → “Show hidden columns”";
+
+// Управление
+"keepAwake.sleep" = "Keep Mac awake";
+"keepAwake.sleep.help" = "Prevent the Mac from sleeping while idle";
+"keepAwake.display" = "Keep display on";
+"keepAwake.display.help" = "Don’t let the display turn off while the Mac is kept awake";
 
 // Контекстное меню
 "menu.refresh" = "Refresh";
