@@ -27,7 +27,7 @@ enum DebugRender {
     // MARK: - Сцены
 
     /// Высота секции «Управление» под колонками: разделитель и плитки.
-    private static let controlsHeight: CGFloat = 56
+    private static let controlsHeight: CGFloat = 104
 
     @MainActor
     private static func renderPanel(to url: URL, columns: [AccountColumn], extraHeight: CGFloat = 16) {
