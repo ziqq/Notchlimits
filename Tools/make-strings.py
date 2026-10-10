@@ -39,6 +39,7 @@ ORDER = [
         "power.charging", "power.charged", "power.notCharging", "power.onBattery",
         "power.charger", "power.input", "power.input.help", "power.battery",
         "power.health", "power.health.value", "power.health.help",
+        "power.port", "power.modes", "ports.charging", "ports.free", "ports.connected",
     ]),
     ("Контекстное меню", [
         "menu.refresh", "menu.addClaude", "menu.addCodex", "menu.hideColumn",
@@ -1402,20 +1403,20 @@ for _lang, _text in _KEYCHAIN_WRITE.items():
 
 # «Управление»: Keep Awake — не давать Mac уснуть и не гасить экран.
 _KEEP_AWAKE = {
-    "en": ("Keep Mac awake", "Prevent the Mac from sleeping while idle", "Keep display on", "Don’t let the display turn off while the Mac is kept awake"),
-    "ru": ("Не давать Mac уснуть", "Не давать Mac засыпать при бездействии", "Не гасить экран", "Не выключать экран, пока Mac не даёт уснуть"),
-    "uk": ("Не давати Mac заснути", "Не давати Mac засинати під час бездіяльності", "Не гасити екран", "Не вимикати екран, поки Mac не дає заснути"),
-    "de": ("Mac wach halten", "Ruhezustand bei Inaktivität verhindern", "Display anlassen", "Display nicht ausschalten, solange der Mac wach gehalten wird"),
-    "es": ("Mantener el Mac despierto", "Evitar que el Mac entre en reposo por inactividad", "Mantener pantalla encendida", "No apagar la pantalla mientras el Mac se mantiene despierto"),
-    "fr": ("Garder le Mac éveillé", "Empêcher la mise en veille du Mac en cas d’inactivité", "Garder l’écran allumé", "Ne pas éteindre l’écran tant que le Mac est maintenu éveillé"),
-    "it": ("Mantieni il Mac attivo", "Impedisci lo stop del Mac per inattività", "Mantieni lo schermo acceso", "Non spegnere lo schermo finché il Mac resta attivo"),
-    "pl": ("Nie usypiaj Maca", "Nie pozwalaj Macowi usypiać przy bezczynności", "Nie wygaszaj ekranu", "Nie wyłączaj ekranu, dopóki Mac nie śpi"),
-    "pt-BR": ("Manter o Mac acordado", "Impedir que o Mac entre em repouso por inatividade", "Manter tela ligada", "Não desligar a tela enquanto o Mac é mantido acordado"),
-    "tr": ("Mac’i uyanık tut", "Mac’in boştayken uyumasını engelle", "Ekranı açık tut", "Mac uyanık tutulurken ekranı kapatma"),
-    "ja": ("Macをスリープさせない", "操作がなくてもMacをスリープさせない", "ディスプレイをオンのまま", "Macのスリープを防いでいる間はディスプレイを消さない"),
-    "ko": ("Mac 잠자기 방지", "사용하지 않을 때 Mac이 잠자기에 들어가지 않도록 함", "디스플레이 켜 두기", "Mac 잠자기를 막는 동안 디스플레이를 끄지 않음"),
-    "zh-Hans": ("防止 Mac 睡眠", "闲置时不让 Mac 进入睡眠", "保持屏幕常亮", "防止 Mac 睡眠时不关闭显示器"),
-    "zh-Hant": ("防止 Mac 睡眠", "閒置時不讓 Mac 進入睡眠", "保持螢幕常亮", "防止 Mac 睡眠時不關閉顯示器"),
+    "en": ("Keep Mac awake", "Prevent the Mac from sleeping while idle", "Keep display on", "Don’t let the display turn off while idle"),
+    "ru": ("Не давать Mac уснуть", "Не давать Mac засыпать при бездействии", "Не гасить экран", "Не выключать экран при бездействии"),
+    "uk": ("Не давати Mac заснути", "Не давати Mac засинати під час бездіяльності", "Не гасити екран", "Не вимикати екран під час бездіяльності"),
+    "de": ("Mac wach halten", "Ruhezustand bei Inaktivität verhindern", "Display anlassen", "Display bei Inaktivität nicht ausschalten"),
+    "es": ("Mantener el Mac despierto", "Evitar que el Mac entre en reposo por inactividad", "Mantener pantalla encendida", "No apagar la pantalla por inactividad"),
+    "fr": ("Garder le Mac éveillé", "Empêcher la mise en veille du Mac en cas d’inactivité", "Garder l’écran allumé", "Ne pas éteindre l’écran en cas d’inactivité"),
+    "it": ("Mantieni il Mac attivo", "Impedisci lo stop del Mac per inattività", "Mantieni lo schermo acceso", "Non spegnere lo schermo per inattività"),
+    "pl": ("Nie usypiaj Maca", "Nie pozwalaj Macowi usypiać przy bezczynności", "Nie wygaszaj ekranu", "Nie wyłączaj ekranu przy bezczynności"),
+    "pt-BR": ("Manter o Mac acordado", "Impedir que o Mac entre em repouso por inatividade", "Manter tela ligada", "Não desligar a tela por inatividade"),
+    "tr": ("Mac’i uyanık tut", "Mac’in boştayken uyumasını engelle", "Ekranı açık tut", "Boştayken ekranı kapatma"),
+    "ja": ("Macをスリープさせない", "操作がなくてもMacをスリープさせない", "ディスプレイをオンのまま", "操作がなくてもディスプレイを消さない"),
+    "ko": ("Mac 잠자기 방지", "사용하지 않을 때 Mac이 잠자기에 들어가지 않도록 함", "디스플레이 켜 두기", "사용하지 않을 때 디스플레이를 끄지 않음"),
+    "zh-Hans": ("防止 Mac 睡眠", "闲置时不让 Mac 进入睡眠", "保持屏幕常亮", "闲置时不关闭显示器"),
+    "zh-Hant": ("防止 Mac 睡眠", "閒置時不讓 Mac 進入睡眠", "保持螢幕常亮", "閒置時不關閉顯示器"),
 }
 for _lang, _values in _KEEP_AWAKE.items():
     T[_lang].update(zip(("keepAwake.sleep", "keepAwake.sleep.help",
@@ -1474,6 +1475,26 @@ _POWER = {
 }
 for _lang, _values in _POWER.items():
     T[_lang].update(zip(_POWER_KEYS, _values))
+
+# Порты: через какой разъём идёт питание и что занято.
+_PORTS = {
+    "en": ("Port", "Charger modes", "charging", "free", "connected"),
+    "ru": ("Порт", "Режимы зарядки", "зарядка", "свободен", "подключено"),
+    "uk": ("Порт", "Режими зарядки", "зарядка", "вільний", "підключено"),
+    "de": ("Anschluss", "Ladegerät-Modi", "lädt", "frei", "verbunden"),
+    "es": ("Puerto", "Modos del cargador", "cargando", "libre", "conectado"),
+    "fr": ("Port", "Modes du chargeur", "charge", "libre", "connecté"),
+    "it": ("Porta", "Modalità caricatore", "in carica", "libera", "collegato"),
+    "pl": ("Port", "Tryby ładowarki", "ładowanie", "wolny", "podłączono"),
+    "pt-BR": ("Porta", "Modos do carregador", "carregando", "livre", "conectado"),
+    "tr": ("Bağlantı noktası", "Şarj cihazı modları", "şarj", "boş", "bağlı"),
+    "ja": ("ポート", "充電器のモード", "充電中", "空き", "接続済み"),
+    "ko": ("포트", "충전기 모드", "충전 중", "비어 있음", "연결됨"),
+    "zh-Hans": ("端口", "充电器模式", "充电", "空闲", "已连接"),
+    "zh-Hant": ("連接埠", "充電器模式", "充電", "空閒", "已連接"),
+}
+for _lang, _values in _PORTS.items():
+    T[_lang].update(zip(("power.port", "power.modes", "ports.charging", "ports.free", "ports.connected"), _values))
 
 
 def main():

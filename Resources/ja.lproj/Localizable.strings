@@ -34,7 +34,7 @@
 "keepAwake.sleep" = "Macをスリープさせない";
 "keepAwake.sleep.help" = "操作がなくてもMacをスリープさせない";
 "keepAwake.display" = "ディスプレイをオンのまま";
-"keepAwake.display.help" = "Macのスリープを防いでいる間はディスプレイを消さない";
+"keepAwake.display.help" = "操作がなくてもディスプレイを消さない";
 
 // Питание
 "power.charging" = "充電中";
@@ -48,6 +48,11 @@
 "power.health" = "状態";
 "power.health.value" = "%@ · 充放電回数: %d";
 "power.health.help" = "フル充電容量: 設計値 %2$d mAh 中 %1$d mAh";
+"power.port" = "ポート";
+"power.modes" = "充電器のモード";
+"ports.charging" = "充電中";
+"ports.free" = "空き";
+"ports.connected" = "接続済み";
 
 // Контекстное меню
 "menu.refresh" = "更新";

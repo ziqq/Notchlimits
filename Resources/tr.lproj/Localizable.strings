@@ -34,7 +34,7 @@
 "keepAwake.sleep" = "Mac’i uyanık tut";
 "keepAwake.sleep.help" = "Mac’in boştayken uyumasını engelle";
 "keepAwake.display" = "Ekranı açık tut";
-"keepAwake.display.help" = "Mac uyanık tutulurken ekranı kapatma";
+"keepAwake.display.help" = "Boştayken ekranı kapatma";
 
 // Питание
 "power.charging" = "Şarj oluyor";
@@ -48,6 +48,11 @@
 "power.health" = "Sağlık";
 "power.health.value" = "%@ · döngü: %d";
 "power.health.help" = "Tam şarj kapasitesi: tasarımdaki %2$d mAh’nin %1$d mAh’i";
+"power.port" = "Bağlantı noktası";
+"power.modes" = "Şarj cihazı modları";
+"ports.charging" = "şarj";
+"ports.free" = "boş";
+"ports.connected" = "bağlı";
 
 // Контекстное меню
 "menu.refresh" = "Yenile";

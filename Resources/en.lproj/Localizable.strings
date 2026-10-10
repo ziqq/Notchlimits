@@ -34,7 +34,7 @@
 "keepAwake.sleep" = "Keep Mac awake";
 "keepAwake.sleep.help" = "Prevent the Mac from sleeping while idle";
 "keepAwake.display" = "Keep display on";
-"keepAwake.display.help" = "Don’t let the display turn off while the Mac is kept awake";
+"keepAwake.display.help" = "Don’t let the display turn off while idle";
 
 // Питание
 "power.charging" = "Charging";
@@ -48,6 +48,11 @@
 "power.health" = "Health";
 "power.health.value" = "%@ · %d cycles";
 "power.health.help" = "Full charge capacity: %d of %d mAh by design";
+"power.port" = "Port";
+"power.modes" = "Charger modes";
+"ports.charging" = "charging";
+"ports.free" = "free";
+"ports.connected" = "connected";
 
 // Контекстное меню
 "menu.refresh" = "Refresh";

@@ -6,8 +6,8 @@ struct RootView: View {
     @ObservedObject var keepAwake: KeepAwake
     let power: PowerMonitor
 
-    private var shapeWidth: CGFloat { state.expanded ? state.expandedSize.width : state.collapsedSize.width }
-    private var shapeHeight: CGFloat { state.expanded ? state.expandedSize.height : state.collapsedSize.height }
+    private var shapeWidth: CGFloat { state.expanded ? state.expandedSize.width : state.notchSize.width }
+    private var shapeHeight: CGFloat { state.expanded ? state.expandedSize.height : state.notchSize.height }
     private var cornerRadius: CGFloat {
         state.expanded ? Layout.expandedCornerRadius : Layout.collapsedCornerRadius
     }
@@ -17,8 +17,8 @@ struct RootView: View {
             ZStack(alignment: .top) {
                 panelBackground
 
-                CollapsedContent(store: store, state: state, keepAwake: keepAwake)
-                    .frame(width: state.collapsedSize.width, height: state.collapsedSize.height)
+                CollapsedContent(store: store, state: state)
+                    .frame(width: state.notchSize.width, height: state.notchSize.height)
                     .opacity(state.expanded ? 0 : 1)
 
                 ExpandedContent(store: store, state: state, keepAwake: keepAwake, power: power)
@@ -50,29 +50,17 @@ struct RootView: View {
     }
 }
 
-/// Свёрнутое состояние. На маке с челкой — ровно чёрный вырез, панели не видно;
-/// с включённым Keep Awake по бокам выреза появляются «ушки» с индикатором.
+/// Свёрнутое состояние. На маке с челкой — ровно чёрный вырез, панели не видно.
 /// На внешнем мониторе — маленькая пилюля с точкой на каждый аккаунт.
 private struct CollapsedContent: View {
     @ObservedObject var store: UsageStore
     @ObservedObject var state: PanelState
-    @ObservedObject var keepAwake: KeepAwake
 
     var body: some View {
         if state.hasNotch {
-            if state.keepAwakeIndicator {
-                KeepAwakeEars(keepAwake: keepAwake)
-            } else {
-                Color.clear
-            }
+            Color.clear
         } else {
             HStack(spacing: 5) {
-                if state.keepAwakeIndicator {
-                    Image(systemName: "cup.and.saucer.fill")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(Theme.primary)
-                        .padding(.trailing, 2)
-                }
                 ForEach(store.visibleColumns) { column in
                     Circle()
                         .fill(Theme.color(for: column.peakUtilization))
@@ -90,6 +78,8 @@ private struct ExpandedContent: View {
     @ObservedObject var state: PanelState
     @ObservedObject var keepAwake: KeepAwake
     let power: PowerMonitor
+    /// Подсказка капсулы под курсором.
+    @State private var hint: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -101,14 +91,22 @@ private struct ExpandedContent: View {
             VStack(spacing: 0) {
                 if store.visibleColumns.isEmpty {
                     // Без аккаунтов — только индикаторы и тихая подсказка.
-                    StatusIndicators(keepAwake: keepAwake, power: power)
+                    StatusIndicators(keepAwake: keepAwake, power: power, hint: $hint)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 14)
                         .padding(.top, 10)
-                    EmptyHint(store: store)
+                    // Подсказка капсулы встаёт на место подсказки про аккаунты.
+                    if let hint {
+                        ChipHintBubble(text: hint)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 14)
+                            .padding(.top, 8)
+                    } else {
+                        EmptyHint(store: store)
+                    }
                 } else {
                     columns
-                    FooterView(store: store, state: state, keepAwake: keepAwake, power: power)
+                    FooterView(store: store, state: state, keepAwake: keepAwake, power: power, hint: $hint)
                         .padding(.top, Layout.columnsFooterGap)
                 }
             }
@@ -126,6 +124,9 @@ private struct ExpandedContent: View {
         }
         .padding(.horizontal, 6)
         .padding(.bottom, Layout.contentBottomPadding)
+        .onChange(of: state.expanded) { expanded in
+            if !expanded { hint = nil }
+        }
     }
 
     private var columns: some View {
@@ -166,6 +167,7 @@ private struct FooterView: View {
     @ObservedObject var state: PanelState
     let keepAwake: KeepAwake
     let power: PowerMonitor
+    @Binding var hint: String?
 
     var body: some View {
         HStack(alignment: .center, spacing: 5) {
@@ -178,10 +180,18 @@ private struct FooterView: View {
             // одну цифру, а не отдельный элемент в дальнем углу.
             RefreshButton { store.refreshAll(force: true) }
             Spacer(minLength: 12)
-            StatusIndicators(keepAwake: keepAwake, power: power)
+            StatusIndicators(keepAwake: keepAwake, power: power, hint: $hint)
         }
         .padding(.horizontal, 14)
         .padding(.top, 6)
+        // Подсказка поверх колонок над капсулами: высоту панели она не меняет.
+        .overlay(alignment: .bottomTrailing) {
+            if let hint {
+                ChipHintBubble(text: hint)
+                    .padding(.trailing, 14)
+                    .alignmentGuide(.bottom) { $0[.bottom] + 22 }
+            }
+        }
     }
 
     private func footerText(now: Date) -> String {

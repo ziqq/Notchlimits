@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var store: UsageStore!
     private var panel: PanelController!
     private var hotKeys: HotKeyManager!
+    private var statusItems: KeepAwakeStatusItems!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -41,6 +42,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         panel.install()
+        statusItems = KeepAwakeStatusItems(keepAwake: .shared) { [weak self] in
+            self?.keepAwakeMenu() ?? NSMenu()
+        }
+        statusItems.install()
         store.start()
         ThresholdNotifier.requestAuthorization()
 
@@ -69,10 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        menu.addItem(item(L.t("keepAwake.sleep"), #selector(toggleKeepAwake),
-                          state: KeepAwake.shared.isActive ? .on : .off))
-        menu.addItem(item(L.t("keepAwake.display"), #selector(toggleKeepDisplayOn),
-                          state: KeepAwake.shared.keepDisplayOn ? .on : .off))
+        addKeepAwakeItems(to: menu)
         menu.addItem(.separator())
         menu.addItem(item(L.t("menu.refresh"), #selector(refresh)))
         menu.addItem(.separator())
@@ -179,6 +181,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(item(L.t("menu.quit"), #selector(quit)))
 
         NSMenu.popUpContextMenu(menu, with: event, for: view)
+    }
+
+    /// Меню значков Keep Awake в строке меню: те же два режима.
+    private func keepAwakeMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        addKeepAwakeItems(to: menu)
+        return menu
+    }
+
+    private func addKeepAwakeItems(to menu: NSMenu) {
+        menu.addItem(item(L.t("keepAwake.sleep"), #selector(toggleKeepAwake),
+                          state: KeepAwake.shared.isActive ? .on : .off))
+        menu.addItem(item(L.t("keepAwake.display"), #selector(toggleKeepDisplayOn),
+                          state: KeepAwake.shared.keepDisplayOn ? .on : .off))
     }
 
     private func item(_ title: String,
@@ -347,7 +364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleKeepDisplayOn() {
-        KeepAwake.shared.keepDisplayOn.toggle()
+        KeepAwake.shared.toggleDisplay()
     }
 
     @objc private func toggleLoginItem() {

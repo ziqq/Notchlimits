@@ -147,6 +147,8 @@ final class PowerMonitor: ObservableObject {
 
     /// `nil` — аккумулятора нет (или ещё не читали): блок питания скрыт.
     @Published private(set) var snapshot: PowerSnapshot?
+    /// Разъёмы и договорённость с зарядкой; есть и на Mac без аккумулятора.
+    @Published private(set) var ports: PortsSnapshot?
 
     private var timer: Timer?
 
@@ -171,10 +173,13 @@ final class PowerMonitor: ObservableObject {
     func refresh() {
         let fresh = PowerSnapshot.readCurrent()
         if fresh != snapshot { snapshot = fresh }
+        let freshPorts = PortsSnapshot.readCurrent()
+        if freshPorts != ports { ports = freshPorts }
     }
 
     /// Для офф-скрин рендера: подставить снимок без IORegistry.
-    func setSnapshotForRendering(_ snapshot: PowerSnapshot?) {
+    func setSnapshotForRendering(_ snapshot: PowerSnapshot?, ports: PortsSnapshot? = nil) {
         self.snapshot = snapshot
+        self.ports = ports
     }
 }

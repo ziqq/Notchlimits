@@ -2,15 +2,16 @@
 
 
 ## Unreleased
-- **ADDED**: Keep Awake — **Keep Mac awake** and **Keep display on** in the context menu, with a small indicator in the
-  panel footer. Uses standard IOKit power assertions: no administrator password, and a crash or quit always
-  lets the Mac sleep again. While it's on, the collapsed notch shows a cup (and a display icon) on either side.
+- **ADDED**: Keep Awake — two independent modes in the context menu, **Keep Mac awake** and **Keep display on**. Uses
+  standard IOKit power assertions: no administrator password, and a crash or quit always lets the Mac sleep again.
+  Each mode shows a regular menu bar icon while it's on (click it for the same toggles) and a chip in the panel footer.
 - **CHANGED**: The bundle identifier is now `dev.ustinoff.notchlimits`. Settings (column names, hidden columns, hotkey,
   cached percentages, usage history) move over from `com.ziqq.notchlimits` on first launch. macOS treats it as a new
   app, so it asks once more for Keychain access and notifications, and **Launch at login** has to be turned on again.
 - **CHANGED**: Without any accounts, the panel shows the indicators with a short hint instead of an empty state.
-- **ADDED**: Power indicators in the panel footer: charge level, live input power (Apple Silicon) or charger rating, and
-  battery temperature; the tooltip adds charger voltage, battery voltage and current, health and cycle count. Read from
+- **ADDED**: Power indicators in the panel footer: charge level with battery temperature, the charging port (MagSafe or
+  USB-C N) with live input power over the charger rating, and which USB-C ports are in use. Hovering a chip shows details
+  inside the panel: the negotiated charger contract and modes, port protocols, charger voltage, battery voltage and current, health and cycle count. Read from
   IORegistry `AppleSmartBattery` without admin rights, every 5 seconds and only while the panel is open; hidden on Macs
   without a battery.
 - **REMOVED**: Unused translations — the old CLI account switcher (`switch.*`), `menu.liquidGlass` and
