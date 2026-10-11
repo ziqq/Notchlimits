@@ -27,10 +27,32 @@
 "panel.updated" = "Güncellendi %@";
 "panel.noData" = "Henüz veri yok";
 "panel.refresh.help" = "Tüm sütunları yenile";
-"panel.empty.title" = "Hesap yok";
 "panel.empty.hint" = "Sağ tık → “Claude hesabı ekle…” ya da “Codex hesabı ekle…”";
-"panel.hidden.title" = "Tüm sütunlar gizli";
 "panel.hidden.hint" = "Sağ tık → “Gizli sütunları göster”";
+
+// Управление
+"keepAwake.sleep" = "Mac’i uyanık tut";
+"keepAwake.sleep.help" = "Mac’in boştayken uyumasını engelle";
+"keepAwake.display" = "Ekranı açık tut";
+"keepAwake.display.help" = "Boştayken ekranı kapatma";
+
+// Питание
+"power.charging" = "Şarj oluyor";
+"power.charged" = "Şarj oldu";
+"power.notCharging" = "Şarj olmuyor";
+"power.onBattery" = "Pilde";
+"power.charger" = "Şarj aleti";
+"power.input" = "Giriş";
+"power.input.help" = "Mac’in şu anda şarj aletinden çektiği güç";
+"power.battery" = "Pil";
+"power.health" = "Sağlık";
+"power.health.value" = "%@ · döngü: %d";
+"power.health.help" = "Tam şarj kapasitesi: tasarımdaki %2$d mAh’nin %1$d mAh’i";
+"power.port" = "Bağlantı noktası";
+"power.modes" = "Şarj cihazı modları";
+"ports.charging" = "şarj";
+"ports.free" = "boş";
+"ports.connected" = "bağlı";
 
 // Контекстное меню
 "menu.refresh" = "Yenile";

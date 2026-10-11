@@ -27,10 +27,32 @@
 "panel.updated" = "更新于 %@";
 "panel.noData" = "暂无数据";
 "panel.refresh.help" = "刷新所有列";
-"panel.empty.title" = "没有账户";
 "panel.empty.hint" = "右键点击 →「添加 Claude 账户…」或「添加 Codex 账户…」";
-"panel.hidden.title" = "所有列已隐藏";
 "panel.hidden.hint" = "右键点击 →「显示隐藏的列」";
+
+// Управление
+"keepAwake.sleep" = "防止 Mac 睡眠";
+"keepAwake.sleep.help" = "闲置时不让 Mac 进入睡眠";
+"keepAwake.display" = "保持屏幕常亮";
+"keepAwake.display.help" = "闲置时不关闭显示器";
+
+// Питание
+"power.charging" = "正在充电";
+"power.charged" = "已充满";
+"power.notCharging" = "未在充电";
+"power.onBattery" = "使用电池";
+"power.charger" = "充电器";
+"power.input" = "输入";
+"power.input.help" = "Mac 当前从充电器获取的功率";
+"power.battery" = "电池";
+"power.health" = "健康";
+"power.health.value" = "%@ · 循环 %d 次";
+"power.health.help" = "满充容量：%d / 设计 %d mAh";
+"power.port" = "端口";
+"power.modes" = "充电器模式";
+"ports.charging" = "充电";
+"ports.free" = "空闲";
+"ports.connected" = "已连接";
 
 // Контекстное меню
 "menu.refresh" = "刷新";

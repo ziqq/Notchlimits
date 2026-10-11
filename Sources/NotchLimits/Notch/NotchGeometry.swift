@@ -72,13 +72,12 @@ struct NotchGeometry: Equatable {
 enum Layout {
     static let minPanelWidth: CGFloat = 500
     static let columnWidth: CGFloat = 250
-    /// Минимальная высота содержимого. Если колонки переросли её из-за
-    /// переносов в названиях окон, панель становится выше.
+    /// Высота содержимого до первого замера вёрстки: дальше панель
+    /// подгоняется под фактическую высоту колонок и подвала.
     static let contentHeight: CGFloat = 252
     static let maxContentHeight: CGFloat = 560
     static let columnsFooterGap: CGFloat = 6
-    static let footerHeight: CGFloat = 24
-    static let contentBottomPadding: CGFloat = 10
+    static let contentBottomPadding: CGFloat = 14
     static let collapsedCornerRadius: CGFloat = 8
     static let expandedCornerRadius: CGFloat = 20
 }

@@ -10,7 +10,7 @@ APP_NAME="NotchLimits"
 # видна в уведомлениях и в «Объекты входа». Исполняемый файл, бандл и .app
 # остаются NotchLimits, чтобы не трогать идентификатор и пути.
 DISPLAY_NAME="Notch Limits"
-BUNDLE_ID="com.ziqq.notchlimits"
+BUNDLE_ID="dev.ustinoff.notchlimits"
 # Версия: переменная окружения важнее файла VERSION (её задаёт релизный workflow).
 VERSION="${NOTCHLIMITS_VERSION:-$(cat VERSION 2>/dev/null || echo 0.0.0)}"
 APP="build/${APP_NAME}.app"

@@ -14,17 +14,38 @@ enum DebugRender {
         let root = URL(fileURLWithPath: directory, isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
+        // Питание — из фикстуры, а не с этого Mac: картинки не должны зависеть
+        // от того, где их рендерят (и есть ли там аккумулятор).
+        PowerMonitor.shared.setSnapshotForRendering(chargingPower, ports: ports)
+
         renderPanel(to: root.appendingPathComponent("panel.png"), columns: healthyColumns())
         renderPanel(to: root.appendingPathComponent("states.png"), columns: mixedColumns(), extraHeight: 40)
+        renderPanel(to: root.appendingPathComponent("hint.png"), columns: healthyColumns(),
+                    hint: "MagSafe 3: зарядка\nUSB-C 1: USB 3\nUSB-C 2: свободен\nUSB-C 3: DisplayPort")
         renderCollapsed(to: root.appendingPathComponent("collapsed.png"))
+        KeepAwake.shared.setActive(true)
+        KeepAwake.shared.setKeepDisplayOn(true)
+        renderPanel(to: root.appendingPathComponent("controls.png"), columns: [],
+                    extraHeight: Self.indicatorsOnlyHeight - Layout.contentHeight)
+        KeepAwake.shared.setActive(false)
+        KeepAwake.shared.setKeepDisplayOn(false)
+
+        PowerMonitor.shared.setSnapshotForRendering(batteryPower)
+        renderPanel(to: root.appendingPathComponent("power-battery.png"), columns: [],
+                    extraHeight: Self.indicatorsOnlyHeight - Layout.contentHeight)
 
         exit(0)
     }
 
     // MARK: - Сцены
 
+    /// Высота панели без колонок: строка индикаторов и подсказка.
+    /// ImageRenderer не гоняет цикл предпочтений, поэтому задаём её вручную.
+    private static let indicatorsOnlyHeight: CGFloat = 66
+
     @MainActor
-    private static func renderPanel(to url: URL, columns: [AccountColumn], extraHeight: CGFloat = 16) {
+    private static func renderPanel(to url: URL, columns: [AccountColumn], extraHeight: CGFloat = 16,
+                                    hint: String? = nil) {
         let store = UsageStore(providers: [:], discovery: MockDiscovery())
         store.setColumnsForRendering(columns)
 
@@ -37,11 +58,18 @@ enum DebugRender {
         // ImageRenderer не гоняет цикл предпочтений, поэтому высоту под
         // перенесённые названия (и строки под окнами) закладываем здесь вручную.
         state.expandedSize.height += extraHeight
+        if let hint {
+            // Подсказка над крайней правой капсулой: подвал уже панели на 2×6 pt,
+            // капсула стоит в 14 pt от его края.
+            let footerWidth = state.expandedSize.width - 12
+            state.chipHint = ChipHint(text: hint,
+                                      chip: CGRect(x: footerWidth - 14 - 90, y: 6, width: 90, height: 18))
+        }
 
         let panelSize = state.expandedSize
         let scene = ZStack(alignment: .top) {
             desktop
-            RootView(store: store, state: state)
+            RootView(store: store, state: state, keepAwake: .shared, power: .shared)
                 .frame(width: panelSize.width, height: panelSize.height)
         }
         .frame(width: panelSize.width + 48, height: panelSize.height + 40, alignment: .top)
@@ -62,7 +90,7 @@ enum DebugRender {
 
         let scene = ZStack(alignment: .top) {
             desktop
-            RootView(store: store, state: state)
+            RootView(store: store, state: state, keepAwake: .shared, power: .shared)
                 .frame(width: 190, height: 30)
         }
         .frame(width: 420, height: 96, alignment: .top)
@@ -98,6 +126,39 @@ enum DebugRender {
     }
 
     // MARK: - Данные для картинок
+
+    private static let chargingPower: PowerSnapshot = {
+        var power = PowerSnapshot(state: .charging, percent: 84)
+        power.voltage = 12.41
+        power.current = 2.13
+        power.temperature = 31.6
+        power.cycleCount = 309
+        power.maxCapacity = 5017
+        power.designCapacity = 6075
+        power.adapter = .init(name: "96W USB-C Power Adapter", watts: 94, voltage: 20, current: 4.69)
+        power.input = .init(watts: 51.5, voltage: 20.2, current: 2.55)
+        return power
+    }()
+
+    private static let ports = PortsSnapshot(
+        ports: [.init(kind: "MagSafe 3", number: 1, connected: true, transports: []),
+                .init(kind: "USB-C", number: 1, connected: true, transports: ["USB3"]),
+                .init(kind: "USB-C", number: 2, connected: false, transports: []),
+                .init(kind: "USB-C", number: 3, connected: true, transports: ["DisplayPort"])],
+        contract: .init(portKind: "MagSafe 3", portNumber: 1, voltage: 20, current: 4.69, watts: 93.8,
+                        offeredVoltages: [5, 9, 15, 20])
+    )
+
+    private static let batteryPower: PowerSnapshot = {
+        var power = PowerSnapshot(state: .onBattery, percent: 18)
+        power.voltage = 11.38
+        power.current = -1.2
+        power.temperature = 29.4
+        power.cycleCount = 309
+        power.maxCapacity = 5017
+        power.designCapacity = 6075
+        return power
+    }()
 
     private static let hour: TimeInterval = 3_600
 
