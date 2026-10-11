@@ -59,7 +59,7 @@ final class NotchHostingView<Content: View>: NSHostingView<Content> {
 
     /// Панель никогда не становится ключевой, а приложение — фоновое. Без этого
     /// первый клик по неактивному окну уходит на «активацию», и кнопки
-    /// (плитки Keep Awake, обновление) его не получают.
+    /// (обновление, чип re-auth) его не получают.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     /// Окно само стоит поверх выреза, поэтому никакой safe area внутри быть
