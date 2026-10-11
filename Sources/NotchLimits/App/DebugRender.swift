@@ -20,6 +20,8 @@ enum DebugRender {
 
         renderPanel(to: root.appendingPathComponent("panel.png"), columns: healthyColumns())
         renderPanel(to: root.appendingPathComponent("states.png"), columns: mixedColumns(), extraHeight: 40)
+        renderPanel(to: root.appendingPathComponent("hint.png"), columns: healthyColumns(),
+                    hint: "MagSafe 3: зарядка\nUSB-C 1: USB 3\nUSB-C 2: свободен\nUSB-C 3: DisplayPort")
         renderCollapsed(to: root.appendingPathComponent("collapsed.png"))
         KeepAwake.shared.setActive(true)
         KeepAwake.shared.setKeepDisplayOn(true)
@@ -42,7 +44,8 @@ enum DebugRender {
     private static let indicatorsOnlyHeight: CGFloat = 66
 
     @MainActor
-    private static func renderPanel(to url: URL, columns: [AccountColumn], extraHeight: CGFloat = 16) {
+    private static func renderPanel(to url: URL, columns: [AccountColumn], extraHeight: CGFloat = 16,
+                                    hint: String? = nil) {
         let store = UsageStore(providers: [:], discovery: MockDiscovery())
         store.setColumnsForRendering(columns)
 
@@ -55,6 +58,13 @@ enum DebugRender {
         // ImageRenderer не гоняет цикл предпочтений, поэтому высоту под
         // перенесённые названия (и строки под окнами) закладываем здесь вручную.
         state.expandedSize.height += extraHeight
+        if let hint {
+            // Подсказка над крайней правой капсулой: подвал уже панели на 2×6 pt,
+            // капсула стоит в 14 pt от его края.
+            let footerWidth = state.expandedSize.width - 12
+            state.chipHint = ChipHint(text: hint,
+                                      chip: CGRect(x: footerWidth - 14 - 90, y: 6, width: 90, height: 18))
+        }
 
         let panelSize = state.expandedSize
         let scene = ZStack(alignment: .top) {

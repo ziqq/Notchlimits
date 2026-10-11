@@ -78,8 +78,6 @@ private struct ExpandedContent: View {
     @ObservedObject var state: PanelState
     @ObservedObject var keepAwake: KeepAwake
     let power: PowerMonitor
-    /// Подсказка капсулы под курсором.
-    @State private var hint: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -91,13 +89,13 @@ private struct ExpandedContent: View {
             VStack(spacing: 0) {
                 if store.visibleColumns.isEmpty {
                     // Без аккаунтов — только индикаторы и тихая подсказка.
-                    StatusIndicators(keepAwake: keepAwake, power: power, hint: $hint)
+                    StatusIndicators(keepAwake: keepAwake, power: power, hint: $state.chipHint)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 14)
                         .padding(.top, 10)
                     // Подсказка капсулы встаёт на место подсказки про аккаунты.
-                    if let hint {
-                        ChipHintBubble(text: hint)
+                    if let hint = state.chipHint {
+                        ChipHintBubble(text: hint.text)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 14)
                             .padding(.top, 8)
@@ -106,7 +104,7 @@ private struct ExpandedContent: View {
                     }
                 } else {
                     columns
-                    FooterView(store: store, state: state, keepAwake: keepAwake, power: power, hint: $hint)
+                    FooterView(store: store, state: state, keepAwake: keepAwake, power: power, hint: $state.chipHint)
                         .padding(.top, Layout.columnsFooterGap)
                 }
             }
@@ -125,7 +123,7 @@ private struct ExpandedContent: View {
         .padding(.horizontal, 6)
         .padding(.bottom, Layout.contentBottomPadding)
         .onChange(of: state.expanded) { expanded in
-            if !expanded { hint = nil }
+            if !expanded { state.chipHint = nil }
         }
     }
 
@@ -167,7 +165,7 @@ private struct FooterView: View {
     @ObservedObject var state: PanelState
     let keepAwake: KeepAwake
     let power: PowerMonitor
-    @Binding var hint: String?
+    @Binding var hint: ChipHint?
 
     var body: some View {
         HStack(alignment: .center, spacing: 5) {
@@ -184,12 +182,12 @@ private struct FooterView: View {
         }
         .padding(.horizontal, 14)
         .padding(.top, 6)
-        // Подсказка поверх колонок над капсулами: высоту панели она не меняет.
-        .overlay(alignment: .bottomTrailing) {
+        .coordinateSpace(name: ChipHint.space)
+        // Подсказка над капсулой под курсором, по её правому краю, — поверх
+        // колонок, не закрывая саму капсулу. Высоту панели она не меняет.
+        .overlay(alignment: .topLeading) {
             if let hint {
-                ChipHintBubble(text: hint)
-                    .padding(.trailing, 14)
-                    .alignmentGuide(.bottom) { $0[.bottom] + 22 }
+                AnchoredHintBubble(hint: hint)
             }
         }
     }

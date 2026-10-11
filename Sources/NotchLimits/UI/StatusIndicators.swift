@@ -7,7 +7,7 @@ import SwiftUI
 struct StatusIndicators: View {
     @ObservedObject var keepAwake: KeepAwake
     @ObservedObject var power: PowerMonitor
-    @Binding var hint: String?
+    @Binding var hint: ChipHint?
 
     var body: some View {
         HStack(spacing: 6) {
@@ -35,6 +35,8 @@ private struct Chip<Content: View>: View {
     var tint: Color = Theme.secondary
     @ViewBuilder var content: Content
     @Environment(\.chipHint) private var hint
+    /// Рамка капсулы в координатах подвала — к ней привязывается подсказка.
+    @State private var frame: CGRect = .zero
 
     var body: some View {
         HStack(spacing: 4) { content }
@@ -46,26 +48,63 @@ private struct Chip<Content: View>: View {
             .frame(height: 18)
             .background(Capsule().fill(Color.white.opacity(isOn ? 0.1 : 0.04)))
             .contentShape(Capsule())
+            .background(
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear { frame = proxy.frame(in: .named(ChipHint.space)) }
+                        .onChange(of: proxy.frame(in: .named(ChipHint.space))) { frame = $0 }
+                }
+            )
             .onHover { inside in
                 guard let hint, let help, !help.isEmpty else { return }
                 if inside {
-                    hint.wrappedValue = help
-                } else if hint.wrappedValue == help {
+                    hint.wrappedValue = ChipHint(text: help, chip: frame)
+                } else if hint.wrappedValue?.text == help {
                     hint.wrappedValue = nil
                 }
             }
     }
 }
 
+/// Подсказка капсулы и где стоит сама капсула (в пространстве `ChipHint.space`).
+struct ChipHint: Equatable {
+    static let space = "chipHints"
+    var text: String
+    var chip: CGRect
+}
+
 /// Куда капсулы пишут подсказку при наведении.
 private struct ChipHintKey: EnvironmentKey {
-    static let defaultValue: Binding<String?>? = nil
+    static let defaultValue: Binding<ChipHint?>? = nil
 }
 
 extension EnvironmentValues {
-    var chipHint: Binding<String?>? {
+    var chipHint: Binding<ChipHint?>? {
         get { self[ChipHintKey.self] }
         set { self[ChipHintKey.self] = newValue }
+    }
+}
+
+/// Плашка над капсулой: правый край — по правому краю капсулы, низ — на 6 pt
+/// выше её верха. Ставится в `overlay(alignment: .topLeading)` того вида, где
+/// объявлено пространство `ChipHint.space`. Свой размер плашка узнаёт после
+/// первой вёрстки, до этого она прозрачна — так не мелькает не на своём месте.
+struct AnchoredHintBubble: View {
+    let hint: ChipHint
+    @State private var size: CGSize = .zero
+
+    var body: some View {
+        ChipHintBubble(text: hint.text)
+            .background(
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear { size = proxy.size }
+                        .onChange(of: proxy.size) { size = $0 }
+                }
+            )
+            // Не левее края подвала, если плашка шире места слева от капсулы.
+            .offset(x: max(0, hint.chip.maxX - size.width), y: hint.chip.minY - 6 - size.height)
+            .opacity(size == .zero ? 0 : 1)
     }
 }
 
@@ -137,7 +176,7 @@ private struct PowerChips: View {
         var lines: [String] = []
         if let contract {
             lines.append(L.t("power.port") + ": " + joined([
-                "\(contract.portKind) \(contract.portNumber)",
+                contract.portKind.hasPrefix("MagSafe") ? contract.portKind : "\(contract.portKind) \(contract.portNumber)",
                 Format.unit(contract.voltage, digits: contract.voltage == contract.voltage.rounded() ? 0 : 1, "V"),
                 Format.unit(contract.current, digits: 2, "A"),
                 Format.unit(contract.watts, digits: 1, "W")
@@ -198,9 +237,14 @@ private struct PortsChip: View {
             } else {
                 state = port.transports.map(Self.transportName).joined(separator: " · ")
             }
-            return "\(port.kind) \(port.number): \(state)"
+            return "\(Self.portName(port)): \(state)"
         }
         .joined(separator: "\n")
+    }
+
+    /// «USB-C 2», а MagSafe — один на корпусе, без номера: «MagSafe 3».
+    static func portName(_ port: PortsSnapshot.Port) -> String {
+        port.isMagSafe ? port.kind : "\(port.kind) \(port.number)"
     }
 
     private static func transportName(_ raw: String) -> String {
