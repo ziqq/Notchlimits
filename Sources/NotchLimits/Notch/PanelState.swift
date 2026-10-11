@@ -8,6 +8,9 @@ final class PanelState: ObservableObject {
     @Published var expandedSize = CGSize(width: Layout.minPanelWidth,
                                          height: Layout.contentHeight + 32)
 
+    /// Подсказка капсулы под курсором.
+    @Published var chipHint: ChipHint?
+
     var notchSize: CGSize { geometry.notchRect.size }
     var hasNotch: Bool { geometry.hasNotch }
 
