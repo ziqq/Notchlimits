@@ -80,7 +80,4 @@ enum Layout {
     static let contentBottomPadding: CGFloat = 14
     static let collapsedCornerRadius: CGFloat = 8
     static let expandedCornerRadius: CGFloat = 20
-    /// Шаг значков в ушке свёрнутой панели и поля ушка — как в строке меню.
-    static let earIconSpacing: CGFloat = 24
-    static let earPadding: CGFloat = 12
 }

@@ -21,7 +21,6 @@ enum DebugRender {
         renderPanel(to: root.appendingPathComponent("panel.png"), columns: healthyColumns())
         renderPanel(to: root.appendingPathComponent("states.png"), columns: mixedColumns(), extraHeight: 40)
         renderCollapsed(to: root.appendingPathComponent("collapsed.png"))
-        renderCollapsedNotch(to: root.appendingPathComponent("collapsed-awake.png"))
         KeepAwake.shared.setActive(true)
         KeepAwake.shared.setKeepDisplayOn(true)
         renderPanel(to: root.appendingPathComponent("controls.png"), columns: [],
@@ -85,27 +84,6 @@ enum DebugRender {
                 .frame(width: 190, height: 30)
         }
         .frame(width: 420, height: 96, alignment: .top)
-
-        write(scene, to: url)
-    }
-
-    /// Свёрнутая челка с обоими режимами Keep Awake: значки в ушке слева.
-    @MainActor
-    private static func renderCollapsedNotch(to url: URL) {
-        let store = UsageStore(providers: [:], discovery: MockDiscovery())
-        let state = PanelState()
-        state.expanded = false
-        state.geometry = notchedScreen
-        state.indicatorSymbols = ["cup.and.saucer.fill", "display"]
-        let size = state.collapsedSize
-
-        let scene = ZStack(alignment: .topLeading) {
-            desktop
-            RootView(store: store, state: state, keepAwake: .shared, power: .shared)
-                .frame(width: size.width, height: size.height)
-                .offset(x: 120)
-        }
-        .frame(width: 420, height: 60, alignment: .topLeading)
 
         write(scene, to: url)
     }
