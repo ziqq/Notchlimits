@@ -8,11 +8,18 @@ final class PanelState: ObservableObject {
     @Published var expandedSize = CGSize(width: Layout.minPanelWidth,
                                          height: Layout.contentHeight + 32)
 
+    /// Подсказка капсулы под курсором.
+    @Published var chipHint: ChipHint?
+
     var notchSize: CGSize { geometry.notchRect.size }
     var hasNotch: Bool { geometry.hasNotch }
+
 
     /// Сообщение из вёрстки о фактической высоте колонок.
     var onColumnsHeightChange: ((CGFloat) -> Void)?
     /// Нажатие на чип re-auth в колонке: id колонки.
     var onRelogin: ((String) -> Void)?
+    /// Рамки кнопок в координатах окна (origin сверху-слева). Клик по ним —
+    /// действие кнопки, а не закрепление/закрытие панели.
+    var controlFrames: [CGRect] = []
 }

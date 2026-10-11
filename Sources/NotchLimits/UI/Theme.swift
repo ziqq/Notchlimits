@@ -115,6 +115,22 @@ enum Format {
         return String(format: "%.\(digits)f %@", amount, currency)
     }
 
+    /// Величина с единицей: «20,2 V», «−1,20 A». Разделители — из текущей локали.
+    static func unit(_ value: Double, digits: Int, _ unit: String) -> String {
+        number(value, digits: digits) + "\u{00A0}" + unit
+    }
+
+    /// Число без единицы, с разделителями текущей локали: «37,2».
+    static func number(_ value: Double, digits: Int) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.locale = .current
+        formatter.minimumFractionDigits = digits
+        formatter.maximumFractionDigits = digits
+        formatter.minusSign = "−"
+        return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.\(digits)f", value)
+    }
+
     /// Компактное число для строк статистики: целое без хвоста, дробное — с одним знаком.
     static func compact(_ value: Double) -> String {
         value == value.rounded()

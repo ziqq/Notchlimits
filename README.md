@@ -14,6 +14,10 @@ A panel that slides out of the MacBook notch with **Claude Code** and **Codex** 
 - Limit windows aren't hardcoded: whatever the API returns is drawn, including windows that didn't exist yesterday.
 - Lives in the notch — the collapsed panel matches the cutout pixel-for-pixel and stays invisible.
 - Works without a notch too (external display, Mac mini, iMac).
+- **Keep Awake** (context menu): keep the Mac from sleeping and keep the display on — two independent modes on standard
+  IOKit power assertions, no admin password. Their state shows as chips in the panel footer.
+- **Power and port indicators** in the panel footer: charge and battery temperature, charging port (MagSafe / USB-C)
+  with input watts, USB-C ports in use. Hover a chip for the charger contract, port protocols, battery health. Read from IORegistry while the panel is open; hidden without a battery.
 - Notifications when any window crosses 80 % and 95 %, and when a heavily-used window resets and frees up.
 - A burn-rate forecast: if the current pace would hit 100 % before the window resets, the row shows when.
 - One-click self-update from GitHub releases: **Check for updates** downloads the new build, verifies its SHA-256, swaps the bundle and relaunches — no browser needed (opening the release page stays as a fallback).
@@ -34,7 +38,7 @@ A panel that slides out of the MacBook notch with **Claude Code** and **Codex** 
 ./build.sh && open build/NotchLimits.app
 ```
 
-`build.sh` runs `swift build -c release`, assembles `build/NotchLimits.app` with an `Info.plist` (`LSUIElement = true`, `CFBundleIdentifier = com.ziqq.notchlimits`) and signs it. The app is background-only — no Dock or menu-bar icon; quit from the panel's context menu.
+`build.sh` runs `swift build -c release`, assembles `build/NotchLimits.app` with an `Info.plist` (`LSUIElement = true`, `CFBundleIdentifier = dev.ustinoff.notchlimits`) and signs it. The app is background-only — no Dock or menu-bar icon; quit from the panel's context menu.
 
 Restart after a rebuild:
 

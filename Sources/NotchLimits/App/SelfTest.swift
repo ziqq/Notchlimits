@@ -29,8 +29,11 @@ enum SelfTest {
         checkUpdateCheck()
         checkAccountSwitcher()
         checkFormatting()
+        checkPowerParser()
+        checkPortsParser()
         checkCodableRoundTrips()
         checkLocalizations()
+        checkDefaultsMigration()
 
         if failures.isEmpty {
             print("\nсамопроверка пройдена")
@@ -642,6 +645,135 @@ enum SelfTest {
         expect("заголовок по имени профиля", column.header == "CODEX · main")
         column.customName = "work"
         expect("заголовок по своему имени", column.header == "CODEX · work")
+    }
+
+    // MARK: - Перенос настроек
+
+    private static func checkDefaultsMigration() {
+        section("Перенос настроек со старого ID")
+        let legacy: [String: Any] = ["hotKey": "cmd+p", "column.names": ["a": "work"], "shared": 1]
+        let existing: [String: Any] = ["shared": 2]
+        let moved = DefaultsMigration.missingValues(legacy: legacy, existing: existing)
+        expect("недостающие ключи переносятся", Set(moved.keys) == ["hotKey", "column.names"],
+               "\(moved.keys.sorted())")
+        expect("новые значения не перетираются", moved["shared"] == nil)
+        expect("пустой старый домен — ничего", DefaultsMigration.missingValues(legacy: [:], existing: existing).isEmpty)
+
+        // Настоящий прогон на временных доменах.
+        let suite = "dev.ustinoff.notchlimits.selftest.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            expect("временный домен создан", false)
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: DefaultsMigration.doneKey)
+        DefaultsMigration.runIfNeeded(defaults: defaults)
+        expect("повторный перенос не выполняется", defaults.dictionaryRepresentation()["hotKey"] == nil)
+    }
+
+    // MARK: - Питание
+
+    private static func checkPortsParser() {
+        section("Порты")
+        // Срез ioreg с MacBook Pro M1 Pro: MagSafe заряжает, USB-C 1 и 2 заняты.
+        let ports: [[String: Any]] = [
+            ["PortTypeDescription": "SD Card", "PortNumber": 1, "ConnectionActive": false],
+            ["PortTypeDescription": "USB-C", "PortNumber": 2, "ConnectionActive": true,
+             "TransportsActive": ["CC", "USB2"]],
+            ["PortTypeDescription": "USB-C", "PortNumber": 1, "ConnectionActive": true,
+             "TransportsActive": ["CC", "USB3", "CIO"]],
+            ["PortTypeDescription": "USB-C", "PortNumber": 3, "ConnectionActive": false, "TransportsActive": []],
+            ["PortTypeDescription": "MagSafe 3", "PortNumber": 1, "ConnectionActive": true,
+             "TransportsActive": ["CC"]],
+        ]
+        let parsed = PortsSnapshot.parsePorts(ports)
+        expect("SD и HDMI отброшены, остались 4 разъёма", parsed.count == 4, "\(parsed.map(\.id))")
+        expect("MagSafe первым, USB-C по номеру",
+               parsed.map(\.id) == ["MagSafe 3@1", "USB-C@1", "USB-C@2", "USB-C@3"], "\(parsed.map(\.id))")
+        expect("CC не считается протоколом", parsed.first { $0.id == "USB-C@1" }?.transports == ["USB3", "CIO"])
+        expect("свободный порт", parsed.last?.connected == false)
+
+        let sources: [[String: Any]] = [
+            ["PowerSourceName": "Brick ID", "ParentPortTypeDescription": "MagSafe 3", "ParentPortNumber": 1,
+             "Priority": NSNumber(value: UInt64(18_446_744_073_709_551_116)),
+             "WinningPowerSourceOption": ["Voltage (mV)": 5000, "Max Current (mA)": 500, "Max Power (mW)": 2500]],
+            ["PowerSourceName": "USB-PD", "ParentPortTypeDescription": "MagSafe 3", "ParentPortNumber": 1,
+             "Priority": 1000,
+             "WinningPowerSourceOption": ["Voltage (mV)": 20000, "Max Current (mA)": 4690, "Max Power (mW)": 93800],
+             // Как в IORegistry: множество, а не массив.
+             "PowerSourceOptions": NSSet(array: [["Voltage (mV)": 15000], ["Voltage (mV)": 20000],
+                                                 ["Voltage (mV)": 5000], ["Voltage (mV)": 9000]])],
+        ]
+        let contract = PortsSnapshot.parseContract(sources)
+        expect("побеждает USB-PD, а не Brick ID", contract?.voltage == 20, "\(String(describing: contract))")
+        expect("ток и мощность", contract?.current == 4.69 && contract?.watts == 93.8)
+        expect("режимы зарядки по возрастанию", contract?.offeredVoltages == [5, 9, 15, 20])
+        expect("без источников — нет контракта", PortsSnapshot.parseContract([]) == nil)
+    }
+
+    private static func checkPowerParser() {
+        section("Питание: разбор AppleSmartBattery")
+
+        // Срез `ioreg -rc AppleSmartBattery` с MacBook Pro на Apple Silicon
+        // от 96-ваттного адаптера: заряд в процентах, ёмкость — в AppleRaw…
+        let appleSilicon: [String: Any] = [
+            "BatteryInstalled": true, "ExternalConnected": true,
+            "IsCharging": false, "FullyCharged": true,
+            "CurrentCapacity": 100, "MaxCapacity": 100,
+            "AppleRawMaxCapacity": 5017, "DesignCapacity": 6075,
+            "Voltage": 12606, "Amperage": 0, "Temperature": 3080, "CycleCount": 309,
+            "AdapterDetails": ["Name": "96W USB-C Power Adapter", "Watts": 94,
+                               "AdapterVoltage": 20000, "Current": 4690,
+                               "FamilyCode": NSNumber(value: UInt64(18446744073172697098))],
+            "PowerTelemetryData": ["SystemPowerIn": 51509, "SystemVoltageIn": 20229,
+                                   "SystemCurrentIn": 2546],
+            "ChargerData": ["ChargingVoltage": 4253, "ChargingCurrent": 0]
+        ]
+        if let power = PowerSnapshot.parse(appleSilicon) {
+            expect("AS: заряжен от сети", power.state == .charged)
+            expect("AS: 100 %", power.percent == 100)
+            expect("AS: 12,606 В", power.voltage == 12.606)
+            expect("AS: 30,8 °C", power.temperature == 30.8)
+            expect("AS: 309 циклов", power.cycleCount == 309)
+            expect("AS: здоровье по AppleRaw", power.maxCapacity == 5017
+                   && abs((power.health ?? 0) - 82.58) < 0.01, "\(String(describing: power.health))")
+            expect("AS: адаптер 94 Вт, 20 В, 4,69 А",
+                   power.adapter == .init(name: "96W USB-C Power Adapter", watts: 94,
+                                          voltage: 20, current: 4.69))
+            expect("AS: вход 51,509 Вт", power.input == .init(watts: 51.509, voltage: 20.229, current: 2.546))
+        } else {
+            expect("AS: словарь разобран", false)
+        }
+
+        // Intel: ёмкость в мА·ч, разряд, ток пришёл беззнаковым образом −1500.
+        let intel: [String: Any] = [
+            "ExternalConnected": false, "IsCharging": false, "FullyCharged": false,
+            "CurrentCapacity": 2600, "MaxCapacity": 5200, "DesignCapacity": 6000,
+            "Voltage": 11400, "Amperage": NSNumber(value: UInt64.max - 1499),
+            "Temperature": 2950, "CycleCount": 12,
+            "AdapterDetails": ["FamilyCode": 0]
+        ]
+        if let power = PowerSnapshot.parse(intel) {
+            expect("Intel: от аккумулятора", power.state == .onBattery)
+            expect("Intel: 50 %", power.percent == 50)
+            expect("Intel: ток −1,5 А", power.current == -1.5, "\(String(describing: power.current))")
+            expect("Intel: ёмкость из MaxCapacity", power.maxCapacity == 5200)
+            expect("Intel: без адаптера и входа", power.adapter == nil && power.input == nil)
+        } else {
+            expect("Intel: словарь разобран", false)
+        }
+
+        var charging = intel
+        charging["ExternalConnected"] = true
+        charging["IsCharging"] = true
+        charging["Amperage"] = 2100
+        expect("заряжается", PowerSnapshot.parse(charging)?.state == .charging)
+        charging["IsCharging"] = false
+        expect("от сети, но держит заряд", PowerSnapshot.parse(charging)?.state == .notCharging)
+
+        expect("без аккумулятора — nil", PowerSnapshot.parse(["BatteryInstalled": false, "Voltage": 0]) == nil)
+        expect("пустой словарь — nil", PowerSnapshot.parse([:]) == nil)
+        expect("единицы по локали", Format.unit(-1.5, digits: 2, "A").hasSuffix("\u{00A0}A"))
     }
 
     // MARK: - Локализации

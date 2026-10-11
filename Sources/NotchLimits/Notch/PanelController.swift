@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// Открытие/закрытие панели: hover-мониторы, анимации, клик-пин, Esc.
@@ -7,6 +8,9 @@ final class PanelController {
 
     let state = PanelState()
     private let store: UsageStore
+    private let keepAwake: KeepAwake
+    private let power: PowerMonitor
+    private var expandedObserver: AnyCancellable?
     private var panel: NotchPanel!
     private var hosting: NotchHostingView<RootView>!
 
@@ -29,8 +33,10 @@ final class PanelController {
     var onContextMenu: ((NSEvent, NSView) -> Void)?
     var onWillOpen: (() -> Void)?
 
-    init(store: UsageStore) {
+    init(store: UsageStore, keepAwake: KeepAwake, power: PowerMonitor) {
         self.store = store
+        self.keepAwake = keepAwake
+        self.power = power
     }
 
     // MARK: - Жизненный цикл
@@ -43,7 +49,7 @@ final class PanelController {
         }
         recomputeExpandedSize()
 
-        let root = RootView(store: store, state: state)
+        let root = RootView(store: store, state: state, keepAwake: keepAwake, power: power)
         hosting = NotchHostingView(rootView: root)
         hosting.onRightClick = { [weak self] event in
             guard let self else { return }
@@ -57,7 +63,18 @@ final class PanelController {
 
         startMonitors()
         observeScreenChanges()
+        observeExpanded()
     }
+
+    /// Питание опрашиваем, только пока панель раскрыта.
+    private func observeExpanded() {
+        expandedObserver = state.$expanded
+            .removeDuplicates()
+            .sink { [weak self] expanded in
+                MainActor.assumeIsolated { self?.power.setActive(expanded) }
+            }
+    }
+
 
     private func observeScreenChanges() {
         NotificationCenter.default.addObserver(
@@ -86,16 +103,14 @@ final class PanelController {
         }
     }
 
-    /// Панель растёт, если названия окон перенеслись на несколько строк,
-    /// и не опускается ниже базовой высоты из макета.
+    /// Панель растёт, если названия окон перенеслись на несколько строк.
     private func applyColumnsHeight(_ columnsHeight: CGFloat) {
         guard columnsHeight > 0 else { return }
         let notch = state.geometry.notchRect.height
-        let needed = columnsHeight
-            + Layout.columnsFooterGap
-            + Layout.footerHeight
-            + Layout.contentBottomPadding
-        let content = min(max(Layout.contentHeight, needed.rounded(.up)), Layout.maxContentHeight)
+        // Подвал «Обновлено …» с индикаторами входит в измеренный блок,
+        // поэтому панель — ровно по содержимому.
+        let needed = columnsHeight + Layout.contentBottomPadding
+        let content = min(needed.rounded(.up), Layout.maxContentHeight)
         let height = notch + content
         guard abs(height - state.expandedSize.height) > 0.5 else { return }
         state.expandedSize.height = height
@@ -255,11 +270,23 @@ final class PanelController {
             evaluateHover()
         case .leftMouseDown:
             guard state.expanded, panel.frame.contains(NSEvent.mouseLocation) else { return }
+            // Клик по кнопке — это её действие, панель от него не закрепляется
+            // и не закрывается (иначе второе нажатие кнопки захлопнуло бы панель).
+            if isOverControl(NSEvent.mouseLocation) { return }
             setPinned(!state.pinned)
             if !state.pinned { close(force: true) }
         default:
             break
         }
+    }
+
+    /// Экранная точка над одной из кнопок панели (`state.controlFrames`).
+    private func isOverControl(_ screenPoint: NSPoint) -> Bool {
+        guard let content = panel.contentView else { return false }
+        let inWindow = panel.convertPoint(fromScreen: screenPoint)
+        // SwiftUI меряет рамки от верхнего левого угла, окно — от нижнего.
+        let flipped = CGPoint(x: inWindow.x, y: content.bounds.height - inWindow.y)
+        return state.controlFrames.contains { $0.contains(flipped) }
     }
 
     private func evaluateHover() {

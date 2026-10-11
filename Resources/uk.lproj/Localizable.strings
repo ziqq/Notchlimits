@@ -27,10 +27,32 @@
 "panel.updated" = "Оновлено %@";
 "panel.noData" = "Даних ще немає";
 "panel.refresh.help" = "Оновити всі колонки";
-"panel.empty.title" = "Немає акаунтів";
 "panel.empty.hint" = "Правий клік → «Додати акаунт Claude…» або «Додати акаунт Codex…»";
-"panel.hidden.title" = "Усі колонки приховано";
 "panel.hidden.hint" = "Правий клік → «Показати приховані колонки»";
+
+// Управление
+"keepAwake.sleep" = "Не давати Mac заснути";
+"keepAwake.sleep.help" = "Не давати Mac засинати під час бездіяльності";
+"keepAwake.display" = "Не гасити екран";
+"keepAwake.display.help" = "Не вимикати екран під час бездіяльності";
+
+// Питание
+"power.charging" = "Заряджається";
+"power.charged" = "Заряджено";
+"power.notCharging" = "Не заряджається";
+"power.onBattery" = "Від акумулятора";
+"power.charger" = "Зарядка";
+"power.input" = "Вхід";
+"power.input.help" = "Скільки Mac бере від зарядки просто зараз";
+"power.battery" = "Акумулятор";
+"power.health" = "Стан";
+"power.health.value" = "%@ · циклів: %d";
+"power.health.help" = "Повна ємність: %d з %d мА·год за паспортом";
+"power.port" = "Порт";
+"power.modes" = "Режими зарядки";
+"ports.charging" = "зарядка";
+"ports.free" = "вільний";
+"ports.connected" = "підключено";
 
 // Контекстное меню
 "menu.refresh" = "Оновити";

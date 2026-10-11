@@ -27,10 +27,32 @@
 "panel.updated" = "更新於 %@";
 "panel.noData" = "尚無資料";
 "panel.refresh.help" = "重新整理所有欄";
-"panel.empty.title" = "沒有帳號";
 "panel.empty.hint" = "右鍵點按 →「加入 Claude 帳號…」或「加入 Codex 帳號…」";
-"panel.hidden.title" = "所有欄皆已隱藏";
 "panel.hidden.hint" = "右鍵點按 →「顯示隱藏的欄」";
+
+// Управление
+"keepAwake.sleep" = "防止 Mac 睡眠";
+"keepAwake.sleep.help" = "閒置時不讓 Mac 進入睡眠";
+"keepAwake.display" = "保持螢幕常亮";
+"keepAwake.display.help" = "閒置時不關閉顯示器";
+
+// Питание
+"power.charging" = "正在充電";
+"power.charged" = "已充滿";
+"power.notCharging" = "未在充電";
+"power.onBattery" = "使用電池";
+"power.charger" = "充電器";
+"power.input" = "輸入";
+"power.input.help" = "Mac 目前從充電器取得的功率";
+"power.battery" = "電池";
+"power.health" = "健康度";
+"power.health.value" = "%@ · 循環 %d 次";
+"power.health.help" = "完整充電容量：%d / 設計 %d mAh";
+"power.port" = "連接埠";
+"power.modes" = "充電器模式";
+"ports.charging" = "充電";
+"ports.free" = "空閒";
+"ports.connected" = "已連接";
 
 // Контекстное меню
 "menu.refresh" = "重新整理";

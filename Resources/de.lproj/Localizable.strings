@@ -27,10 +27,32 @@
 "panel.updated" = "Aktualisiert %@";
 "panel.noData" = "Noch keine Daten";
 "panel.refresh.help" = "Alle Spalten aktualisieren";
-"panel.empty.title" = "Keine Accounts";
 "panel.empty.hint" = "Rechtsklick → „Claude-Account hinzufügen…“ oder „Codex-Account hinzufügen…“";
-"panel.hidden.title" = "Alle Spalten ausgeblendet";
 "panel.hidden.hint" = "Rechtsklick → „Ausgeblendete Spalten zeigen“";
+
+// Управление
+"keepAwake.sleep" = "Mac wach halten";
+"keepAwake.sleep.help" = "Ruhezustand bei Inaktivität verhindern";
+"keepAwake.display" = "Display anlassen";
+"keepAwake.display.help" = "Display bei Inaktivität nicht ausschalten";
+
+// Питание
+"power.charging" = "Lädt";
+"power.charged" = "Geladen";
+"power.notCharging" = "Lädt nicht";
+"power.onBattery" = "Batteriebetrieb";
+"power.charger" = "Netzteil";
+"power.input" = "Eingang";
+"power.input.help" = "Leistung, die der Mac gerade vom Netzteil bezieht";
+"power.battery" = "Batterie";
+"power.health" = "Zustand";
+"power.health.value" = "%@ · Zyklen: %d";
+"power.health.help" = "Volle Ladekapazität: %d von %d mAh laut Spezifikation";
+"power.port" = "Anschluss";
+"power.modes" = "Ladegerät-Modi";
+"ports.charging" = "lädt";
+"ports.free" = "frei";
+"ports.connected" = "verbunden";
 
 // Контекстное меню
 "menu.refresh" = "Aktualisieren";
