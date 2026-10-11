@@ -148,7 +148,7 @@ private struct ExpandedContent: View {
     }
 }
 
-/// Подсказка под «Управлением», пока нет ни одной видимой колонки лимитов.
+/// Подсказка под индикаторами, пока нет ни одной видимой колонки лимитов.
 private struct EmptyHint: View {
     @ObservedObject var store: UsageStore
 

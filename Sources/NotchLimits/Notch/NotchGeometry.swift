@@ -73,7 +73,7 @@ enum Layout {
     static let minPanelWidth: CGFloat = 500
     static let columnWidth: CGFloat = 250
     /// Высота содержимого до первого замера вёрстки: дальше панель
-    /// подгоняется под фактическую высоту колонок и «Управления».
+    /// подгоняется под фактическую высоту колонок и подвала.
     static let contentHeight: CGFloat = 252
     static let maxContentHeight: CGFloat = 560
     static let columnsFooterGap: CGFloat = 6
