@@ -2,6 +2,9 @@
 
 
 ## Unreleased
+
+
+## 1.3.0 - 12/10/2026
 - **CHANGED**: Приложение везде называется Notchlimits, как репозиторий на GitHub: `Notchlimits.app`, исполняемый
   файл, панель «О программе», DMG и файлы релиза. Папка `~/Library/Application Support/NotchLimits` переименовывается
   при первом запуске, а обновление изнутри приложения ставит новый бандл как `Notchlimits.app`.
