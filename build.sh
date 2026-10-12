@@ -1,21 +1,19 @@
 #!/bin/bash
 #
-# Сборка build/NotchLimits.app из Swift Package.
+# Сборка build/Notchlimits.app из Swift Package.
 #
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APP_NAME="NotchLimits"
-# Имя для пользователя — с пробелом. Идёт в CFBundleDisplayName: так подпись
-# видна в уведомлениях и в «Объекты входа». Исполняемый файл, бандл и .app
-# остаются NotchLimits, чтобы не трогать идентификатор и пути.
-DISPLAY_NAME="Notch Limits"
+# Одно имя везде: исполняемый файл, .app и CFBundleName/CFBundleDisplayName —
+# так же, как репозиторий на GitHub.
+APP_NAME="Notchlimits"
 BUNDLE_ID="dev.ustinoff.notchlimits"
 # Версия: переменная окружения важнее файла VERSION (её задаёт релизный workflow).
 VERSION="${NOTCHLIMITS_VERSION:-$(cat VERSION 2>/dev/null || echo 0.0.0)}"
 APP="build/${APP_NAME}.app"
 
-echo "==> NotchLimits ${VERSION}"
+echo "==> Notchlimits ${VERSION}"
 echo "==> swift build -c release"
 swift build -c release
 
@@ -63,9 +61,9 @@ ${LOCALES}	</array>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>${DISPLAY_NAME}</string>
+	<string>${APP_NAME}</string>
 	<key>CFBundleDisplayName</key>
-	<string>${DISPLAY_NAME}</string>
+	<string>${APP_NAME}</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -77,7 +75,7 @@ ${LOCALES}	</array>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
-	<string>${DISPLAY_NAME}</string>
+	<string>${APP_NAME}</string>
 	<key>NSSupportsAutomaticTermination</key>
 	<false/>
 	<key>NSSupportsSuddenTermination</key>

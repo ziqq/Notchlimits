@@ -43,7 +43,7 @@ enum UpdateInstaller {
 
         let fileManager = FileManager.default
         let work = fileManager.temporaryDirectory
-            .appendingPathComponent("NotchLimitsUpdate-\(UUID().uuidString)")
+            .appendingPathComponent("NotchlimitsUpdate-\(UUID().uuidString)")
         try fileManager.createDirectory(at: work, withIntermediateDirectories: true)
 
         // 1. Скачиваем архив.
@@ -71,7 +71,8 @@ enum UpdateInstaller {
         // 5. Пишем скрипт подмены и запускаем его отдельным процессом.
         let scriptURL = work.appendingPathComponent("swap.sh")
         let script = swapScript(pid: ProcessInfo.processInfo.processIdentifier,
-                                old: Bundle.main.bundleURL, new: newApp)
+                                old: Bundle.main.bundleURL, new: newApp,
+                                target: target(old: Bundle.main.bundleURL, new: newApp))
         try script.write(to: scriptURL, atomically: true, encoding: .utf8)
         try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
 
@@ -98,6 +99,17 @@ enum UpdateInstaller {
         return entries.first { $0.pathExtension == "app" }
     }
 
+    /// Куда ставить новый бандл. Если имя изменилось только регистром
+    /// (`NotchLimits.app` → `Notchlimits.app`), берём новое; переименованный
+    /// пользователем бандл оставляем под его именем.
+    private static func target(old: URL, new: URL) -> URL {
+        let name = new.lastPathComponent
+        guard name != old.lastPathComponent,
+              name.caseInsensitiveCompare(old.lastPathComponent) == .orderedSame
+        else { return old }
+        return old.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true)
+    }
+
     @discardableResult
     private static func shell(_ launchPath: String, _ arguments: [String]) -> Bool {
         let task = Process()
@@ -115,9 +127,10 @@ enum UpdateInstaller {
     }
 
     /// Скрипт подмены. Пути в одинарных кавычках — так безопасно и с пробелами.
-    private static func swapScript(pid: Int32, old: URL, new: URL) -> String {
+    private static func swapScript(pid: Int32, old: URL, new: URL, target: URL) -> String {
         let oldPath = shellQuote(old.path)
         let newPath = shellQuote(new.path)
+        let targetPath = shellQuote(target.path)
         return """
         #!/bin/bash
         # Ждём выхода приложения (\(pid)), затем ставим новый бандл на место.
@@ -125,17 +138,21 @@ enum UpdateInstaller {
         sleep 0.3
         OLD=\(oldPath)
         NEW=\(newPath)
+        TARGET=\(targetPath)
         BACKUP="${OLD}.backup"
         /bin/rm -rf "$BACKUP"
         if /bin/mv "$OLD" "$BACKUP"; then
-          if /usr/bin/ditto "$NEW" "$OLD"; then
-            /usr/bin/xattr -dr com.apple.quarantine "$OLD" 2>/dev/null
+          if /usr/bin/ditto "$NEW" "$TARGET"; then
+            /usr/bin/xattr -dr com.apple.quarantine "$TARGET" 2>/dev/null
             /bin/rm -rf "$BACKUP"
           else
-            /bin/rm -rf "$OLD"; /bin/mv "$BACKUP" "$OLD"   # откат
+            /bin/rm -rf "$TARGET"; /bin/mv "$BACKUP" "$OLD"   # откат
+            TARGET="$OLD"
           fi
+        else
+          TARGET="$OLD"
         fi
-        /usr/bin/open "$OLD"
+        /usr/bin/open "$TARGET"
         """
     }
 

@@ -1,4 +1,4 @@
-# Notch Limits
+# Notchlimits
 
 **English** · [Русский](README.ru.md)
 
@@ -35,21 +35,21 @@ A panel that slides out of the MacBook notch with **Claude Code** and **Codex** 
 ## Build & run
 
 ```bash
-./build.sh && open build/NotchLimits.app
+./build.sh && open build/Notchlimits.app
 ```
 
-`build.sh` runs `swift build -c release`, assembles `build/NotchLimits.app` with an `Info.plist` (`LSUIElement = true`, `CFBundleIdentifier = dev.ustinoff.notchlimits`) and signs it. The app is background-only — no Dock or menu-bar icon; quit from the panel's context menu.
+`build.sh` runs `swift build -c release`, assembles `build/Notchlimits.app` with an `Info.plist` (`LSUIElement = true`, `CFBundleIdentifier = dev.ustinoff.notchlimits`) and signs it. The app is background-only — no Dock or menu-bar icon; quit from the panel's context menu.
 
 Restart after a rebuild:
 
 ```bash
-pkill -x NotchLimits; open build/NotchLimits.app
+pkill -x Notchlimits; open build/Notchlimits.app
 ```
 
 A drag-to-Applications DMG (the app plus an `Applications` shortcut) is packed from the built bundle:
 
 ```bash
-./scripts/build_dmg.sh   # → build/NotchLimits-<version>.dmg
+./scripts/build_dmg.sh   # → build/Notchlimits-<version>.dmg
 ```
 
 ## Usage
@@ -67,7 +67,7 @@ On a notch-less screen the panel sits top-center; collapsed, it's a small pill w
 
 ![Collapsed panel](docs/collapsed.png)
 
-The context menu covers: **Refresh** (force-poll, bypassing timers and backoff), **Add Claude / Codex account…**, **Hide** / **Rename column** submenus, **Show hidden columns**, **Remove account** (with a confirmation — deletes the account's login and profile), **Active Codex / Claude account →** (save the current one, then switch which account the plain `codex`/`claude` command uses), **Hotkey** submenu, **Launch at login** (`SMAppService`), **Check for updates…** (offers **Update now** — a SHA-256-verified in-place update — or opens the release page), **About Notch Limits** (native panel with the running version), and **Quit**.
+The context menu covers: **Refresh** (force-poll, bypassing timers and backoff), **Add Claude / Codex account…**, **Hide** / **Rename column** submenus, **Show hidden columns**, **Remove account** (with a confirmation — deletes the account's login and profile), **Active Codex / Claude account →** (save the current one, then switch which account the plain `codex`/`claude` command uses), **Hotkey** submenu, **Launch at login** (`SMAppService`), **Check for updates…** (offers **Update now** — a SHA-256-verified in-place update — or opens the release page), **About Notchlimits** (native panel with the running version), and **Quit**.
 
 ## Column names
 
@@ -75,7 +75,7 @@ The primary profile of both providers is labeled `main`, so headers don't diverg
 
 ## Hotkey
 
-Default is **⌘P**. Being a global hotkey, it overrides "Print" elsewhere while Notch Limits runs — so it's configurable via right-click → **Hotkey**:
+Default is **⌘P**. Being a global hotkey, it overrides "Print" elsewhere while Notchlimits runs — so it's configurable via right-click → **Hotkey**:
 
 - **Change…** captures the next keypress. At least one of ⌘, ⌥, ⌃ is required, or a global hotkey would swallow ordinary input.
 - **Default (⌘P)** / **Disable** (leaves only hover and click).
@@ -89,7 +89,7 @@ The binding uses the physical key code, so switching layout doesn't affect it. I
 Check any language without changing system settings:
 
 ```bash
-./build/NotchLimits.app/Contents/MacOS/NotchLimits -AppleLanguages "(ja)"
+./build/Notchlimits.app/Contents/MacOS/Notchlimits -AppleLanguages "(ja)"
 ```
 
 Translations have a single source of truth — `Tools/make-strings.py` — which lays them out into `Resources/<lang>.lproj/Localizable.strings` and fails if any key is missing or extra. Durations and the percent sign are localized too: `42 %` in French, `42%` in Japanese, `%42` in Turkish.
@@ -220,7 +220,7 @@ git tag v1.2.0 && git push origin v1.2.0    # release
 
 ## Debug modes
 
-Environment variables for running the binary directly (`./build/NotchLimits.app/Contents/MacOS/NotchLimits`):
+Environment variables for running the binary directly (`./build/Notchlimits.app/Contents/MacOS/Notchlimits`):
 
 | Variable | Effect |
 | --- | --- |
@@ -244,7 +244,7 @@ The script renders all ten iconset sizes and assembles the `.icns` via `iconutil
 ## Architecture
 
 ```
-Sources/NotchLimits/
+Sources/Notchlimits/
   App/        entry point, delegate, context menu, debug modes
   Notch/      notch geometry, NSPanel, hover logic and animations
   UI/         SwiftUI panel layout
@@ -262,3 +262,7 @@ A few spots where the implementation is subtle and needs care:
 - Window level is `.popUpMenu`, not `.statusBar + 1`: on recent macOS the menu bar draws higher and the panel would fall behind menu items.
 - `NotchHostingView.safeAreaInsets` is zeroed: the window already sits over the cutout, and an extra safe area would push content down by the notch height again.
 - On close, the window frame shrinks 0.35 s after the animation starts, so its last frames aren't clipped.
+
+## License
+
+Notchlimits is free software under the [GNU General Public License v3.0](LICENSE) (`GPL-3.0-only`). Copyright (C) 2026 Anton Ustinoff.

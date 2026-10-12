@@ -17,12 +17,31 @@ enum DesktopApp {
         }
     }
 
-    /// `~/Library/Application Support/NotchLimits` — здесь наши папки данных.
+    /// `~/Library/Application Support/Notchlimits` — здесь наши папки данных.
     nonisolated static var supportDirectory: URL {
         let base = (try? FileManager.default.url(for: .applicationSupportDirectory,
                                                  in: .userDomainMask, appropriateFor: nil, create: true))
             ?? ProfileDirectories.home.appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("NotchLimits", isDirectory: true)
+        return base.appendingPathComponent("Notchlimits", isDirectory: true)
+    }
+
+    /// Прежнее имя папки данных.
+    nonisolated static let legacySupportName = "NotchLimits"
+
+    /// Переименовать папку данных со старого имени. На обычном APFS (без учёта
+    /// регистра) это та же папка и меняется только регистр в имени; на томе
+    /// с учётом регистра без переноса пропали бы входы и папки приложений.
+    /// `rename(2)`, а не `FileManager.moveItem`: смена одного регистра на томе
+    /// без учёта регистра для него выглядит как «назначение уже существует».
+    nonisolated static func migrateSupportDirectory() {
+        let current = supportDirectory
+        let base = current.deletingLastPathComponent()
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: base.path),
+              names.contains(legacySupportName),
+              !names.contains(current.lastPathComponent)
+        else { return }
+        let legacy = base.appendingPathComponent(legacySupportName, isDirectory: true)
+        _ = rename(legacy.path, current.path)
     }
 
     nonisolated static func url(bundleID: String) -> URL? {
