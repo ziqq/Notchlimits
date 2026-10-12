@@ -32,7 +32,7 @@ enum UpdateCheck {
         let headers = [
             "Accept": "application/vnd.github+json",
             // GitHub без User-Agent отвечает 403.
-            "User-Agent": "NotchLimits"
+            "User-Agent": "Notchlimits"
         ]
         switch await HTTPClient.shared.get(apiURL, headers: headers) {
         case .failure(let error):

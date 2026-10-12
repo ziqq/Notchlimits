@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "NotchLimits",
+    name: "Notchlimits",
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
-            name: "NotchLimits",
-            path: "Sources/NotchLimits"
+            name: "Notchlimits",
+            path: "Sources/Notchlimits"
         )
     ]
 )

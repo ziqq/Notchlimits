@@ -31,7 +31,7 @@ final class KeepAwake: ObservableObject {
         isActive = active
         systemAssertion = active
             ? PowerAssertion(type: kIOPMAssertPreventUserIdleSystemSleep,
-                             reason: "Notch Limits: keep the Mac awake")
+                             reason: "Notchlimits: keep the Mac awake")
             : nil
     }
 
@@ -40,7 +40,7 @@ final class KeepAwake: ObservableObject {
         keepDisplayOn = on
         displayAssertion = on
             ? PowerAssertion(type: kIOPMAssertPreventUserIdleDisplaySleep,
-                             reason: "Notch Limits: keep the display on")
+                             reason: "Notchlimits: keep the display on")
             : nil
     }
 }

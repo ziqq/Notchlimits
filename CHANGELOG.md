@@ -2,6 +2,9 @@
 
 
 ## Unreleased
+- **CHANGED**: The app is now called Notchlimits everywhere, matching the GitHub repository: `Notchlimits.app`, the
+  executable, the About panel, the DMG and release assets. The `~/Library/Application Support/NotchLimits` folder is
+  renamed on first launch, and the in-app updater installs the new bundle as `Notchlimits.app`.
 - **ADDED**: Keep Awake — two independent modes in the context menu, **Keep Mac awake** and **Keep display on**. Uses
   standard IOKit power assertions: no administrator password, and a crash or quit always lets the Mac sleep again.
   Each mode has a chip in the panel footer that lights up while it's on.

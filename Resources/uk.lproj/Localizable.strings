@@ -1,4 +1,4 @@
-/* NotchLimits — uk. Собрано Tools/make-strings.py */
+/* Notchlimits — uk. Собрано Tools/make-strings.py */
 
 // Окна лимитов и время
 "reset.days" = "Скидання через %1$d д %2$d год";
@@ -68,7 +68,7 @@
 "menu.hotKey.standard" = "Стандартна (⌘P)";
 "menu.hotKey.disable" = "Вимкнути";
 "menu.loginItem" = "Запуск при вході";
-"menu.about" = "Про Notch Limits";
+"menu.about" = "Про Notchlimits";
 "menu.quit" = "Вихід";
 
 // Удаление аккаунта
