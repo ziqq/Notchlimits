@@ -1,6 +1,6 @@
 import Foundation
 
-/// Самопроверка для CI: `NOTCHLIMITS_SELFTEST=1 NotchLimits`.
+/// Самопроверка для CI: `NOTCHLIMITS_SELFTEST=1 Notchlimits`.
 ///
 /// Ничего не требует от окружения — ни сети, ни Keychain, ни оконного сервера,
 /// поэтому спокойно живёт на раннере. Возвращает ненулевой код при первой же
@@ -519,7 +519,7 @@ enum SelfTest {
 
         let json = """
         {"tag_name":"v2.0.1","html_url":"https://example.com/r","assets":[
-          {"name":"NotchLimits-2.0.1.zip","browser_download_url":"https://example.com/a.zip"},
+          {"name":"Notchlimits-2.0.1.zip","browser_download_url":"https://example.com/a.zip"},
           {"name":"SHA256SUMS.txt","browser_download_url":"https://example.com/s.txt"}
         ]}
         """
@@ -530,9 +530,9 @@ enum SelfTest {
         expect("ссылка на суммы найдена", release?.checksumURL?.absoluteString == "https://example.com/s.txt")
         expect("мусор не ломает", UpdateCheck.parse(Data("[]".utf8)) == nil)
 
-        let sums = "abc123  NotchLimits-2.0.1.zip\ndef456  other.txt\n"
+        let sums = "abc123  Notchlimits-2.0.1.zip\ndef456  other.txt\n"
         expect("сумма для файла вынута",
-               UpdateCheck.expectedSum(from: sums, zipName: "NotchLimits-2.0.1.zip") == "abc123")
+               UpdateCheck.expectedSum(from: sums, zipName: "Notchlimits-2.0.1.zip") == "abc123")
         expect("для чужого файла суммы нет",
                UpdateCheck.expectedSum(from: sums, zipName: "nope.zip") == nil)
     }

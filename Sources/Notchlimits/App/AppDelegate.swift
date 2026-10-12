@@ -465,7 +465,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Нативная панель About: сама берёт иконку, имя и версию из бандла.
         NSApp.activate(ignoringOtherApps: true)
         NSApp.orderFrontStandardAboutPanel(options: [
-            NSApplication.AboutPanelOptionKey.applicationName: "Notch Limits"
+            NSApplication.AboutPanelOptionKey.applicationName: "Notchlimits"
         ])
     }
 

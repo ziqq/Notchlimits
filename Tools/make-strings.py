@@ -1093,13 +1093,13 @@ _INSTALL = {
                 "沒有權限在此替換應用程式。"),
 }
 _ABOUT = {
-    "en": "About Notch Limits",          "ru": "О программе Notch Limits",
-    "de": "Über Notch Limits",           "fr": "À propos de Notch Limits",
-    "es": "Acerca de Notch Limits",      "it": "Informazioni su Notch Limits",
-    "pt-BR": "Sobre o Notch Limits",     "uk": "Про Notch Limits",
-    "pl": "O programie Notch Limits",    "tr": "Notch Limits hakkında",
-    "ja": "Notch Limits について",        "ko": "Notch Limits 정보",
-    "zh-Hans": "关于 Notch Limits",       "zh-Hant": "關於 Notch Limits",
+    "en": "About Notchlimits",           "ru": "О программе Notchlimits",
+    "de": "Über Notchlimits",            "fr": "À propos de Notchlimits",
+    "es": "Acerca de Notchlimits",       "it": "Informazioni su Notchlimits",
+    "pt-BR": "Sobre o Notchlimits",      "uk": "Про Notchlimits",
+    "pl": "O programie Notchlimits",     "tr": "Notchlimits hakkında",
+    "ja": "Notchlimits について",         "ko": "Notchlimits 정보",
+    "zh-Hans": "关于 Notchlimits",        "zh-Hant": "關於 Notchlimits",
 }
 for _lang, _about in _ABOUT.items():
     T[_lang]["menu.about"] = _about
@@ -1515,7 +1515,7 @@ def main():
     for language, table in sorted(T.items()):
         directory = os.path.join("Resources", language + ".lproj")
         os.makedirs(directory, exist_ok=True)
-        lines = ["/* NotchLimits — %s. Собрано Tools/make-strings.py */" % language]
+        lines = ["/* Notchlimits — %s. Собрано Tools/make-strings.py */" % language]
         for title, group in ORDER:
             lines.append("")
             lines.append("// " + title)

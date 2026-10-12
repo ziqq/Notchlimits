@@ -1,7 +1,7 @@
 import AppKit
 
 @main
-enum NotchLimitsApp {
+enum NotchlimitsApp {
     /// NSApplication.delegate — weak-ссылка, поэтому держим делегат сами.
     private static var retainedDelegate: AppDelegate?
 
@@ -12,6 +12,7 @@ enum NotchLimitsApp {
         if SelfTest.runIfRequested() { return }
         // До первого чтения настроек: колонки, хоткей и кэш читают UserDefaults сразу.
         DefaultsMigration.runIfNeeded()
+        DesktopApp.migrateSupportDirectory()
 
         let application = NSApplication.shared
         let delegate = AppDelegate()

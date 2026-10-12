@@ -1,4 +1,4 @@
-/* NotchLimits — ko. Собрано Tools/make-strings.py */
+/* Notchlimits — ko. Собрано Tools/make-strings.py */
 
 // Окна лимитов и время
 "reset.days" = "%1$d일 %2$d시간 후 초기화";
@@ -68,7 +68,7 @@
 "menu.hotKey.standard" = "기본값 (⌘P)";
 "menu.hotKey.disable" = "끄기";
 "menu.loginItem" = "로그인 시 실행";
-"menu.about" = "Notch Limits 정보";
+"menu.about" = "Notchlimits 정보";
 "menu.quit" = "종료";
 
 // Удаление аккаунта

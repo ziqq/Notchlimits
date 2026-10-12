@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import Security
 
-/// Проверка провайдеров без GUI: `NOTCHLIMITS_PROBE=1 ./NotchLimits`.
+/// Проверка провайдеров без GUI: `NOTCHLIMITS_PROBE=1 ./Notchlimits`.
 /// Печатает то же, что увидит панель. Токены не печатаются никогда.
 enum DebugProbe {
 

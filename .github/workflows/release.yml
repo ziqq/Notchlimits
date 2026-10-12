@@ -48,24 +48,24 @@ jobs:
         run: ./build.sh
 
       - name: Самопроверка
-        run: NOTCHLIMITS_SELFTEST=1 ./build/NotchLimits.app/Contents/MacOS/NotchLimits
+        run: NOTCHLIMITS_SELFTEST=1 ./build/Notchlimits.app/Contents/MacOS/Notchlimits
 
       - name: Версия в бандле совпадает с тегом
         run: |
-          IN_BUNDLE=$(plutil -extract CFBundleShortVersionString raw build/NotchLimits.app/Contents/Info.plist)
+          IN_BUNDLE=$(plutil -extract CFBundleShortVersionString raw build/Notchlimits.app/Contents/Info.plist)
           test "$IN_BUNDLE" = "${{ steps.meta.outputs.version }}"
 
       - name: Упаковка
         id: package
         run: |
-          NAME="NotchLimits-${{ steps.meta.outputs.version }}.zip"
+          NAME="Notchlimits-${{ steps.meta.outputs.version }}.zip"
           # ditto, а не zip: сохраняет подпись бандла и расширенные атрибуты.
-          ditto -c -k --sequesterRsrc --keepParent build/NotchLimits.app "$NAME"
+          ditto -c -k --sequesterRsrc --keepParent build/Notchlimits.app "$NAME"
 
           # DMG — для ручной установки перетаскиванием; .zip остаётся,
           # по нему работает обновление изнутри приложения.
           NOTCHLIMITS_VERSION="${{ steps.meta.outputs.version }}" ./scripts/build_dmg.sh
-          DMG="NotchLimits-${{ steps.meta.outputs.version }}.dmg"
+          DMG="Notchlimits-${{ steps.meta.outputs.version }}.dmg"
           mv "build/${DMG}" "$DMG"
 
           shasum -a 256 "$DMG" "$NAME" > SHA256SUMS.txt
@@ -91,7 +91,7 @@ jobs:
 
           # paste -sd ', ' на macOS чередует разделители по кругу,
           # поэтому склеиваем одним символом и разводим уже потом.
-          LOCALES=$(find build/NotchLimits.app/Contents/Resources -maxdepth 1 -name '*.lproj' \
+          LOCALES=$(find build/Notchlimits.app/Contents/Resources -maxdepth 1 -name '*.lproj' \
             -exec basename {} .lproj \; | sort | paste -sd ',' - | sed 's/,/, /g')
 
           {
@@ -99,12 +99,12 @@ jobs:
             echo
             echo "## Install"
             echo
-            echo "Open **${{ steps.package.outputs.dmg }}** and drag Notch Limits to Applications,"
+            echo "Open **${{ steps.package.outputs.dmg }}** and drag Notchlimits to Applications,"
             echo "then clear the quarantine flag and launch it:"
             echo
             echo '```bash'
-            echo "xattr -dr com.apple.quarantine /Applications/NotchLimits.app"
-            echo "open /Applications/NotchLimits.app"
+            echo "xattr -dr com.apple.quarantine /Applications/Notchlimits.app"
+            echo "open /Applications/Notchlimits.app"
             echo '```'
             echo
             echo "Clearing the quarantine flag is required: the build is signed ad-hoc, without an"
@@ -114,9 +114,9 @@ jobs:
             echo
             echo '```bash'
             echo "unzip ${{ steps.package.outputs.name }}"
-            echo "mv NotchLimits.app /Applications/"
-            echo "xattr -dr com.apple.quarantine /Applications/NotchLimits.app"
-            echo "open /Applications/NotchLimits.app"
+            echo "mv Notchlimits.app /Applications/"
+            echo "xattr -dr com.apple.quarantine /Applications/Notchlimits.app"
+            echo "open /Applications/Notchlimits.app"
             echo '```'
             echo
             echo "The in-app updater (\"Check for Updates\") uses the .zip."
@@ -172,7 +172,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.meta.outputs.tag }}" -m "Notch Limits ${{ steps.meta.outputs.version }}"
+          git tag -a "${{ steps.meta.outputs.tag }}" -m "Notchlimits ${{ steps.meta.outputs.version }}"
           git push origin "${{ steps.meta.outputs.tag }}"
 
       - name: Публикация
@@ -183,7 +183,7 @@ jobs:
             "${{ steps.package.outputs.dmg }}" \
             "${{ steps.package.outputs.name }}" \
             SHA256SUMS.txt \
-            --title "Notch Limits ${{ steps.meta.outputs.version }}" \
+            --title "Notchlimits ${{ steps.meta.outputs.version }}" \
             --notes-file NOTES.md
 
   complete-issues:

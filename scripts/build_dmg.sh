@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Упаковка build/NotchLimits.app в DMG: приложение + ярлык на /Applications,
+# Упаковка build/Notchlimits.app в DMG: приложение + ярлык на /Applications,
 # чтобы установка была «перетащи в папку».
 #
 #   ./scripts/build_dmg.sh              # соберёт .app, если его ещё нет
@@ -11,8 +11,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP_NAME="NotchLimits"
-VOLUME_NAME="Notch Limits"
+APP_NAME="Notchlimits"
+VOLUME_NAME="Notchlimits"
 APP="build/${APP_NAME}.app"
 VERSION="${NOTCHLIMITS_VERSION:-$(cat VERSION 2>/dev/null || echo 0.0.0)}"
 
