@@ -2,6 +2,9 @@
 
 
 ## Unreleased
+
+
+## 1.3.0 - 12/10/2026
 - **CHANGED**: The app is now called Notchlimits everywhere, matching the GitHub repository: `Notchlimits.app`, the
   executable, the About panel, the DMG and release assets. The `~/Library/Application Support/NotchLimits` folder is
   renamed on first launch, and the in-app updater installs the new bundle as `Notchlimits.app`.
