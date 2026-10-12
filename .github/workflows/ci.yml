@@ -53,15 +53,15 @@ jobs:
       # Оффлайн-проверки: парсеры, JWT, форматирование, полнота всех локализаций
       # и совпадение спецификаторов формата с английским.
       - name: Самопроверка
-        run: NOTCHLIMITS_SELFTEST=1 ./build/NotchLimits.app/Contents/MacOS/NotchLimits
+        run: NOTCHLIMITS_SELFTEST=1 ./build/Notchlimits.app/Contents/MacOS/Notchlimits
 
       - name: Бандл собран правильно
         run: |
-          APP=build/NotchLimits.app
+          APP=build/Notchlimits.app
           plutil -lint "$APP/Contents/Info.plist"
           codesign --verify --deep --strict "$APP"
           test "$(plutil -extract LSUIElement raw "$APP/Contents/Info.plist")" = "true"
-          test "$(plutil -extract CFBundleDisplayName raw "$APP/Contents/Info.plist")" = "Notch Limits"
+          test "$(plutil -extract CFBundleDisplayName raw "$APP/Contents/Info.plist")" = "Notchlimits"
           test -f "$APP/Contents/Resources/AppIcon.icns"
           LOCALES=$(find "$APP/Contents/Resources" -maxdepth 1 -name '*.lproj' | wc -l | tr -d ' ')
           echo "локализаций в бандле: $LOCALES"
@@ -70,8 +70,8 @@ jobs:
       - name: Артефакт сборки
         uses: actions/upload-artifact@v4
         with:
-          name: NotchLimits-${{ github.sha }}
-          path: build/NotchLimits.app
+          name: Notchlimits-${{ github.sha }}
+          path: build/Notchlimits.app
           if-no-files-found: error
           retention-days: 14
 

@@ -1,4 +1,4 @@
-/* NotchLimits — pl. Собрано Tools/make-strings.py */
+/* Notchlimits — pl. Собрано Tools/make-strings.py */
 
 // Окна лимитов и время
 "reset.days" = "Reset za %1$d d %2$d godz.";
@@ -68,7 +68,7 @@
 "menu.hotKey.standard" = "Domyślny (⌘P)";
 "menu.hotKey.disable" = "Wyłącz";
 "menu.loginItem" = "Uruchamiaj przy logowaniu";
-"menu.about" = "O programie Notch Limits";
+"menu.about" = "O programie Notchlimits";
 "menu.quit" = "Zakończ";
 
 // Удаление аккаунта

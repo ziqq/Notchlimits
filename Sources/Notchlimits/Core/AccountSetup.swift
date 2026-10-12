@@ -30,7 +30,7 @@ enum AccountSetup {
         if name.isEmpty {
             let script = """
             #!/bin/zsh
-            # NotchLimits: Claude Code main account.
+            # Notchlimits: Claude Code main account.
             unset ANTHROPIC_API_KEY
             unset CLAUDE_CONFIG_DIR
             echo "\(L.t("setup.script.profile", target.mainLabel))"
@@ -44,7 +44,7 @@ enum AccountSetup {
         let directory = ProfileDirectories.claudeRoot.appendingPathComponent(name)
         let script = """
         #!/bin/zsh
-        # NotchLimits: Claude Code profile "\(name)".
+        # Notchlimits: Claude Code profile "\(name)".
         unset ANTHROPIC_API_KEY
         export CLAUDE_CONFIG_DIR="\(directory.path)"
         echo "\(L.t("setup.script.profile", directory.path))"
@@ -70,7 +70,7 @@ enum AccountSetup {
             try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
             let script = """
             #!/bin/zsh
-            # NotchLimits: Codex main account.
+            # Notchlimits: Codex main account.
             export CODEX_HOME="\(home.path)"
             echo "\(L.t("setup.script.profile", target.mainLabel))"
             echo "\(L.t("setup.script.hint"))"
@@ -83,7 +83,7 @@ enum AccountSetup {
         let directory = ProfileDirectories.codexRoot.appendingPathComponent(name)
         let script = """
         #!/bin/zsh
-        # NotchLimits: Codex profile "\(name)".
+        # Notchlimits: Codex profile "\(name)".
         export CODEX_HOME="\(directory.path)"
         echo "\(L.t("setup.script.profile", directory.path))"
         echo "\(L.t("setup.script.hint"))"
@@ -146,7 +146,7 @@ enum AccountSetup {
             ?? "unset CLAUDE_CONFIG_DIR"
         return """
         #!/bin/zsh
-        # NotchLimits: Claude Code re-auth "\(profileName)" (\(service)).
+        # Notchlimits: Claude Code re-auth "\(profileName)" (\(service)).
         unset ANTHROPIC_API_KEY
         unset CLAUDE_CODE_OAUTH_TOKEN
         \(config)
@@ -163,7 +163,7 @@ enum AccountSetup {
     nonisolated static func codexReloginScript(binary: URL, profileName: String, home: URL) -> String {
         """
         #!/bin/zsh
-        # NotchLimits: Codex re-auth "\(profileName)".
+        # Notchlimits: Codex re-auth "\(profileName)".
         export CODEX_HOME="\(home.path)"
         echo "\(shellEscaped(L.t("setup.script.profile", home.path)))"
         echo "\(shellEscaped(L.t("setup.script.hint")))"

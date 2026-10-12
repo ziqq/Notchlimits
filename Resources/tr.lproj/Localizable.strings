@@ -1,4 +1,4 @@
-/* NotchLimits — tr. Собрано Tools/make-strings.py */
+/* Notchlimits — tr. Собрано Tools/make-strings.py */
 
 // Окна лимитов и время
 "reset.days" = "%1$d g %2$d sa sonra sıfırlanır";
@@ -68,7 +68,7 @@
 "menu.hotKey.standard" = "Varsayılan (⌘P)";
 "menu.hotKey.disable" = "Kapat";
 "menu.loginItem" = "Girişte başlat";
-"menu.about" = "Notch Limits hakkında";
+"menu.about" = "Notchlimits hakkında";
 "menu.quit" = "Çık";
 
 // Удаление аккаунта
