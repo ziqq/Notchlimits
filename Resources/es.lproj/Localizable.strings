@@ -69,7 +69,9 @@
 "menu.hotKey.disable" = "Desactivar";
 "menu.loginItem" = "Abrir al iniciar sesión";
 "menu.about" = "Acerca de Notchlimits";
-"menu.quit" = "Salir";
+"menu.quit" = "Salir de Notchlimits";
+"menu.telemetry" = "Mostrar telemetría";
+"menu.settings" = "Ajustes";
 
 // Удаление аккаунта
 "remove.title" = "¿Eliminar %@?";
@@ -110,6 +112,8 @@
 "common.ok" = "OK";
 "common.cancel" = "Cancelar";
 "common.save" = "Guardar";
+"common.on" = "Activado";
+"common.off" = "Desactivado";
 
 // Добавление аккаунта
 "setup.claude.title" = "Nueva cuenta de Claude";
@@ -160,8 +164,8 @@
 "error.unreachable" = "red no disponible";
 
 // Переключение приложений
-"appswitch.title" = "Cuenta de la app Claude";
-"appswitch.title.codex" = "Cuenta de la app Codex";
+"appswitch.title" = "Cuenta de Claude";
+"appswitch.title.codex" = "Cuenta de Codex";
 "appswitch.confirm.title" = "¿Cambiar la cuenta de la app?";
 "appswitch.confirm.body" = "%@ se cerrará y volverá a abrir como «%@». La sesión/chat actual se cerrará.";
 "appswitch.confirm.do" = "Cambiar y reiniciar";

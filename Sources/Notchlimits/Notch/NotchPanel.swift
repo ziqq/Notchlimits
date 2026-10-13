@@ -31,7 +31,7 @@ final class NotchPanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
     }
 
-    override var canBecomeKey: Bool { false }
+    override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
@@ -57,7 +57,7 @@ final class NotchHostingView<Content: View>: NSHostingView<Content> {
         onRightClick?(event)
     }
 
-    /// Панель никогда не становится ключевой, а приложение — фоновое. Без этого
+    /// Панель открывается без активации приложения. Без этого
     /// первый клик по неактивному окну уходит на «активацию», и кнопки
     /// (обновление, чип re-auth) его не получают.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }

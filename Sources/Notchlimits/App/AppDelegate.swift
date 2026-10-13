@@ -8,6 +8,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: PanelController!
     private var hotKeys: HotKeyManager!
 
+    private enum Setting: Int {
+        case telemetry, keepAwake, keepDisplayOn, loginItem
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
@@ -69,9 +73,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        addKeepAwakeItems(to: menu)
+        menu.addItem(item(L.t("menu.about"), #selector(showAbout)))
         menu.addItem(.separator())
         menu.addItem(item(L.t("menu.refresh"), #selector(refresh)))
+        menu.addItem(settingsSubmenu())
+        menu.addItem(item(L.t("menu.checkUpdates"), #selector(checkForUpdates)))
         menu.addItem(.separator())
 
         let hideItem = NSMenuItem(title: L.t("menu.hideColumn"), action: nil, keyEquivalent: "")
@@ -90,7 +96,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         hideItem.submenu = hideSubmenu
         hideItem.isEnabled = !visible.isEmpty
-        menu.addItem(hideItem)
 
         let renameItem = NSMenuItem(title: L.t("menu.renameColumn"), action: nil, keyEquivalent: "")
         let renameSubmenu = NSMenu()
@@ -107,11 +112,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         renameItem.submenu = renameSubmenu
         renameItem.isEnabled = !visible.isEmpty
-        menu.addItem(renameItem)
 
         let showAll = item(L.t("menu.showHidden"), #selector(showAllColumns))
         showAll.isEnabled = store.hasHiddenColumns
-        menu.addItem(showAll)
 
         // Удаление доступно и для скрытых колонок, поэтому список — по всем.
         // Плюс незавершённые профили (папка есть, входа нет) — их колонки нет,
@@ -141,7 +144,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         removeItem.submenu = removeSubmenu
         removeItem.isEnabled = !allColumns.isEmpty || !orphans.isEmpty
-        menu.addItem(removeItem)
 
         // Аккаунты по провайдерам: список — это колонки, плюс «Добавить…» внизу
         // того же подменю. Переключение закрывает и открывает приложение.
@@ -153,6 +155,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                        title: L.t("appswitch.title.codex"),
                                        addTitle: L.t("menu.addCodex"),
                                        addSelector: #selector(addCodex)))
+        menu.addItem(removeItem)
+        menu.addItem(.separator())
+        menu.addItem(hideItem)
+        menu.addItem(renameItem)
+        menu.addItem(showAll)
+        menu.addItem(.separator())
+        menu.addItem(item(L.t("menu.quit"), #selector(quit)))
+
+        NSMenu.popUpContextMenu(menu, with: event, for: view)
+    }
+
+    private func settingsSubmenu() -> NSMenuItem {
+        let root = NSMenuItem(title: L.t("menu.settings"), action: nil, keyEquivalent: "")
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.addItem(settingItem(L.t("menu.telemetry"), .telemetry,
+                          state: PowerMonitor.shared.isEnabled ? .on : .off))
+        addKeepAwakeItems(to: menu)
+        menu.addItem(settingItem(L.t("menu.loginItem"), .loginItem,
+                          state: LoginItem.isEnabled ? .on : .off))
         menu.addItem(.separator())
 
         let hotKeyItem = NSMenuItem(title: L.t("menu.hotKey", hotKeys.displayName),
@@ -167,22 +189,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                    state: hotKeys.config == nil ? .on : .off))
         hotKeyItem.submenu = hotKeySubmenu
         menu.addItem(hotKeyItem)
-
-        menu.addItem(item(L.t("menu.loginItem"), #selector(toggleLoginItem),
-                          state: LoginItem.isEnabled ? .on : .off))
-        menu.addItem(item(L.t("menu.checkUpdates"), #selector(checkForUpdates)))
-        menu.addItem(item(L.t("menu.about"), #selector(showAbout)))
-        menu.addItem(.separator())
-        menu.addItem(item(L.t("menu.quit"), #selector(quit)))
-
-        NSMenu.popUpContextMenu(menu, with: event, for: view)
+        root.submenu = menu
+        return root
     }
 
     private func addKeepAwakeItems(to menu: NSMenu) {
-        menu.addItem(item(L.t("keepAwake.sleep"), #selector(toggleKeepAwake),
+        menu.addItem(settingItem(L.t("keepAwake.sleep"), .keepAwake,
                           state: KeepAwake.shared.isActive ? .on : .off))
-        menu.addItem(item(L.t("keepAwake.display"), #selector(toggleKeepDisplayOn),
+        menu.addItem(settingItem(L.t("keepAwake.display"), .keepDisplayOn,
                           state: KeepAwake.shared.keepDisplayOn ? .on : .off))
+    }
+
+    private func settingItem(_ title: String, _ setting: Setting,
+                             state: NSControl.StateValue) -> NSMenuItem {
+        let entry = item(title, #selector(toggleSetting(_:)), state: state)
+        entry.tag = setting.rawValue
+        entry.view = MenuToggleView(item: entry)
+        return entry
     }
 
     private func item(_ title: String,
@@ -218,6 +241,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Действия
+
+    @objc private func toggleSetting(_ sender: NSMenuItem) {
+        let enabled: Bool
+        switch Setting(rawValue: sender.tag) {
+        case .telemetry:
+            toggleTelemetry()
+            enabled = PowerMonitor.shared.isEnabled
+        case .keepAwake:
+            toggleKeepAwake()
+            enabled = KeepAwake.shared.isActive
+        case .keepDisplayOn:
+            toggleKeepDisplayOn()
+            enabled = KeepAwake.shared.keepDisplayOn
+        case .loginItem:
+            toggleLoginItem()
+            enabled = LoginItem.isEnabled
+        case nil:
+            return
+        }
+        sender.state = enabled ? .on : .off
+        (sender.view as? MenuToggleView)?.state = sender.state
+    }
 
     @objc private func refresh() {
         store.rediscover(force: true)
@@ -352,6 +397,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleKeepDisplayOn() {
         KeepAwake.shared.toggleDisplay()
+    }
+
+    @objc private func toggleTelemetry() {
+        panel.state.chipHint = nil
+        PowerMonitor.shared.setEnabled(!PowerMonitor.shared.isEnabled)
     }
 
     @objc private func toggleLoginItem() {

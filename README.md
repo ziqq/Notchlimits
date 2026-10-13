@@ -17,7 +17,11 @@ A panel that slides out of the MacBook notch with **Claude Code** and **Codex** 
 - **Keep Awake** (context menu): keep the Mac from sleeping and keep the display on — two independent modes on standard
   IOKit power assertions, no admin password. Their state shows as chips in the panel footer.
 - **Power and port indicators** in the panel footer: charge and battery temperature, charging port (MagSafe / USB-C)
-  with input watts, USB-C ports in use. Hover a chip for the charger contract, port protocols, battery health. Read from IORegistry while the panel is open; hidden without a battery.
+  with input watts, USB-C ports in use. Hover a chip for the charger contract, port protocols, battery health. Read from
+  IORegistry while the panel is open; the battery chip is hidden without a battery. Right-click → **Settings** → **Show telemetry**
+  hides these indicators and stops polling them. The choice survives restarts; telemetry is on by default.
+  Click an indicator for details, or open the panel with the hotkey and reach it with **Tab**. On narrow panels,
+  the indicators occupy a separate row so the update caption stays intact.
 - Notifications when any window crosses 80 % and 95 %, and when a heavily-used window resets and frees up.
 - A burn-rate forecast: if the current pace would hit 100 % before the window resets, the row shows when.
 - One-click self-update from GitHub releases: **Check for updates** downloads the new build, verifies its SHA-256, swaps the bundle and relaunches — no browser needed (opening the release page stays as a fallback).
@@ -67,7 +71,7 @@ On a notch-less screen the panel sits top-center; collapsed, it's a small pill w
 
 ![Collapsed panel](docs/collapsed.png)
 
-The context menu covers: **Refresh** (force-poll, bypassing timers and backoff), **Add Claude / Codex account…**, **Hide** / **Rename column** submenus, **Show hidden columns**, **Remove account** (with a confirmation — deletes the account's login and profile), **Active Codex / Claude account →** (save the current one, then switch which account the plain `codex`/`claude` command uses), **Hotkey** submenu, **Launch at login** (`SMAppService`), **Check for updates…** (offers **Update now** — a SHA-256-verified in-place update — or opens the release page), **About Notchlimits** (native panel with the running version), and **Quit**.
+The context menu is separated into groups: **About Notchlimits** (native panel with the running version); **Refresh** (force-poll, bypassing timers and backoff), **Settings**, **Check for updates…** (a SHA-256-verified in-place update or the release page); **Claude account**, **Codex account** (switch the app's account or **Add account…**), **Remove account** (with a confirmation — deletes the account's login and profile); **Hide column**, **Rename column**, **Show hidden columns**; **Quit Notchlimits**. **Settings** contains **Show telemetry**, **Keep Mac awake**, **Keep display on**, **Launch at login** (`SMAppService`), and **Hotkey**.
 
 ## Column names
 
@@ -75,7 +79,7 @@ The primary profile of both providers is labeled `main`, so headers don't diverg
 
 ## Hotkey
 
-Default is **⌘P**. Being a global hotkey, it overrides "Print" elsewhere while Notchlimits runs — so it's configurable via right-click → **Hotkey**:
+Default is **⌘P**. Being a global hotkey, it overrides "Print" elsewhere while Notchlimits runs — so it's configurable via right-click → **Settings** → **Hotkey**:
 
 - **Change…** captures the next keypress. At least one of ⌘, ⌥, ⌃ is required, or a global hotkey would swallow ordinary input.
 - **Default (⌘P)** / **Disable** (leaves only hover and click).

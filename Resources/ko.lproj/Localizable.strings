@@ -69,7 +69,9 @@
 "menu.hotKey.disable" = "끄기";
 "menu.loginItem" = "로그인 시 실행";
 "menu.about" = "Notchlimits 정보";
-"menu.quit" = "종료";
+"menu.quit" = "Notchlimits 종료";
+"menu.telemetry" = "텔레메트리 표시";
+"menu.settings" = "설정";
 
 // Удаление аккаунта
 "remove.title" = "%@ 삭제할까요?";
@@ -110,6 +112,8 @@
 "common.ok" = "확인";
 "common.cancel" = "취소";
 "common.save" = "저장";
+"common.on" = "켜짐";
+"common.off" = "꺼짐";
 
 // Добавление аккаунта
 "setup.claude.title" = "새 Claude 계정";
@@ -160,8 +164,8 @@
 "error.unreachable" = "네트워크 사용 불가";
 
 // Переключение приложений
-"appswitch.title" = "Claude 앱 계정";
-"appswitch.title.codex" = "Codex 앱 계정";
+"appswitch.title" = "Claude 계정";
+"appswitch.title.codex" = "Codex 계정";
 "appswitch.confirm.title" = "앱 계정을 전환할까요?";
 "appswitch.confirm.body" = "%@가 종료되고 “%@”로 다시 열립니다. 현재 세션/채팅이 닫힙니다.";
 "appswitch.confirm.do" = "전환 후 재시작";
