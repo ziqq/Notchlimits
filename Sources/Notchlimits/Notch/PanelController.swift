@@ -21,6 +21,7 @@ final class PanelController {
 
     private var closeWork: DispatchWorkItem?
     private var shrinkWork: DispatchWorkItem?
+    private var isHeldOpen = false
 
     /// Задержки из спецификации анимации.
     private enum Timing {
@@ -153,6 +154,7 @@ final class PanelController {
         guard state.expanded else { return }
 
         setPinned(false)
+        if panel.isKeyWindow { panel.resignKey() }
         withAnimation(Timing.closeCurve) { state.expanded = false }
 
         let work = DispatchWorkItem { [weak self] in
@@ -171,6 +173,7 @@ final class PanelController {
         } else {
             open()
             setPinned(true)
+            panel.makeKeyAndOrderFront(nil)
         }
     }
 
@@ -201,6 +204,7 @@ final class PanelController {
 
     /// Удержание панели раскрытой на время модального взаимодействия (меню, алерт).
     func holdOpen(_ hold: Bool) {
+        isHeldOpen = hold
         if hold {
             open()
             state.pinned = true
@@ -250,6 +254,7 @@ final class PanelController {
     }
 
     private func handleGlobal(_ event: NSEvent) {
+        guard !isHeldOpen else { return }
         switch event.type {
         case .mouseMoved:
             evaluateHover()
@@ -265,6 +270,7 @@ final class PanelController {
     }
 
     private func handleLocal(_ event: NSEvent) {
+        guard !isHeldOpen else { return }
         switch event.type {
         case .mouseMoved:
             evaluateHover()
