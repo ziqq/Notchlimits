@@ -90,8 +90,7 @@ jobs:
           # ditto, а не zip: сохраняет подпись бандла и расширенные атрибуты.
           ditto -c -k --sequesterRsrc --keepParent build/Notchlimits.app "$NAME"
 
-          # DMG — для ручной установки перетаскиванием; .zip остаётся,
-          # по нему работает обновление изнутри приложения.
+          # Sparkle обновляется через DMG; ZIP нужен старому установщику.
           NOTCHLIMITS_VERSION="${{ steps.meta.outputs.version }}" ./scripts/build_dmg.sh
           DMG="Notchlimits-${{ steps.meta.outputs.version }}.dmg"
           mkdir -p build/sparkle
@@ -119,6 +118,7 @@ jobs:
             --download-url-prefix "https://github.com/ziqq/Notchlimits/releases/download/$TAG/" \
             build/sparkle
           test -s build/sparkle/appcast.xml
+          printf '%s' "$SPARKLE_PRIVATE_KEY" | python3 scripts/verify_update.py build/sparkle/appcast.xml
 
       - name: Заметки к релизу
         id: notes

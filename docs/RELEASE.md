@@ -26,6 +26,8 @@ through standard input in CI rather than command-line arguments.
 The workflow imports the Apple certificate into a temporary runner keychain,
 signs the embedded code and app, verifies the pinned certificate, and cleans up
 the keychain. Sparkle's pinned package tools sign the DMG and `appcast.xml`.
+Before publication, the workflow verifies both signatures and checks that
+same-size modified copies of the feed and DMG are rejected.
 `CFBundleVersion` uses the workflow run number to order releases.
 
 Release assets include the DMG, signed appcast, ZIP and `SHA256SUMS.txt`. Sparkle
