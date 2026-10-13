@@ -137,13 +137,15 @@ struct PowerSnapshot: Equatable {
     }
 }
 
-/// Опрос `AppleSmartBattery`, пока панель раскрыта: свёрнутой панели цифры
-/// не нужны, и будить IORegistry впустую незачем.
+/// Опрос питания и портов, пока панель раскрыта и телеметрия включена.
 @MainActor
 final class PowerMonitor: ObservableObject {
     static let shared = PowerMonitor()
 
     static let interval: TimeInterval = 5
+    private static let enabledKey = "telemetry.enabled"
+
+    @Published private(set) var isEnabled: Bool
 
     /// `nil` — аккумулятора нет (или ещё не читали): блок питания скрыт.
     @Published private(set) var snapshot: PowerSnapshot?
@@ -151,11 +153,32 @@ final class PowerMonitor: ObservableObject {
     @Published private(set) var ports: PortsSnapshot?
 
     private var timer: Timer?
+    private var isActive = false
 
-    private init() {}
+    private init() {
+        let defaults = UserDefaults.standard
+        isEnabled = defaults.object(forKey: Self.enabledKey) == nil
+            ? true : defaults.bool(forKey: Self.enabledKey)
+    }
+
+    func setEnabled(_ enabled: Bool) {
+        guard enabled != isEnabled else { return }
+        isEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: Self.enabledKey)
+        updatePolling()
+        if !enabled {
+            snapshot = nil
+            ports = nil
+        }
+    }
 
     func setActive(_ active: Bool) {
-        if active {
+        isActive = active
+        updatePolling()
+    }
+
+    private func updatePolling() {
+        if isActive && isEnabled {
             guard timer == nil else { return }
             refresh()
             let timer = Timer(timeInterval: Self.interval, repeats: true) { [weak self] _ in
@@ -171,6 +194,7 @@ final class PowerMonitor: ObservableObject {
     }
 
     func refresh() {
+        guard isActive && isEnabled else { return }
         let fresh = PowerSnapshot.readCurrent()
         if fresh != snapshot { snapshot = fresh }
         let freshPorts = PortsSnapshot.readCurrent()

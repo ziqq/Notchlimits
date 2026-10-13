@@ -87,7 +87,6 @@ struct ColumnView: View {
                 PlaceholderView(status: column.status, onRelogin: onRelogin)
             }
 
-            Spacer(minLength: 0)
         }
     }
 
