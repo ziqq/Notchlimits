@@ -24,7 +24,7 @@ A panel that slides out of the MacBook notch with **Claude Code** and **Codex** 
   the indicators occupy a separate row so the update caption stays intact.
 - Notifications when any window crosses 80 % and 95 %, and when a heavily-used window resets and frees up.
 - A burn-rate forecast: if the current pace would hit 100 % before the window resets, the row shows when.
-- One-click self-update from GitHub releases: **Check for updates** downloads the new build, verifies its SHA-256, swaps the bundle and relaunches — no browser needed (opening the release page stays as a fallback).
+- Updates through Sparkle: **Check for updates** fetches a signed appcast from GitHub, verifies the update archive with Ed25519, installs it and relaunches. Checks remain manual.
 - Survives restarts: last percentages are cached and shown with an age note.
 - One account's error or rate limit never touches the other columns.
 - UI in 14 languages, picked from the system language.
@@ -71,7 +71,7 @@ On a notch-less screen the panel sits top-center; collapsed, it's a small pill w
 
 ![Collapsed panel](docs/collapsed.png)
 
-The context menu is separated into groups: **About Notchlimits** (native panel with the running version); **Refresh** (force-poll, bypassing timers and backoff), **Settings**, **Check for updates…** (a SHA-256-verified in-place update or the release page); **Claude account**, **Codex account** (switch the app's account or **Add account…**), **Remove account** (with a confirmation — deletes the account's login and profile); **Hide column**, **Rename column**, **Show hidden columns**; **Quit Notchlimits**. **Settings** contains **Show telemetry**, **Keep Mac awake**, **Keep display on**, **Launch at login** (`SMAppService`), and **Hotkey**.
+The context menu is separated into groups: **About Notchlimits** (native panel with the running version); **Refresh** (force-poll, bypassing timers and backoff), **Settings**, **Check for updates…** (signed updates through Sparkle); **Claude account**, **Codex account** (switch the app's account or **Add account…**), **Remove account** (with a confirmation — deletes the account's login and profile); **Hide column**, **Rename column**, **Show hidden columns**; **Quit Notchlimits**. **Settings** contains **Show telemetry**, **Keep Mac awake**, **Keep display on**, **Launch at login** (`SMAppService`), and **Hotkey**.
 
 ## Column names
 
@@ -199,13 +199,13 @@ User-Agent: codex_cli_rs/<version>
 ## Permissions
 
 - **Keychain.** On the first Claude refresh macOS asks for access to `Claude Code-credentials` — click **Always Allow**. The token is cached in memory until `expiresAt` or a 401, so Keychain isn't hit each cycle.
-- **Signing.** With an "Apple Development" certificate, `build.sh` signs with it and the Keychain grant survives rebuilds. Without one, signing is ad-hoc — the code hash changes each build, so **Keychain re-asks after every rebuild**. The script warns about this.
+- **Signing.** Release builds use the pinned Apple Development certificate for `a.a.ustinoff@gmail.com`. `build.sh` selects that identity, including for Sparkle helpers. Local builds without it use ad-hoc signing. Moving from ad-hoc or another identity may require a fresh Keychain grant; subsequent releases keep the same certificate requirement.
 - **Notifications.** Requested on first launch.
 - **No Accessibility needed** — the hotkey uses Carbon `RegisterEventHotKey`, and login runs via a `.command` file, not AppleScript.
 
 ## Privacy
 
-The app makes no automatic request beyond the two usage endpoints above and Anthropic's OAuth token endpoint when a Claude access token has expired (see [Token refresh](#token-refresh)). The only other requests are **manual**: **Check for updates** hits GitHub's releases API (`api.github.com`) on click — never on its own — and, if you choose **Update now**, downloads that release's `.zip` and `SHA256SUMS.txt` from GitHub, installing only if the checksum matches. Because CI releases are ad-hoc signed, an in-app update changes the code identity, so macOS asks once more to allow Keychain access after it (a one-time **Always Allow**); a Developer ID signature in CI would remove even that. Tokens are never logged and never written to a plain file; the only thing written back is the refreshed Claude token, into the same Keychain entry the CLI already owns. The `claude` binary is never run (running it makes the CLI read its credentials via `/usr/bin/security`, popping a Keychain prompt) — its version for the User-Agent comes from the install path, and the account email from the CLI's `~/.claude.json`. Only `codex --version` is executed, and Codex keeps its auth in a file, not the Keychain. Only settings and last percentages (with reset times) go to `UserDefaults`, without a single token. `URLSession` runs ephemeral, no cookies, no disk cache.
+The app makes no automatic request beyond the usage endpoints and token renewal described above. Update checks are manual: Sparkle fetches the signed `appcast.xml` from GitHub on click, and downloads the update archive only after you choose **Install Update**. Automatic checks and system profiling are disabled by default. Archive signatures are verified before extraction. Tokens are never logged and never written to a plain file; the only thing written back is the refreshed Claude token, into the same Keychain entry the CLI already owns. The `claude` binary is never run (running it makes the CLI read its credentials via `/usr/bin/security`, popping a Keychain prompt) — its version for the User-Agent comes from the install path, and the account email from the CLI's `~/.claude.json`. Only `codex --version` is executed, and Codex keeps its auth in a file, not the Keychain. Only settings and last percentages (with reset times) go to `UserDefaults`, without a single token. Usage requests use an ephemeral `URLSession`, with no cookies or disk cache.
 
 ## CI & releases
 
@@ -213,7 +213,7 @@ The app makes no automatic request beyond the two usage endpoints above and Anth
 
 The self-test (`NOTCHLIMITS_SELFTEST=1`) needs no network, Keychain, or window server, and covers Claude/Codex parsing (garbage, `null` windows, unknown keys), window order and titles, JWT claims, time/age/percent formatting, cache and hotkey serialization, and localization completeness — matching key sets, no empty values, and **format specifiers matching English**, or `String(format:)` would crash in another language.
 
-[`.github/workflows/release.yml`](.github/workflows/release.yml) runs on a `v*` tag or manually with a version: builds, self-tests, checks the `Info.plist` version against the tag, packs with `ditto` (plain `zip` breaks the signature), computes SHA-256, also builds a DMG with `scripts/build_dmg.sh`, and publishes a release with the `.dmg` (manual install), the `.zip` (used by the in-app updater), and `SHA256SUMS.txt` covering both. Release notes are generated: the version's `CHANGELOG.md` section, install steps (DMG first, then the zip, including the mandatory quarantine removal for ad-hoc builds), commits since the last tag, a spec table, and the checksum.
+[`.github/workflows/release.yml`](.github/workflows/release.yml) runs on a `v*` tag or manually with a version. It imports the pinned Apple Development certificate into a temporary keychain, builds and self-tests, packages a DMG and ZIP, signs the DMG and appcast with Sparkle, and publishes them with `SHA256SUMS.txt`. Sparkle uses the DMG; the ZIP remains for migration from the previous updater. `CFBundleVersion` uses the workflow run number. See [release signing](docs/RELEASE.md) for the required secrets and key handling.
 
 Version comes from `NOTCHLIMITS_VERSION`, else the [`VERSION`](VERSION) file:
 
