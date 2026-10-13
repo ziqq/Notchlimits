@@ -42,9 +42,37 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Релиз ${TAG} (версия ${VERSION})"
 
+      - name: Сертификат a.a.ustinoff
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.APPLE_SIGNING_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          : "${CERTIFICATE_BASE64:?APPLE_SIGNING_CERTIFICATE_BASE64 is required}"
+          : "${CERTIFICATE_PASSWORD:?APPLE_SIGNING_CERTIFICATE_PASSWORD is required}"
+          KEYCHAIN="$RUNNER_TEMP/notchlimits-signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 32)
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+          CERTIFICATE="$RUNNER_TEMP/notchlimits-signing.p12"
+          trap 'rm -f "$CERTIFICATE"' EXIT
+          printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          ISSUER="$RUNNER_TEMP/AppleWWDRCAG3.cer"
+          curl -fsSL https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer -o "$ISSUER"
+          printf '%s  %s\n' dcf21878c77f4198e4b4614f03d696d89c66c66008d4244e1b99161aac91601f "$ISSUER" | shasum -a 256 -c -
+          security import "$ISSUER" -k "$KEYCHAIN"
+          security import "$CERTIFICATE" -P "$CERTIFICATE_PASSWORD" -k "$KEYCHAIN" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
+
       - name: Сборка
         env:
           NOTCHLIMITS_VERSION: ${{ steps.meta.outputs.version }}
+          NOTCHLIMITS_BUILD_NUMBER: ${{ github.run_number }}
+          NOTCHLIMITS_CODE_SIGN_IDENTITY: 2A1CD7C372968E01732ED7B26AC5CBB9F4014D33
         run: ./build.sh
 
       - name: Самопроверка
@@ -62,10 +90,11 @@ jobs:
           # ditto, а не zip: сохраняет подпись бандла и расширенные атрибуты.
           ditto -c -k --sequesterRsrc --keepParent build/Notchlimits.app "$NAME"
 
-          # DMG — для ручной установки перетаскиванием; .zip остаётся,
-          # по нему работает обновление изнутри приложения.
+          # Sparkle обновляется через DMG; ZIP нужен старому установщику.
           NOTCHLIMITS_VERSION="${{ steps.meta.outputs.version }}" ./scripts/build_dmg.sh
           DMG="Notchlimits-${{ steps.meta.outputs.version }}.dmg"
+          mkdir -p build/sparkle
+          cp "build/${DMG}" "build/sparkle/${DMG}"
           mv "build/${DMG}" "$DMG"
 
           shasum -a 256 "$DMG" "$NAME" > SHA256SUMS.txt
@@ -75,6 +104,21 @@ jobs:
           echo "dmg=${DMG}" >> "$GITHUB_OUTPUT"
           echo "dmg_sha=$(shasum -a 256 "$DMG" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "dmg_size=$(du -h "$DMG" | cut -f1 | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+      - name: Подпись обновления и appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          : "${SPARKLE_PRIVATE_KEY:?SPARKLE_PRIVATE_KEY is required}"
+          # Только DMG в appcast; ZIP сохранён для перехода со старого установщика.
+          printf '%s' "$SPARKLE_PRIVATE_KEY" | .build/artifacts/sparkle/Sparkle/bin/generate_appcast \
+            --ed-key-file - \
+            --download-url-prefix "https://github.com/ziqq/Notchlimits/releases/download/$TAG/" \
+            build/sparkle
+          test -s build/sparkle/appcast.xml
+          printf '%s' "$SPARKLE_PRIVATE_KEY" | python3 scripts/verify_update.py build/sparkle/appcast.xml
 
       - name: Заметки к релизу
         id: notes
@@ -107,8 +151,8 @@ jobs:
             echo "open /Applications/Notchlimits.app"
             echo '```'
             echo
-            echo "Clearing the quarantine flag is required: the build is signed ad-hoc, without an"
-            echo "Apple Developer certificate, so Gatekeeper won't let it start otherwise."
+            echo "The build uses a stable Apple Development certificate for a.a.ustinoff."
+            echo "It is not Developer ID notarized; clearing quarantine may still be needed on first install."
             echo
             echo "Without the DMG, from the archive:"
             echo
@@ -119,7 +163,9 @@ jobs:
             echo "open /Applications/Notchlimits.app"
             echo '```'
             echo
-            echo "The in-app updater (\"Check for Updates\") uses the .zip."
+            echo "Check for Updates uses Sparkle, which verifies the signed appcast and update archive,"
+            echo "installs the update and relaunches. Checks remain manual."
+            echo "The .zip remains available for updating from versions with the previous installer."
             echo
             echo "The app runs in the background with no Dock icon. Hover over the notch or"
             echo "press ⌘P to open it; right-click the panel for settings and Quit."
@@ -148,7 +194,8 @@ jobs:
             echo "| DMG size | ${{ steps.package.outputs.dmg_size }} |"
             echo "| Archive size | ${{ steps.package.outputs.size }} |"
             echo "| UI languages | ${LOCALES} |"
-            echo "| Signature | ad-hoc |"
+            echo "| App signature | Apple Development: a.a.ustinoff |"
+            echo "| Update signature | Sparkle Ed25519 |"
             echo
             echo "Self-test (parsers, JWT, formatting, localization completeness)"
             echo "passed on this build."
@@ -182,9 +229,18 @@ jobs:
           gh release create "${{ steps.meta.outputs.tag }}" \
             "${{ steps.package.outputs.dmg }}" \
             "${{ steps.package.outputs.name }}" \
+            build/sparkle/appcast.xml \
             SHA256SUMS.txt \
             --title "Notchlimits ${{ steps.meta.outputs.version }}" \
             --notes-file NOTES.md
+
+      - name: Очистка временной связки ключей
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/notchlimits-signing.p12"
+          if [ -f "$RUNNER_TEMP/notchlimits-signing.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/notchlimits-signing.keychain-db"
+          fi
 
   complete-issues:
     name: Complete issues after successful publication

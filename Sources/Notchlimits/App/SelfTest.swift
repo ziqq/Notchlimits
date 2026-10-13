@@ -1,4 +1,5 @@
 import Foundation
+import Sparkle
 
 /// Самопроверка для CI: `NOTCHLIMITS_SELFTEST=1 Notchlimits`.
 ///
@@ -26,7 +27,7 @@ enum SelfTest {
         checkReloginScripts()
         checkNotifications()
         checkBurnRate()
-        checkUpdateCheck()
+        checkSparkleUpdates()
         checkAccountSwitcher()
         checkFormatting()
         checkPowerParser()
@@ -507,34 +508,24 @@ enum SelfTest {
         expect("старый формат: пик отсутствует → не шумим", legacy.postReset == false)
     }
 
-    private static func checkUpdateCheck() {
-        section("Проверка обновлений")
-        expect("тег без v нормализуется", UpdateCheck.normalize("v1.2.3") == "1.2.3")
-        expect("тег без префикса не трогаем", UpdateCheck.normalize("1.2.3") == "1.2.3")
-        expect("новее по патчу", UpdateCheck.isNewer("1.2.4", than: "1.2.3"))
-        expect("новее по минору численно (10 > 9)", UpdateCheck.isNewer("1.10.0", than: "1.9.9"))
-        expect("равные — не новее", !UpdateCheck.isNewer("1.2.3", than: "1.2.3"))
-        expect("старее — не новее", !UpdateCheck.isNewer("1.2.2", than: "1.2.3"))
-        expect("предрелиз/суффикс не ломает", UpdateCheck.isNewer("1.2.0", than: "1.2.0-beta.1") == false)
+    private static func checkSparkleUpdates() {
+        section("Sparkle: конфигурация обновлений")
+        let info = Bundle.main.infoDictionary ?? [:]
+        expect("appcast берётся из релиза Notchlimits по HTTPS",
+               info["SUFeedURL"] as? String == "https://github.com/ziqq/Notchlimits/releases/latest/download/appcast.xml")
+        let key = (info["SUPublicEDKey"] as? String).flatMap { Data(base64Encoded: $0) }
+        expect("публичный ключ Ed25519 присутствует", key?.count == 32)
+        expect("проверка остаётся ручной", info["SUEnableAutomaticChecks"] as? Bool == false)
+        expect("подпись обязательна до распаковки", info["SUVerifyUpdateBeforeExtraction"] as? Bool == true)
+        expect("подпись appcast обязательна", info["SURequireSignedFeed"] as? Bool == true)
+        let framework = Bundle.main.privateFrameworksURL?.appendingPathComponent("Sparkle.framework")
+        expect("Sparkle вложен в приложение", framework.map { FileManager.default.fileExists(atPath: $0.path) } == true)
 
-        let json = """
-        {"tag_name":"v2.0.1","html_url":"https://example.com/r","assets":[
-          {"name":"Notchlimits-2.0.1.zip","browser_download_url":"https://example.com/a.zip"},
-          {"name":"SHA256SUMS.txt","browser_download_url":"https://example.com/s.txt"}
-        ]}
-        """
-        let release = UpdateCheck.parse(Data(json.utf8))
-        expect("релиз разобран", release?.version == "2.0.1")
-        expect("ссылка на релиз взята", release?.url.absoluteString == "https://example.com/r")
-        expect("ссылка на .zip найдена", release?.downloadURL?.absoluteString == "https://example.com/a.zip")
-        expect("ссылка на суммы найдена", release?.checksumURL?.absoluteString == "https://example.com/s.txt")
-        expect("мусор не ломает", UpdateCheck.parse(Data("[]".utf8)) == nil)
-
-        let sums = "abc123  Notchlimits-2.0.1.zip\ndef456  other.txt\n"
-        expect("сумма для файла вынута",
-               UpdateCheck.expectedSum(from: sums, zipName: "Notchlimits-2.0.1.zip") == "abc123")
-        expect("для чужого файла суммы нет",
-               UpdateCheck.expectedSum(from: sums, zipName: "nope.zip") == nil)
+        let comparator = SUStandardVersionComparator()
+        expect("числовой порядок версий", comparator.compareVersion("1.10.0", toVersion: "1.9.9") == .orderedDescending)
+        expect("следующий номер сборки новее", comparator.compareVersion("13", toVersion: "12") == .orderedDescending)
+        expect("номер CI новее старого формата сборки", comparator.compareVersion("12", toVersion: "1.3.1") == .orderedDescending)
+        expect("равные сборки не обновляются", comparator.compareVersion("12", toVersion: "12") == .orderedSame)
     }
 
     private static func checkAccountSwitcher() {

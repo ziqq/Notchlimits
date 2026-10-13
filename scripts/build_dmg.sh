@@ -6,7 +6,7 @@
 #   ./scripts/build_dmg.sh              # соберёт .app, если его ещё нет
 #   NOTCHLIMITS_VERSION=1.2.0 ./scripts/build_dmg.sh
 #
-# .zip в релизе остаётся: по нему работает обновление изнутри приложения.
+# Sparkle использует DMG; ZIP остаётся для перехода со старого установщика.
 #
 set -euo pipefail
 cd "$(dirname "$0")/.."
