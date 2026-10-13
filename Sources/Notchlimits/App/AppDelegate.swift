@@ -7,6 +7,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var store: UsageStore!
     private var panel: PanelController!
     private var hotKeys: HotKeyManager!
+    private lazy var updater = UpdaterController(
+        suppressPanel: { [weak self] in self?.panel.setModalSuppression($0) },
+        presentAlert: { [weak self] alert in
+            self?.runModalAbovePanel(alert) ?? .alertSecondButtonReturn
+        }
+    )
 
     private enum Setting: Int {
         case telemetry, keepAwake, keepDisplayOn, loginItem
@@ -409,60 +415,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func checkForUpdates() {
-        Task { @MainActor in
-            let outcome = await UpdateCheck.check()
-            let alert = NSAlert()
-            switch outcome {
-            case .upToDate(let current):
-                alert.messageText = L.t("update.upToDate", current)
-                alert.addButton(withTitle: L.t("common.ok"))
-                runModalAbovePanel(alert)
-
-            case .available(let release):
-                alert.messageText = L.t("update.available", release.version)
-                alert.informativeText = L.t("update.availableBody")
-                // «Обновить сейчас» — только если можем заменить бандл на месте.
-                let canInstall = release.downloadURL != nil && UpdateInstaller.canInstallInPlace()
-                if canInstall { alert.addButton(withTitle: L.t("update.install")) }
-                alert.addButton(withTitle: L.t("update.open"))
-                alert.addButton(withTitle: L.t("common.cancel"))
-
-                let response = runModalAbovePanel(alert)
-                if canInstall && response == .alertFirstButtonReturn {
-                    installUpdate(release)
-                } else if response == (canInstall ? .alertSecondButtonReturn : .alertFirstButtonReturn) {
-                    NSWorkspace.shared.open(release.url)
-                }
-
-            case .failed(let message):
-                alert.messageText = L.t("update.failed")
-                alert.informativeText = message
-                alert.addButton(withTitle: L.t("common.ok"))
-                runModalAbovePanel(alert)
-            }
-        }
-    }
-
-    private func installUpdate(_ release: UpdateCheck.Release) {
-        let hud = ProgressHUD(message: L.t("update.installing"))
-        hud.show()
-        Task { @MainActor in
-            do {
-                try await UpdateInstaller.install(release)
-                // Бандл заменит и перезапустит скрипт — нам остаётся выйти.
-                NSApp.terminate(nil)
-            } catch {
-                hud.close()
-                let alert = NSAlert()
-                alert.messageText = L.t("update.installFailed")
-                alert.informativeText = error.localizedDescription
-                alert.addButton(withTitle: L.t("update.open"))
-                alert.addButton(withTitle: L.t("common.ok"))
-                if runModalAbovePanel(alert) == .alertFirstButtonReturn {
-                    NSWorkspace.shared.open(release.url)
-                }
-            }
-        }
+        updater.checkForUpdates()
     }
 
     // MARK: - Аккаунт десктоп-приложения (Claude / Codex)

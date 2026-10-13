@@ -1,7 +1,12 @@
 # Changelog
 
 
-## Unreleased
+## 1.4.0 - 13/10/2026
+- **CHANGED**: In-app updates use Sparkle 2.10.0 with signed appcasts and Ed25519-verified archives. Checks remain
+  manual, with a compact prompt for ordinary updates; Sparkle handles download, installation and relaunch.
+- **CHANGED**: Release builds use the pinned Apple Development certificate for `a.a.ustinoff@gmail.com`, including
+  Sparkle's embedded helpers. ZIP downloads remain available to migrate from the previous updater.
+- **REMOVED**: The custom shell-based app replacement and update progress window.
 
 
 ## 1.3.1 - 13/10/2026
