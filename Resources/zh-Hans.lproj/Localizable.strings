@@ -69,7 +69,9 @@
 "menu.hotKey.disable" = "关闭";
 "menu.loginItem" = "登录时启动";
 "menu.about" = "关于 Notchlimits";
-"menu.quit" = "退出";
+"menu.quit" = "退出 Notchlimits";
+"menu.telemetry" = "显示遥测";
+"menu.settings" = "设置";
 
 // Удаление аккаунта
 "remove.title" = "移除 %@？";
@@ -110,6 +112,8 @@
 "common.ok" = "好";
 "common.cancel" = "取消";
 "common.save" = "存储";
+"common.on" = "开启";
+"common.off" = "关闭";
 
 // Добавление аккаунта
 "setup.claude.title" = "新的 Claude 账户";
@@ -160,8 +164,8 @@
 "error.unreachable" = "网络不可用";
 
 // Переключение приложений
-"appswitch.title" = "Claude 应用账户";
-"appswitch.title.codex" = "Codex 应用账户";
+"appswitch.title" = "Claude 账户";
+"appswitch.title.codex" = "Codex 账户";
 "appswitch.confirm.title" = "切换应用账户？";
 "appswitch.confirm.body" = "%@ 将退出并以“%@”重新打开。当前会话/聊天将关闭。";
 "appswitch.confirm.do" = "切换并重启";

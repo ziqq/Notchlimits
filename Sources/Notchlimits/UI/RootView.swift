@@ -31,6 +31,7 @@ struct RootView: View {
                                : .easeIn(duration: 0.15),
                                value: state.expanded)
                     .allowsHitTesting(state.expanded)
+                    .disabled(!state.expanded)
             }
             .frame(width: shapeWidth, height: shapeHeight, alignment: .top)
             .clipShape(BottomRoundedRectangle(radius: cornerRadius))
@@ -168,17 +169,17 @@ private struct FooterView: View {
     @Binding var hint: ChipHint?
 
     var body: some View {
-        HStack(alignment: .center, spacing: 5) {
-            TimelineView(.periodic(from: .now, by: state.expanded ? 1 : 600)) { context in
-                Text(footerText(now: context.date))
-                    .font(.system(size: 10))
-                    .foregroundColor(Theme.tertiary)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 5) {
+                updateStatus
+                Spacer(minLength: 12)
+                indicators
             }
-            // Кнопка — сразу за временем обновления: это одно действие про
-            // одну цифру, а не отдельный элемент в дальнем углу.
-            RefreshButton { store.refreshAll(force: true) }
-            Spacer(minLength: 12)
-            StatusIndicators(keepAwake: keepAwake, power: power, hint: $hint)
+            VStack(alignment: .leading, spacing: 6) {
+                updateStatus
+                indicators
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.top, 6)
@@ -190,6 +191,24 @@ private struct FooterView: View {
                 AnchoredHintBubble(hint: hint)
             }
         }
+    }
+
+    private var updateStatus: some View {
+        HStack(spacing: 5) {
+            TimelineView(.periodic(from: .now, by: state.expanded ? 1 : 600)) { context in
+                Text(footerText(now: context.date))
+                    .font(.system(size: 10))
+                    .foregroundColor(Theme.tertiary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            RefreshButton { store.refreshAll(force: true) }
+        }
+        .fixedSize()
+    }
+
+    private var indicators: some View {
+        StatusIndicators(keepAwake: keepAwake, power: power, hint: $hint)
     }
 
     private func footerText(now: Date) -> String {

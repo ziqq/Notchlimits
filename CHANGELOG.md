@@ -4,6 +4,19 @@
 ## Unreleased
 
 
+## 1.3.1 - 13/10/2026
+- **ADDED**: A **Show telemetry** context-menu toggle. Turning it off hides the battery, charger and
+  USB-C indicators and stops polling them. The choice survives restarts; telemetry is on by default.
+- **FIXED**: Removed the expanding spacer below column contents so the footer follows their actual height.
+- **CHANGED**: The context menu is grouped into About; Refresh, Settings and updates; accounts and removal;
+  hiding, renaming and showing columns; and Quit Notchlimits. Settings contains telemetry, Keep Awake, launch at login
+  and the hotkey.
+- **FIXED**: On narrow panels, the indicators move to a separate row while the update caption stays intact.
+- **ADDED**: Indicator details are available through Tab after opening with the hotkey, or by clicking. VoiceOver
+  receives labels, states and detailed battery, charger and port values.
+- **FIXED**: Clicking Settings toggles keeps the menu and panel open, with checkmarks updating immediately.
+
+
 ## 1.3.0 - 12/10/2026
 - **CHANGED**: The app is now called Notchlimits everywhere, matching the GitHub repository: `Notchlimits.app`, the
   executable, the About panel, the DMG and release assets. The `~/Library/Application Support/NotchLimits` folder is

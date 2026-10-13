@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Маленькие индикаторы состояния в строке «Обновлено …»: Keep Awake, питание, порты.
-/// Только показывают — включается всё из контекстного меню. Подробности по
-/// наведению пишутся в `hint`: системные подсказки (`.help`) в неактивной
+/// Режимы включаются из контекстного меню. Подробности по наведению,
+/// фокусу или нажатию пишутся в `hint`: системные подсказки (`.help`) в неактивной
 /// панели не появляются, поэтому текст рисует сама панель.
 struct StatusIndicators: View {
     @ObservedObject var keepAwake: KeepAwake
@@ -12,13 +12,19 @@ struct StatusIndicators: View {
     var body: some View {
         HStack(spacing: 6) {
             // Оба режима видны всегда: включён — ярко, выключен — приглушённо.
-            Chip(help: L.t("keepAwake.sleep.help"), isOn: keepAwake.isActive, tint: Theme.primary) {
+            Chip(title: L.t("keepAwake.sleep"), help: L.t("keepAwake.sleep.help"),
+                 value: L.t(keepAwake.isActive ? "common.on" : "common.off"),
+                 isOn: keepAwake.isActive, tint: Theme.primary) {
                 Image(systemName: keepAwake.isActive ? "cup.and.saucer.fill" : "cup.and.saucer")
             }
-            Chip(help: L.t("keepAwake.display.help"), isOn: keepAwake.keepDisplayOn, tint: Theme.primary) {
+            Chip(title: L.t("keepAwake.display"), help: L.t("keepAwake.display.help"),
+                 value: L.t(keepAwake.keepDisplayOn ? "common.on" : "common.off"),
+                 isOn: keepAwake.keepDisplayOn, tint: Theme.primary) {
                 Image(systemName: "display")
             }
-            PowerChips(snapshot: power.snapshot, ports: power.ports)
+            if power.isEnabled {
+                PowerChips(snapshot: power.snapshot, ports: power.ports)
+            }
         }
         .fixedSize()
         .environment(\.chipHint, $hint)
@@ -30,39 +36,69 @@ struct StatusIndicators: View {
 /// `isOn: false` — приглушённая капсула выключенного режима; `tint` — цвет
 /// иконки и значения, когда капсула включена.
 private struct Chip<Content: View>: View {
+    let title: String
     var help: String?
+    var value: String?
     var isOn = true
     var tint: Color = Theme.secondary
     @ViewBuilder var content: Content
     @Environment(\.chipHint) private var hint
     /// Рамка капсулы в координатах подвала — к ней привязывается подсказка.
     @State private var frame: CGRect = .zero
+    @State private var hovering = false
+    @FocusState private var focused: Bool
 
     var body: some View {
-        HStack(spacing: 4) { content }
-            .font(.system(size: 9.5, weight: .semibold))
-            .foregroundColor(isOn ? tint : Theme.tertiary.opacity(0.7))
-            .monospacedDigit()
-            .lineLimit(1)
-            .padding(.horizontal, 7)
-            .frame(height: 18)
-            .background(Capsule().fill(Color.white.opacity(isOn ? 0.1 : 0.04)))
-            .contentShape(Capsule())
-            .background(
-                GeometryReader { proxy in
-                    Color.clear
-                        .onAppear { frame = proxy.frame(in: .named(ChipHint.space)) }
-                        .onChange(of: proxy.frame(in: .named(ChipHint.space))) { frame = $0 }
-                }
-            )
-            .onHover { inside in
-                guard let hint, let help, !help.isEmpty else { return }
-                if inside {
-                    hint.wrappedValue = ChipHint(text: help, chip: frame)
-                } else if hint.wrappedValue?.text == help {
-                    hint.wrappedValue = nil
-                }
+        Button(action: showHint) {
+            HStack(spacing: 4) { content }
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundColor(isOn ? tint : Theme.tertiary.opacity(0.7))
+                .monospacedDigit()
+                .lineLimit(1)
+                .padding(.horizontal, 7)
+                .frame(height: 18)
+                .background(Capsule().fill(Color.white.opacity(isOn ? 0.1 : 0.04)))
+                .contentShape(Capsule())
+                .overlay(Capsule().strokeBorder(Theme.primary.opacity(focused ? 0.65 : 0), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .focusable()
+        .focused($focused)
+        .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(Text(title))
+        .accessibilityValue(Text(value ?? help ?? ""))
+        .accessibilityHint(Text(value == nil ? "" : (help ?? "")))
+        .background(
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { frame = proxy.frame(in: .named(ChipHint.space)) }
+                    .onChange(of: proxy.frame(in: .named(ChipHint.space))) { frame = $0 }
             }
+        )
+        .onHover { inside in
+            hovering = inside
+            updateHint()
+        }
+        .onChange(of: focused) { _ in updateHint() }
+        .onChange(of: help) { _ in updateHint() }
+        .onChange(of: frame) { _ in
+            if hovering || focused { showHint() }
+        }
+        .reportsControlFrame()
+    }
+
+    private func showHint() {
+        guard let hint, let help, !help.isEmpty else { return }
+        hint.wrappedValue = ChipHint(text: help, chip: frame)
+    }
+
+    private func updateHint() {
+        if hovering || focused {
+            showHint()
+        } else if hint?.wrappedValue?.text == help {
+            hint?.wrappedValue = nil
+        }
     }
 }
 
@@ -137,7 +173,7 @@ private struct PowerChips: View {
             BatteryChip(snapshot: snapshot)
         }
         if let charger = chargerText {
-            Chip(help: chargerHelp) {
+            Chip(title: L.t("power.charger"), help: chargerHelp) {
                 Image(systemName: "bolt.fill")
                 Text(charger)
             }
@@ -214,7 +250,7 @@ private struct PortsChip: View {
     private var usbC: [PortsSnapshot.Port] { ports.ports.filter { !$0.isMagSafe } }
 
     var body: some View {
-        Chip(help: help) {
+        Chip(title: "USB-C", help: help) {
             Image(systemName: "cable.connector")
             Text("USB-C")
             ForEach(usbC) { port in
@@ -262,7 +298,7 @@ private struct BatteryChip: View {
     let snapshot: PowerSnapshot
 
     var body: some View {
-        Chip(help: batteryHelp, tint: levelColor) {
+        Chip(title: L.t("power.battery"), help: batteryHelp, tint: levelColor) {
             Image(systemName: symbol)
             if let percent = snapshot.percent {
                 Text(Format.percent(Double(percent)))
@@ -310,6 +346,7 @@ private struct BatteryChip: View {
     /// «Заряжается / Аккумулятор: 12,41 V · 2,13 A · 31,6 °C / Здоровье: 83 % · циклов: 309».
     private var batteryHelp: String {
         var lines = [stateTitle]
+        if let percent = snapshot.percent { lines.append(Format.percent(Double(percent))) }
         let battery = joined([snapshot.voltage.map { Format.unit($0, digits: 2, "V") },
                               snapshot.current.map { Format.unit($0, digits: 2, "A") },
                               snapshot.temperature.map { Format.unit($0, digits: 1, "°C") }])

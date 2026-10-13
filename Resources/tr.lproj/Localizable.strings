@@ -69,7 +69,9 @@
 "menu.hotKey.disable" = "Kapat";
 "menu.loginItem" = "Girişte başlat";
 "menu.about" = "Notchlimits hakkında";
-"menu.quit" = "Çık";
+"menu.quit" = "Notchlimits’ten çık";
+"menu.telemetry" = "Telemetriyi göster";
+"menu.settings" = "Ayarlar";
 
 // Удаление аккаунта
 "remove.title" = "%@ kaldırılsın mı?";
@@ -110,6 +112,8 @@
 "common.ok" = "Tamam";
 "common.cancel" = "Vazgeç";
 "common.save" = "Kaydet";
+"common.on" = "Açık";
+"common.off" = "Kapalı";
 
 // Добавление аккаунта
 "setup.claude.title" = "Yeni Claude hesabı";
@@ -160,8 +164,8 @@
 "error.unreachable" = "ağ kullanılamıyor";
 
 // Переключение приложений
-"appswitch.title" = "Claude uygulama hesabı";
-"appswitch.title.codex" = "Codex uygulama hesabı";
+"appswitch.title" = "Claude hesabı";
+"appswitch.title.codex" = "Codex hesabı";
 "appswitch.confirm.title" = "Uygulama hesabı değiştirilsin mi?";
 "appswitch.confirm.body" = "%@ kapanıp “%@” olarak yeniden açılacak. Mevcut oturum/sohbet kapanacak.";
 "appswitch.confirm.do" = "Değiştir ve yeniden başlat";
