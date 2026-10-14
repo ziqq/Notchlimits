@@ -22,9 +22,11 @@ enum CodexAuthSwap {
 
     static let defaultColumnID = "codex:default"
 
-    /// Основной вход сохраняет прежний id; одноимённый доп. профиль — отдельный аккаунт.
+    /// Preserve main's existing ID and escape the reserved prefix so imported
+    /// `profile:default` cannot collide with `default`.
     static func profileColumnID(_ name: String) -> String {
-        name == "default" ? "codex:profile:default" : "codex:\(name)"
+        name == "default" || name.hasPrefix("profile:")
+            ? "codex:profile:\(name)" : "codex:\(name)"
     }
 
     private static let activeIDKey = "codexAppAccountID"
@@ -47,7 +49,15 @@ enum CodexAuthSwap {
 
     /// Колонка, чей вход сейчас в `~/.codex`.
     static var activeColumnID: String {
-        UserDefaults.standard.string(forKey: activeIDKey) ?? defaultColumnID
+        guard let id = UserDefaults.standard.string(forKey: activeIDKey) else { return defaultColumnID }
+        // The saved path identifies the owner even when its legacy ID collided.
+        if let path = UserDefaults.standard.string(forKey: activeHomeKey) {
+            let name = URL(fileURLWithPath: path).lastPathComponent
+            if name.hasPrefix("profile:"), id == "codex:\(name)" {
+                return profileColumnID(name)
+            }
+        }
+        return id
     }
 
     static var isSwapped: Bool { activeColumnID != defaultColumnID }

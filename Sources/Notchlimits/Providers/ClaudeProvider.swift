@@ -135,6 +135,7 @@ actor ClaudeProvider: UsageProvider {
         // продлеваем сами — CLI мог не запускаться сутками.
         guard let refreshToken = Self.refreshToken(pending: unsaved[service]?.tokens,
                                                    stored: credentials) else { return nil }
+        guard ClaudeKeychain.supportsStorageLock else { return nil }
 
         // Сервер при продлении отзывает прежний refresh-токен. Не сможем
         // записать новый — в Keychain останется мёртвый, и CLI обнулит вход.
