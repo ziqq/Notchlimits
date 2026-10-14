@@ -22,6 +22,11 @@ enum CodexAuthSwap {
 
     static let defaultColumnID = "codex:default"
 
+    /// Основной вход сохраняет прежний id; одноимённый доп. профиль — отдельный аккаунт.
+    static func profileColumnID(_ name: String) -> String {
+        name == "default" ? "codex:profile:default" : "codex:\(name)"
+    }
+
     private static let activeIDKey = "codexAppAccountID"
     private static let activeHomeKey = "codexAppAccountHome"
 
@@ -88,17 +93,18 @@ enum CodexAuthSwap {
     /// Записать продлённые токены туда, где вход колонки лежит сейчас.
     /// Пишем, только если в файле всё ещё тот refresh-токен, которым мы
     /// продлевали: иначе его уже обновил кто-то другой, и наш ответ устарел.
+    @discardableResult
     static func storeRenewed(columnID: String, home: URL, usedRefreshToken: String,
-                             tokens: CodexOAuth.Tokens) throws {
+                             tokens: CodexOAuth.Tokens) throws -> Bool {
         lock.lock()
         defer { lock.unlock() }
         let file = auth(liveHome(columnID: columnID, home: home))
-        guard let data = try? Data(contentsOf: file),
-              let updated = renewedAuth(data, usedRefreshToken: usedRefreshToken,
-                                        tokens: tokens, now: Date())
-        else { return }
+        let data = try Data(contentsOf: file)
+        guard let updated = renewedAuth(data, usedRefreshToken: usedRefreshToken,
+                                       tokens: tokens, now: Date()) else { return false }
         try updated.write(to: file, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        return true
     }
 
     /// auth.json с продлёнными токенами, или nil, если в нём уже другой

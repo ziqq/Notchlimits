@@ -12,6 +12,8 @@ on:
 
 permissions:
   contents: write
+  actions: read
+  checks: read
 
 jobs:
   release:
@@ -26,9 +28,11 @@ jobs:
 
       - name: Версия и тег
         id: meta
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ inputs.version }}"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
             TAG="v${VERSION}"
           else
             TAG="${GITHUB_REF_NAME}"
@@ -41,6 +45,12 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Релиз ${TAG} (версия ${VERSION})"
+
+      - name: Коммит из main и успешный CI
+        timeout-minutes: 20
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/verify_release.sh
 
       - name: Сертификат a.a.ustinoff
         env:
@@ -276,6 +286,8 @@ jobs:
     steps:
       - name: Checkout trusted notification template
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
 
       - name: Notify Discord and Telegram
         uses: ziqq/actions/notify@ccd1a799683cd461a45d9303ac6fcb2792f8f5d2

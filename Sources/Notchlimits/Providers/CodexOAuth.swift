@@ -26,8 +26,10 @@ enum CodexOAuth {
         case success(Tokens)
         /// Токен протух, отозван или уже использован — нужен новый вход.
         case rejected
-        /// Сеть, таймаут, 5xx: не приговор, попробуем позже.
+        /// Сервер явно отказал во временной ошибке, не выдав новые токены.
         case unavailable
+        /// Ответ потерян или не разобран: прежний refresh-токен мог быть потрачен.
+        case uncertain
     }
 
     static func refresh(refreshToken: String) async -> Outcome {
@@ -42,11 +44,11 @@ enum CodexOAuth {
         switch await HTTPClient.shared.post(tokenURL, headers: ["Accept": "application/json"],
                                             json: body, retry: false) {
         case .failure:
-            return .unavailable
+            return .uncertain
         case .success(let response):
             switch response.status {
             case 200:
-                guard let tokens = parse(response.data) else { return .unavailable }
+                guard let tokens = parse(response.data) else { return .uncertain }
                 return .success(tokens)
             case 401:
                 return .rejected
@@ -54,6 +56,8 @@ enum CodexOAuth {
                 // Как в CLI: окончательно только invalid_grant и явные коды
                 // про refresh-токен, прочие 400 — временная беда.
                 return isPermanent(response.data) ? .rejected : .unavailable
+            case 500...599:
+                return .uncertain
             default:
                 return .unavailable
             }
@@ -108,13 +112,25 @@ actor CodexRenewal {
         case rejected
         /// Сервер недоступен — попробуем на следующем цикле.
         case unavailable
+        /// Потерянный ответ нельзя восстановить повтором того же токена.
+        case uncertain
     }
 
-    /// Refresh-токены, которые сервер уже отверг: слать их снова бессмысленно.
-    private var rejected: Set<String> = []
+    private struct Pending {
+        let usedRefreshToken: String
+        let tokens: CodexOAuth.Tokens
+    }
+
+    /// Учитываем и запрос в полёте: actor допускает другой вызов на время await.
+    private var attempts: [String: Result] = [:]
+    /// Живая копия после ротации, если запись auth.json не удалась.
+    private var pending: [String: Pending] = [:]
 
     /// `force` — продлить, даже если срок ещё не подошёл (usage ответил 401).
     func renew(columnID: String, home: URL, force: Bool) async -> Result {
+        if let saved = pending[columnID] {
+            if let result = persist(saved, columnID: columnID, home: home) { return result }
+        }
         let live = CodexAuthSwap.liveHome(columnID: columnID, home: home)
         let file = live.appendingPathComponent("auth.json")
         guard let refreshToken = Self.refreshToken(file),
@@ -122,29 +138,49 @@ actor CodexRenewal {
                                expiresAt: CodexProvider.readAuth(codexHome: live)?.expiresAt,
                                force: force, now: Date())
         else { return .skipped }
-        guard !rejected.contains(refreshToken) else { return .rejected }
+        if let result = attempts[refreshToken] { return result }
+        attempts[refreshToken] = .unavailable
 
         switch await CodexOAuth.refresh(refreshToken: refreshToken) {
         case .success(let tokens):
-            do {
-                try CodexAuthSwap.storeRenewed(columnID: columnID, home: home,
-                                               usedRefreshToken: refreshToken, tokens: tokens)
-            } catch {
-                // Токен уже потрачен, а записать не вышло. Колонка всё равно
-                // узнает правду на ближайшем запросе usage.
-                return .unavailable
-            }
-            return .renewed
+            let saved = Pending(usedRefreshToken: refreshToken, tokens: tokens)
+            pending[columnID] = saved
+            return persist(saved, columnID: columnID, home: home) ?? .renewed
         case .rejected:
+            attempts[refreshToken] = .rejected
             // Пока мы ходили, файл мог обновить CLI в этом профиле.
             let current = CodexAuthSwap.liveHome(columnID: columnID, home: home)
             if let latest = Self.refreshToken(current.appendingPathComponent("auth.json")),
                latest != refreshToken {
                 return .renewed
             }
-            rejected.insert(refreshToken)
             return .rejected
         case .unavailable:
+            attempts[refreshToken] = nil
+            return .unavailable
+        case .uncertain:
+            attempts[refreshToken] = .uncertain
+            return .uncertain
+        }
+    }
+
+    /// false из storeRenewed означает новый вход в файле: старый ответ забываем.
+    private func persist(_ saved: Pending, columnID: String, home: URL) -> Result? {
+        do {
+            let stored = try CodexAuthSwap.storeRenewed(columnID: columnID, home: home,
+                                                       usedRefreshToken: saved.usedRefreshToken,
+                                                       tokens: saved.tokens)
+            pending[columnID] = nil
+            if stored {
+                attempts[saved.usedRefreshToken] = saved.tokens.refreshToken.map {
+                    $0 != saved.usedRefreshToken ? .uncertain : nil
+                } ?? nil
+                return .renewed
+            }
+            // Потраченный токен не используем, даже если его копия осталась в другом профиле.
+            attempts[saved.usedRefreshToken] = .uncertain
+            return nil
+        } catch {
             return .unavailable
         }
     }

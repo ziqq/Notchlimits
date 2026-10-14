@@ -30,6 +30,14 @@ enum ClaudeKeychain {
             guard let refreshTokenExpiresAt else { return true }
             return refreshTokenExpiresAt.timeIntervalSinceNow > 60
         }
+
+        func hasSameTokens(as other: Credentials) -> Bool {
+            accessToken == other.accessToken && refreshToken == other.refreshToken
+        }
+    }
+
+    enum SaveResult {
+        case saved, changed, failed
     }
 
     /// Имена всех generic password с нашим префиксом.
@@ -158,12 +166,15 @@ enum ClaudeKeychain {
     ///
     /// Читаем прямо перед записью и накладываем изменения на свежий JSON:
     /// между нашим чтением и записью CLI мог сам обновить токен, и затирать
-    /// его целой старой копией нельзя. Все незнакомые поля сохраняются.
+    /// его целой старой копией нельзя. Если токены уже сменились, ответ
+    /// старого запроса не пишем. Все незнакомые поля сохраняются.
     /// Блокирующий вызов — только вне главного потока.
     @discardableResult
-    static func save(service: String, tokens: ClaudeOAuth.Tokens) -> Bool {
-        guard var json = rawItem(service: service) else { return false }
-        var oauth = (json["claudeAiOauth"] as? [String: Any]) ?? [:]
+    static func save(service: String, tokens: ClaudeOAuth.Tokens,
+                     expected: Credentials) -> SaveResult {
+        guard var json = rawItem(service: service) else { return .failed }
+        guard let current = parse(json), current.hasSameTokens(as: expected),
+              var oauth = json["claudeAiOauth"] as? [String: Any] else { return .changed }
 
         oauth["accessToken"] = tokens.accessToken
         oauth["expiresAt"] = tokens.expiresAt.timeIntervalSince1970 * 1000
@@ -176,7 +187,7 @@ enum ClaudeKeychain {
         if let scopes = tokens.scopes, !scopes.isEmpty { oauth["scopes"] = scopes }
 
         json["claudeAiOauth"] = oauth
-        guard let data = try? JSONSerialization.data(withJSONObject: json) else { return false }
+        guard let data = try? JSONSerialization.data(withJSONObject: json) else { return .failed }
 
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -184,6 +195,7 @@ enum ClaudeKeychain {
         ]
         return SecItemUpdate(query as CFDictionary,
                              [kSecValueData as String: data] as CFDictionary) == errSecSuccess
+            ? .saved : .failed
     }
 
     /// Можно ли писать в запись: перезаписываем её же содержимым. Проверяем
