@@ -213,6 +213,11 @@ The app makes no automatic request beyond the usage endpoints and token renewal 
 
 The self-test (`NOTCHLIMITS_SELFTEST=1`) needs no network, Keychain, or window server, and covers Claude/Codex parsing (garbage, `null` windows, unknown keys), window order and titles, JWT claims, time/age/percent formatting, cache and hotkey serialization, and localization completeness — matching key sets, no empty values, and **format specifiers matching English**, or `String(format:)` would crash in another language.
 
+Run the regression suite with `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s Tools -p 'test_*.py'`.
+It compiles the production Swift sources with synthetic API/Keychain boundaries and temporary profiles, checks the
+release steps before signing, and verifies that reset and stale-age labels change without new usage data.
+The two UI checks require a macOS desktop session; the suite makes no API requests and uses no real credentials.
+
 [`.github/workflows/release.yml`](.github/workflows/release.yml) runs on a `v*` tag or manually with a version. It imports the pinned Apple Development certificate into a temporary keychain, builds and self-tests, packages a DMG and ZIP, signs the DMG and appcast with Sparkle, and publishes them with `SHA256SUMS.txt`. Sparkle uses the DMG; the ZIP remains for migration from the previous updater. `CFBundleVersion` uses the workflow run number. See [release signing](docs/RELEASE.md) for the required secrets and key handling.
 
 Version comes from `NOTCHLIMITS_VERSION`, else the [`VERSION`](VERSION) file:

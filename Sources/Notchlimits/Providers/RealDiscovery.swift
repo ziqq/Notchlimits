@@ -32,33 +32,35 @@ struct RealDiscovery: AccountDiscovery {
     }
 
     private func codexAccounts() -> [DiscoveredAccount] {
-        // key — стабильный идентификатор колонки, name — подпись в заголовке.
+        // id — стабильный идентификатор колонки, name — подпись в заголовке.
         // Переименование основного профиля не должно ронять кэш и уведомления.
-        var homes: [(key: String, name: String, url: URL)] = []
+        var homes: [(id: String, name: String, url: URL)] = []
 
         let defaultHome = CodexAuthSwap.baseHome
         let defaultLive = CodexAuthSwap.liveHome(columnID: CodexAuthSwap.defaultColumnID, home: defaultHome)
         if FileManager.default.fileExists(atPath: defaultLive.appendingPathComponent("auth.json").path) {
-            homes.append((key: "default", name: ProfileDirectories.primaryName, url: defaultHome))
+            homes.append((id: CodexAuthSwap.defaultColumnID,
+                          name: ProfileDirectories.primaryName, url: defaultHome))
         }
 
         for directory in ProfileDirectories.codexProfiles() {
             let folder = directory.lastPathComponent
-            let live = CodexAuthSwap.liveHome(columnID: "codex:\(folder)", home: directory)
+            let id = CodexAuthSwap.profileColumnID(folder)
+            let live = CodexAuthSwap.liveHome(columnID: id, home: directory)
             guard FileManager.default.fileExists(
                 atPath: live.appendingPathComponent("auth.json").path
             ) else { continue }
-            homes.append((key: folder, name: folder, url: directory))
+            homes.append((id: id, name: folder, url: directory))
         }
 
         return homes.map { home in
-            DiscoveredAccount(id: "codex:\(home.key)",
+            DiscoveredAccount(id: home.id,
                               provider: .codex,
                               profileName: home.name,
                               source: .codexHome(home.url),
                               // Активен тот, чей вход сейчас в ~/.codex: под ним
                               // и приложение Codex, и голая `codex`.
-                              isActive: "codex:\(home.key)" == CodexAuthSwap.activeColumnID)
+                              isActive: home.id == CodexAuthSwap.activeColumnID)
         }
     }
 }

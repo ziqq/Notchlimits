@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ColumnView: View {
     let column: AccountColumn
+    var isExpanded = true
     /// Повторный вход по нажатию на чип re-auth. nil — чип не нажимается.
     var onRelogin: (() -> Void)? = nil
 
@@ -33,7 +34,7 @@ struct ColumnView: View {
             if column.hasData {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(column.windows) { window in
-                        LimitRowView(window: window)
+                        LimitRowView(window: window, isExpanded: isExpanded)
                     }
                 }
                 if !column.stats.isEmpty {
@@ -77,11 +78,13 @@ struct ColumnView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 8)
                 }
-                if let note = staleNote {
-                    Text(note)
-                        .font(.system(size: 9))
-                        .foregroundColor(Theme.tertiary)
-                        .padding(.top, Self.problem(for: column.status) == nil ? 8 : 2)
+                if let updatedAt = staleUpdatedAt {
+                    TimelineView(.periodic(from: .now, by: isExpanded ? 1 : 600)) { context in
+                        Text(L.t("column.stale", Format.age(updatedAt, now: context.date)))
+                            .font(.system(size: 9))
+                            .foregroundColor(Theme.tertiary)
+                    }
+                    .padding(.top, Self.problem(for: column.status) == nil ? 8 : 2)
                 }
             } else {
                 PlaceholderView(status: column.status, onRelogin: onRelogin)
@@ -101,13 +104,13 @@ struct ColumnView: View {
     }
 
     /// Серая пометка о возрасте данных: показываем, когда свежего ответа нет.
-    private var staleNote: String? {
+    private var staleUpdatedAt: Date? {
         guard let updatedAt = column.updatedAt else { return nil }
         switch column.status {
         case .ok where !column.fromCache:
             return nil
         default:
-            return L.t("column.stale", Format.age(updatedAt))
+            return updatedAt
         }
     }
 }
@@ -177,6 +180,7 @@ private struct ReauthChip: View {
 
 struct LimitRowView: View {
     let window: LimitWindow
+    var isExpanded = true
 
     private var fraction: Double { min(max(window.utilization / 100, 0), 1) }
     private var color: Color { Theme.color(for: window.utilization) }
@@ -214,9 +218,13 @@ struct LimitRowView: View {
             // раньше сброса — дописываем прогноз к той же строке тревожным цветом
             // (совсем скоро — красным). Точная дата предела — в тултипе.
             if let resetsAt = window.resetsAt {
-                timingLine(resetsAt: resetsAt)
-                    .font(.system(size: 9.5))
-                    .fixedSize(horizontal: false, vertical: true)
+                // Дата прогноза неизменна между опросами: не создаём форматтер на каждом тике.
+                let forecastTime = window.exhaustsAt.map(Format.clock)
+                TimelineView(.periodic(from: .now, by: isExpanded ? 1 : 600)) { context in
+                    timingLine(resetsAt: resetsAt, forecastTime: forecastTime, now: context.date)
+                        .font(.system(size: 9.5))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             } else {
                 // Окно ещё не началось (0 %, даты сброса нет). Держим место под
                 // строку, иначе всё ниже съезжает относительно соседних колонок.
@@ -231,12 +239,12 @@ struct LimitRowView: View {
 
     /// Строка тайминга: «Сброс через 2 ч 23 мин» плюс, если есть прогноз,
     /// «· предел ≈ 19:40» тем же размером, но тревожным цветом.
-    private func timingLine(resetsAt: Date) -> Text {
-        let reset = Text(Format.reset(resetsAt)).foregroundColor(Theme.tertiary)
-        guard let exhaustsAt = window.exhaustsAt else { return reset }
-        let soon = exhaustsAt.timeIntervalSinceNow < 45 * 60
+    private func timingLine(resetsAt: Date, forecastTime: String?, now: Date) -> Text {
+        let reset = Text(Format.reset(resetsAt, now: now)).foregroundColor(Theme.tertiary)
+        guard let exhaustsAt = window.exhaustsAt, let forecastTime else { return reset }
+        let soon = exhaustsAt.timeIntervalSince(now) < 45 * 60
         // Отличаем только цветом — начертание и размер как у строки сброса.
-        let forecast = Text("  ·  " + L.t("burn.limitAt", Format.clock(exhaustsAt)))
+        let forecast = Text("  ·  " + L.t("burn.limitAt", forecastTime))
             .foregroundColor(soon ? Theme.red : Theme.yellow)
         return reset + forecast
     }
