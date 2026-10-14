@@ -3,7 +3,7 @@ import Foundation
 /// Лимиты Claude Code: GET https://api.anthropic.com/api/oauth/usage
 ///
 /// Токен читается из Keychain и держится только в памяти — до `expiresAt`
-/// или до первого 401. Обновлять его мы не пытаемся: за это отвечает сам CLI.
+/// или до первого 401. Продление сохраняем только поверх того же входа.
 actor ClaudeProvider: UsageProvider {
 
     private struct CachedToken {
@@ -27,7 +27,12 @@ actor ClaudeProvider: UsageProvider {
     /// Продлённые токены, которые не удалось записать в Keychain. Сервер уже
     /// отозвал прежний refresh-токен, так что это единственная живая копия:
     /// пробуем записать на каждом цикле, пока не выйдет.
-    private var unsaved: [String: ClaudeOAuth.Tokens] = [:]
+    private struct Pending {
+        let tokens: ClaudeOAuth.Tokens
+        let credentials: ClaudeKeychain.Credentials
+    }
+
+    private var unsaved: [String: Pending] = [:]
     /// Почему токена нет, если дело не во входе (сеть, запись в Keychain).
     private var issues: [String: String] = [:]
     private let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
@@ -99,7 +104,17 @@ actor ClaudeProvider: UsageProvider {
         issues[service] = nil
         if let pending = unsaved[service] {
             // Сначала дописываем то, что не записалось в прошлый раз.
-            if await write(pending, to: service) { unsaved[service] = nil }
+            switch await write(pending, to: service) {
+            case .saved:
+                unsaved[service] = nil
+            case .changed:
+                unsaved[service] = nil
+                tokens[service] = nil
+                rejected[service] = nil
+                emails[service] = nil
+            case .failed:
+                break
+            }
         }
         if let cached = tokens[service], cached.isUsable { return cached }
         tokens[service] = nil
@@ -118,7 +133,7 @@ actor ClaudeProvider: UsageProvider {
 
         // Токен протух. Раньше мы просто просили запустить claude; теперь
         // продлеваем сами — CLI мог не запускаться сутками.
-        guard let refreshToken = Self.refreshToken(pending: unsaved[service],
+        guard let refreshToken = Self.refreshToken(pending: unsaved[service]?.tokens,
                                                    stored: credentials) else { return nil }
 
         // Сервер при продлении отзывает прежний refresh-токен. Не сможем
@@ -139,7 +154,32 @@ actor ClaudeProvider: UsageProvider {
             // было — новый refresh-токен не выдан, старый ещё годен, писать
             // незачем: access-токен и так живёт в памяти до следующего обновления.
             if fresh.refreshToken != nil {
-                unsaved[service] = await write(fresh, to: service) ? nil : fresh
+                let pending = Pending(tokens: fresh, credentials: credentials)
+                switch await write(pending, to: service) {
+                case .saved:
+                    unsaved[service] = nil
+                case .failed:
+                    unsaved[service] = pending
+                case .changed:
+                    unsaved[service] = nil
+                    tokens[service] = nil
+                    rejected[service] = nil
+                    emails[service] = nil
+                    if let latest = await read(service), let cached = Self.cache(latest) {
+                        tokens[service] = cached
+                        return cached
+                    }
+                    return nil
+                }
+            } else {
+                // И без ротации ответ относится к старому входу: CLI мог войти в другой.
+                guard let latest = await read(service) else { return nil }
+                if !latest.hasSameTokens(as: credentials) {
+                    emails[service] = nil
+                    let cached = Self.cache(latest)
+                    tokens[service] = cached
+                    return cached
+                }
             }
             let cached = CachedToken(value: fresh.accessToken,
                                      expiresAt: fresh.expiresAt,
@@ -174,9 +214,10 @@ actor ClaudeProvider: UsageProvider {
         return stored.refreshToken
     }
 
-    private func write(_ fresh: ClaudeOAuth.Tokens, to service: String) async -> Bool {
+    private func write(_ pending: Pending, to service: String) async -> ClaudeKeychain.SaveResult {
         await Task.detached(priority: .utility) {
-            ClaudeKeychain.save(service: service, tokens: fresh)
+            ClaudeKeychain.save(service: service, tokens: pending.tokens,
+                                expected: pending.credentials)
         }.value
     }
 

@@ -4,6 +4,11 @@ Notchlimits uses Sparkle 2.10.0 for manual update checks. The app verifies the
 signed appcast and the archive signature before extraction. The feed remains a
 GitHub release asset; no separate update server is needed.
 
+Tags must point to a commit in `main`; manual runs must select `main`.
+Before importing signing keys, the workflow requires the push CI run for the
+exact release commit and waits for it to finish successfully (up to 20 minutes).
+A missing, failed or cancelled CI run prevents publication.
+
 The app and Sparkle helpers use the Apple Development certificate for
 `a.a.ustinoff@gmail.com`, SHA1 `2A1CD7C372968E01732ED7B26AC5CBB9F4014D33`.
 The build rejects a different signing identity for release builds. Local CI
