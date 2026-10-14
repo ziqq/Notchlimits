@@ -174,7 +174,13 @@ Three details that matter:
 - **The Keychain is written only when the refresh token actually rotated.** If the server didn't issue a new refresh token, the old one is still valid and nothing is written — the new access token just lives in memory until the next refresh. This matters because every Keychain write pops a macOS authorization prompt; skipping the needless ones keeps them rare (grant it once with **Always Allow**).
 - **A 401 marks that exact token as rejected**, so the next cycle renews instead of re-reading the same dead token from the Keychain. If the entry meanwhile holds a different token, the CLI refreshed first and that one is used.
 
-Renewal happens only on expiry, never preemptively, which keeps the window for racing the CLI small.
+Renewal happens only on expiry, never preemptively. Automatic Claude renewal
+requires Claude Code 2.1.278 or newer: Keychain writes share its per-profile
+`.storage-write.lock` protocol, including a heartbeat during macOS authorization
+dialogs. A busy or lost lock defers the write. Older or unidentified CLI versions
+retain usage polling with valid tokens and require CLI login after expiry.
+Extra profiles have independent locks, so a busy main profile does not block
+renewal of another profile.
 
 **Codex.** Auth from `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`); `apikey` mode can't reach the usage endpoint — ChatGPT login is required. Token lifetime from the JWT `exp` claim, email for the column subtitle from `id_token`.
 
@@ -218,7 +224,7 @@ It compiles the production Swift sources with synthetic API/Keychain boundaries 
 release steps before signing, and verifies that reset and stale-age labels change without new usage data.
 The two UI checks require a macOS desktop session; the suite makes no API requests and uses no real credentials.
 
-[`.github/workflows/release.yml`](.github/workflows/release.yml) runs on a `v*` tag or manually with a version. It imports the pinned Apple Development certificate into a temporary keychain, builds and self-tests, packages a DMG and ZIP, signs the DMG and appcast with Sparkle, and publishes them with `SHA256SUMS.txt`. Sparkle uses the DMG; the ZIP remains for migration from the previous updater. `CFBundleVersion` uses the workflow run number. See [release signing](docs/RELEASE.md) for the required secrets and key handling.
+[`.github/workflows/release.yml`](.github/workflows/release.yml) runs on a pre-created `v*` tag or manually from `main` with an existing tag's version. A trusted main policy verifies the tag and its main push CI; signing requires approval in the protected `release` environment. The signing job checks out the verified SHA, imports the pinned Apple Development certificate into a temporary keychain, builds and self-tests, packages a DMG and ZIP, signs the DMG and appcast with Sparkle, and publishes them with `SHA256SUMS.txt`. Publication rechecks the remote tag. Sparkle uses the DMG; the ZIP remains for migration from the previous updater. `CFBundleVersion` uses the workflow run number. See [release signing](docs/RELEASE.md) for the required secrets and key handling.
 
 Version comes from `NOTCHLIMITS_VERSION`, else the [`VERSION`](VERSION) file:
 
