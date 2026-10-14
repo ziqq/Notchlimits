@@ -1,17 +1,41 @@
 import Foundation
 import Security
+import Darwin
+import CryptoKit
 
 // Only OS/network boundaries are replaced. Providers, discovery, auth swaps and
 // removal are compiled from their unmodified production source files.
 private enum Fixture {
     static let root = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
-    static let service = "Notchlimits-regression-synthetic"
+    static let service = "Claude Code-credentials"
     static let lock = NSLock()
     static var keychain: [String: Any] = [:]
     static var keychainWrites = 0
     static var failKeychainSave = false
     static var refreshCalls = 0
     static var lastAuthorization = ""
+    static var cliVersion = "2.1.278"
+    static var keychainReads = 0
+    static var changeLoginAfterRead = 0
+    static var pendingCLILogin = false
+    static var replaceLockAfterRead = 0
+    static var slowKeychainRead = false
+    static var expectedLock: URL?
+    static var observedProfileLock = false
+
+    static var storageDirectory: URL { root.appendingPathComponent(".claude") }
+    static var storageLock: URL { storageDirectory.appendingPathComponent(".storage-write.lock") }
+
+    // The CLI's independent writer uses its native mkdir lock protocol.
+    static func tryCLILogin() {
+        if mkdir(storageLock.path, 0o700) == 0 {
+            keychain = claudeLogin("new-login", expired: false)
+            pendingCLILogin = false
+            _ = rmdir(storageLock.path)
+        } else {
+            pendingCLILogin = true
+        }
+    }
 
     enum Response { case renewed, lost, temporary, unreadable, delayedLost, changedClaude }
     static var response: Response = .renewed
@@ -88,7 +112,7 @@ enum UserDefaults {
 enum DesktopApp { static var supportDirectory: URL { Fixture.root.appendingPathComponent("support") } }
 struct ClaudeAppSwitcher { func isOpenInApp(columnID: String) -> Bool? { nil } }
 protocol AccountDiscovery { func discover() -> [DiscoveredAccount] }
-enum BinaryLocator { static func claudeVersion(fallback: String) -> String { fallback }
+enum BinaryLocator { static func claudeVersion(fallback: String) -> String { Fixture.cliVersion }
     static func codex() -> URL? { nil }
     static func version(of binary: URL, fallback: String) -> String { fallback }
 }
@@ -106,7 +130,16 @@ func SecItemCopyMatching(_ query: CFDictionary, _ result: UnsafeMutablePointer<C
     if (query as NSDictionary)[kSecReturnAttributes as String] as? Bool == true {
         result?.pointee = NSArray()
     } else {
-        result?.pointee = try! JSONSerialization.data(withJSONObject: Fixture.keychain) as CFData
+        let data = try! JSONSerialization.data(withJSONObject: Fixture.keychain)
+        Fixture.keychainReads += 1
+        if Fixture.slowKeychainRead { Thread.sleep(forTimeInterval: 6.5) }
+        if Fixture.keychainReads == Fixture.changeLoginAfterRead { Fixture.tryCLILogin() }
+        if Fixture.keychainReads == Fixture.replaceLockAfterRead {
+            let path = Fixture.storageLock.path
+            _ = rename(path, path + ".previous-owner")
+            _ = mkdir(path, 0o700)
+        }
+        result?.pointee = data as CFData
     }
     return errSecSuccess
 }
@@ -115,6 +148,9 @@ func SecItemUpdate(_ query: CFDictionary, _ attributes: CFDictionary) -> OSStatu
     Fixture.lock.lock()
     defer { Fixture.lock.unlock() }
     Fixture.keychainWrites += 1
+    if let expected = Fixture.expectedLock {
+        Fixture.observedProfileLock = Foundation.FileManager.default.fileExists(atPath: expected.path)
+    }
     if Fixture.failKeychainSave && Fixture.keychainWrites > 1 { return errSecAuthFailed }
     let data = (attributes as NSDictionary)[kSecValueData as String] as! Data
     Fixture.keychain = try! JSONSerialization.jsonObject(with: data) as! [String: Any]
@@ -132,6 +168,7 @@ struct HTTPClient {
     func post(_ url: URL, headers: [String: String], json: [String: Any],
               retry: Bool = true) async -> Result<Response, Failure> {
         Fixture.didRefresh()
+        if Fixture.pendingCLILogin { Fixture.tryCLILogin() }
         switch Fixture.response {
         case .lost:
             return .failure(.transport("synthetic lost response"))
@@ -172,6 +209,8 @@ enum Authentication {
         do {
             switch CommandLine.arguments[1] {
             case "profile-identity": try profileIdentity()
+            case "profile-collision": try profileCollision()
+            case "profile-active-migration": try profileActiveMigration()
             case "lost-response": try await lostResponse()
             case "failed-save": try await failedSave()
             case "temporary-response": try await temporaryResponse()
@@ -179,6 +218,14 @@ enum Authentication {
             case "concurrent-refresh": try await concurrentRefresh()
             case "claude-login-changed": try await claudeLoginChanged()
             case "claude-pending-changed": try await claudePendingChanged()
+            case "claude-preflight-race": try await claudeWriteRace(afterRead: 2)
+            case "claude-save-race": try await claudeWriteRace(afterRead: 3)
+            case "claude-lock-busy": try claudeLockBusy(stale: false)
+            case "claude-lock-stale": try claudeLockBusy(stale: true)
+            case "claude-lock-lost": try claudeLockLost()
+            case "claude-lock-heartbeat": try await claudeLockHeartbeat()
+            case "claude-profile-lock": try claudeProfileLock()
+            case "claude-unsupported-cli": try await claudeUnsupportedCLI()
             default: throw Failure(description: "Unknown scenario")
             }
             print("PASS: \(CommandLine.arguments[1])")
@@ -215,6 +262,53 @@ enum Authentication {
         _ = await CodexProvider().fetch(account)
         _ = await CodexProvider().fetch(account)
         try expect(Fixture.refreshCalls == 1, "Lost response reused refresh token: \(Fixture.refreshCalls) POSTs")
+    }
+
+    private static func profileCollision() throws {
+        let names = ["default", "profile:default", "profile:profile:default", "work"]
+        try Fixture.writeAuth(CodexAuthSwap.baseHome, account: "synthetic-main", refresh: "main-refresh")
+        for name in names {
+            try Fixture.writeAuth(ProfileDirectories.codexRoot.appendingPathComponent(name),
+                                  account: "synthetic-" + name, refresh: "refresh-" + name)
+        }
+        let accounts = RealDiscovery().discover()
+        try expect(accounts.count == names.count + 1, "Imported profiles missing")
+        try expect(Set(accounts.map(\.id)).count == accounts.count, "Imported profiles share an ID")
+        try expect(CodexAuthSwap.profileColumnID("work") == "codex:work", "Existing ordinary profile ID changed")
+        for name in names {
+            let account = accounts.first { $0.profileName == name }!
+            guard case .codexHome(let home) = account.source else { continue }
+            try CodexAuthSwap.activate(columnID: account.id, home: home)
+            try expect(CodexProvider.readAuth(codexHome: CodexAuthSwap.baseHome)?.accountID == "synthetic-" + name,
+                       "Switching imported profile chose another account")
+            try expect(RealDiscovery().discover().filter(\.isActive).count == 1, "Multiple imported profiles active")
+        }
+        try CodexAuthSwap.restoreDefault()
+        let imported = accounts.first { $0.profileName == "profile:default" }!
+        try AccountRemoval.remove(imported)
+        try expect(RealDiscovery().discover().count == names.count, "Wrong number of profiles after removal")
+        try expect(CodexProvider.readAuth(codexHome: CodexAuthSwap.baseHome)?.accountID == "synthetic-main",
+                   "Imported profile removal changed main account")
+    }
+
+    private static func profileActiveMigration() throws {
+        let name = "profile:default"
+        let home = ProfileDirectories.codexRoot.appendingPathComponent(name)
+        try Fixture.writeAuth(CodexAuthSwap.baseHome, account: "synthetic-main", refresh: "main-refresh")
+        try Fixture.writeAuth(home, account: "synthetic-imported", refresh: "imported-refresh")
+        try Fixture.writeAuth(ProfileDirectories.codexRoot.appendingPathComponent("default"),
+                              account: "synthetic-default-profile", refresh: "default-refresh")
+        try CodexAuthSwap.activate(columnID: CodexAuthSwap.profileColumnID(name), home: home)
+        UserDefaults.standard.set("codex:" + name, forKey: "codexAppAccountID")
+        let accounts = RealDiscovery().discover()
+        try expect(accounts.filter(\.isActive).count == 1, "Legacy active ID marks two profiles active")
+        let active = accounts.first(where: \.isActive)!
+        try expect(active.profileName == name, "Legacy active ID migrated to the wrong profile")
+        try CodexAuthSwap.restoreDefault()
+        try expect(CodexProvider.readAuth(codexHome: home)?.accountID == "synthetic-imported",
+                   "Legacy migration saved live credentials to the wrong profile")
+        try expect(CodexProvider.readAuth(codexHome: CodexAuthSwap.baseHome)?.accountID == "synthetic-main",
+                   "Legacy migration did not restore main account")
     }
 
     private static func failedSave() async throws {
@@ -295,5 +389,80 @@ enum Authentication {
         try expect(ClaudeKeychain.parse(Fixture.keychain)?.accessToken == "synthetic-new-login",
                    "Pending save replaced newer CLI login")
         try expect(Fixture.lastAuthorization == "Bearer synthetic-new-login", "Old cached tokens survived CLI login")
+    }
+
+    private static func claudeWriteRace(afterRead: Int) async throws {
+        try Foundation.FileManager.default.createDirectory(at: Fixture.storageDirectory, withIntermediateDirectories: true)
+        Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
+        Fixture.changeLoginAfterRead = afterRead
+        let outcome = await ClaudeProvider().fetch(Fixture.claudeAccount)
+        if Fixture.pendingCLILogin { Fixture.tryCLILogin() }
+        try expect(Fixture.keychainReads >= afterRead, "Target Keychain read did not happen")
+        if case .success = outcome {} else { throw Failure(description: "Usage did not complete") }
+        try expect(!Fixture.pendingCLILogin, "CLI could not acquire the released storage lock")
+        try expect(ClaudeKeychain.parse(Fixture.keychain)?.accessToken == "synthetic-new-login",
+                   "Keychain write replaced a concurrent CLI login after read \(afterRead)")
+    }
+
+    private static func claudeLockBusy(stale: Bool) throws {
+        try Foundation.FileManager.default.createDirectory(at: Fixture.storageLock, withIntermediateDirectories: true)
+        if stale {
+            try Foundation.FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-60)],
+                                                             ofItemAtPath: Fixture.storageLock.path)
+        }
+        Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
+        try expect(!ClaudeKeychain.canWrite(service: Fixture.service), "CLI-owned lock allowed a Keychain write")
+        try expect(Fixture.keychainWrites == 0, "Busy storage lock still wrote credentials")
+        try expect(Foundation.FileManager.default.fileExists(atPath: Fixture.storageLock.path),
+                   "Another process's storage lock was removed")
+    }
+
+    private static func claudeLockLost() throws {
+        try Foundation.FileManager.default.createDirectory(at: Fixture.storageDirectory, withIntermediateDirectories: true)
+        Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
+        Fixture.replaceLockAfterRead = 1
+        try expect(!ClaudeKeychain.canWrite(service: Fixture.service), "Lost storage lock allowed a Keychain write")
+        try expect(Fixture.keychainWrites == 0, "Credentials written after storage lock changed owner")
+        try expect(Foundation.FileManager.default.fileExists(atPath: Fixture.storageLock.path),
+                   "Releasing a lost lock removed the CLI's replacement lock")
+    }
+
+    private static func claudeLockHeartbeat() async throws {
+        Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
+        Fixture.slowKeychainRead = true
+        let started = Date()
+        let writer = Task.detached { ClaudeKeychain.canWrite(service: Fixture.service) }
+        try await Task.sleep(nanoseconds: 5_800_000_000)
+        let attributes = try? Foundation.FileManager.default.attributesOfItem(atPath: Fixture.storageLock.path)
+        let touched = attributes?[.modificationDate] as? Date
+        let writable = await writer.value
+        try expect(touched.map { $0.timeIntervalSince(started) >= 4 } == true,
+                   "Storage heartbeat stopped while Keychain waited")
+        try expect(writable, "Owned storage lock did not allow the write")
+        try expect(!Foundation.FileManager.default.fileExists(atPath: Fixture.storageLock.path),
+                   "Owned storage lock was not released")
+    }
+
+    private static func claudeProfileLock() throws {
+        let profile = ProfileDirectories.claudeRoot.appendingPathComponent("work")
+        try Foundation.FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+        try Foundation.FileManager.default.createDirectory(at: Fixture.storageLock, withIntermediateDirectories: true)
+        let suffix = SHA256.hash(data: Data(profile.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
+        let service = ClaudeKeychain.baseService + "-" + suffix
+        Fixture.expectedLock = profile.appendingPathComponent(".storage-write.lock")
+        Fixture.keychain = Fixture.claudeLogin("work", expired: true)
+        try expect(ClaudeKeychain.canWrite(service: service), "Main profile's lock blocked a separate profile")
+        try expect(Fixture.observedProfileLock, "Extra profile write did not acquire that profile's CLI lock")
+        try expect(Foundation.FileManager.default.fileExists(atPath: Fixture.storageLock.path),
+                   "Extra profile write removed main profile's lock")
+    }
+
+    private static func claudeUnsupportedCLI() async throws {
+        Fixture.cliVersion = "2.0.0"
+        Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
+        let outcome = await ClaudeProvider().fetch(Fixture.claudeAccount)
+        if case .reauth = outcome {} else { throw Failure(description: "Unsupported CLI did not defer renewal to CLI login") }
+        try expect(Fixture.refreshCalls == 0 && Fixture.keychainWrites == 0,
+                   "Unsupported CLI's credentials were renewed or written without a shared protocol")
     }
 }

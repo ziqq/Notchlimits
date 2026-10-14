@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Версия без префикса v, например 1.2.0'
+        description: 'Existing tag version without the v prefix, e.g. 1.2.0'
         required: true
         type: string
 
@@ -16,17 +16,26 @@ permissions:
   checks: read
 
 jobs:
-  release:
-    name: Сборка и публикация релиза
+  preflight:
+    name: Validate release commit
     runs-on: macos-latest
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      sha: ${{ steps.verify.outputs.sha }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          # Нужна вся история и теги: из них собирается список изменений.
+          # Load the release policy from protected main, not the triggering tag.
+          ref: main
           fetch-depth: 0
 
-      - name: Версия и тег
+      - name: Version and tag
         id: meta
         env:
           INPUT_VERSION: ${{ inputs.version }}
@@ -38,21 +47,34 @@ jobs:
             TAG="${GITHUB_REF_NAME}"
             VERSION="${TAG#v}"
           fi
-          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$'; then
-            echo "::error::Версия «${VERSION}» не похожа на семвер"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::Invalid semantic version."
             exit 1
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Релиз ${TAG} (версия ${VERSION})"
+          echo "Release ${TAG} (version ${VERSION})"
 
-      - name: Коммит из main и успешный CI
+      - name: Commit belongs to main and CI passed
+        id: verify
         timeout-minutes: 20
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
         run: bash scripts/verify_release.sh
 
-      - name: Сертификат a.a.ustinoff
+  release:
+    name: Build and publish release
+    needs: preflight
+    runs-on: macos-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Import a.a.ustinoff certificate
         env:
           CERTIFICATE_BASE64: ${{ secrets.APPLE_SIGNING_CERTIFICATE_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
@@ -78,31 +100,35 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
           security list-keychains -d user -s "$KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
 
-      - name: Сборка
+      - name: Build
         env:
-          NOTCHLIMITS_VERSION: ${{ steps.meta.outputs.version }}
+          NOTCHLIMITS_VERSION: ${{ needs.preflight.outputs.version }}
           NOTCHLIMITS_BUILD_NUMBER: ${{ github.run_number }}
           NOTCHLIMITS_CODE_SIGN_IDENTITY: 2A1CD7C372968E01732ED7B26AC5CBB9F4014D33
         run: ./build.sh
 
-      - name: Самопроверка
+      - name: Self-test
         run: NOTCHLIMITS_SELFTEST=1 ./build/Notchlimits.app/Contents/MacOS/Notchlimits
 
-      - name: Версия в бандле совпадает с тегом
+      - name: Bundle version matches tag
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           IN_BUNDLE=$(plutil -extract CFBundleShortVersionString raw build/Notchlimits.app/Contents/Info.plist)
-          test "$IN_BUNDLE" = "${{ steps.meta.outputs.version }}"
+          test "$IN_BUNDLE" = "$RELEASE_VERSION"
 
-      - name: Упаковка
+      - name: Package
         id: package
+        env:
+          NOTCHLIMITS_VERSION: ${{ needs.preflight.outputs.version }}
         run: |
-          NAME="Notchlimits-${{ steps.meta.outputs.version }}.zip"
-          # ditto, а не zip: сохраняет подпись бандла и расширенные атрибуты.
+          NAME="Notchlimits-${NOTCHLIMITS_VERSION}.zip"
+          # ditto preserves the bundle signature and extended attributes.
           ditto -c -k --sequesterRsrc --keepParent build/Notchlimits.app "$NAME"
 
-          # Sparkle обновляется через DMG; ZIP нужен старому установщику.
-          NOTCHLIMITS_VERSION="${{ steps.meta.outputs.version }}" ./scripts/build_dmg.sh
-          DMG="Notchlimits-${{ steps.meta.outputs.version }}.dmg"
+          # Sparkle installs the DMG; keep the ZIP for the previous updater.
+          ./scripts/build_dmg.sh
+          DMG="Notchlimits-${NOTCHLIMITS_VERSION}.dmg"
           mkdir -p build/sparkle
           cp "build/${DMG}" "build/sparkle/${DMG}"
           mv "build/${DMG}" "$DMG"
@@ -115,14 +141,14 @@ jobs:
           echo "dmg_sha=$(shasum -a 256 "$DMG" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "dmg_size=$(du -h "$DMG" | cut -f1 | tr -d ' ')" >> "$GITHUB_OUTPUT"
 
-      - name: Подпись обновления и appcast
+      - name: Sign update and appcast
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-          TAG: ${{ steps.meta.outputs.tag }}
+          TAG: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
           : "${SPARKLE_PRIVATE_KEY:?SPARKLE_PRIVATE_KEY is required}"
-          # Только DMG в appcast; ZIP сохранён для перехода со старого установщика.
+          # Include only the DMG in the appcast; retain the ZIP for migration.
           printf '%s' "$SPARKLE_PRIVATE_KEY" | .build/artifacts/sparkle/Sparkle/bin/generate_appcast \
             --ed-key-file - \
             --download-url-prefix "https://github.com/ziqq/Notchlimits/releases/download/$TAG/" \
@@ -130,10 +156,18 @@ jobs:
           test -s build/sparkle/appcast.xml
           printf '%s' "$SPARKLE_PRIVATE_KEY" | python3 scripts/verify_update.py build/sparkle/appcast.xml
 
-      - name: Заметки к релизу
+      - name: Release notes
         id: notes
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          PACKAGE_DMG: ${{ steps.package.outputs.dmg }}
+          PACKAGE_ZIP: ${{ steps.package.outputs.name }}
+          DMG_SIZE: ${{ steps.package.outputs.dmg_size }}
+          ZIP_SIZE: ${{ steps.package.outputs.size }}
+          DMG_SHA: ${{ steps.package.outputs.dmg_sha }}
+          ZIP_SHA: ${{ steps.package.outputs.sha }}
         run: |
-          TAG="${{ steps.meta.outputs.tag }}"
           PREV=$(git tag --sort=-v:refname | grep -v "^${TAG}$" | head -1 || true)
           if [ -n "$PREV" ]; then
             RANGE="${PREV}..HEAD"
@@ -143,8 +177,7 @@ jobs:
             HEADING="First release"
           fi
 
-          # paste -sd ', ' на macOS чередует разделители по кругу,
-          # поэтому склеиваем одним символом и разводим уже потом.
+          # macOS paste cycles through delimiters; join with commas, then add spaces.
           LOCALES=$(find build/Notchlimits.app/Contents/Resources -maxdepth 1 -name '*.lproj' \
             -exec basename {} .lproj \; | sort | paste -sd ',' - | sed 's/,/, /g')
 
@@ -153,7 +186,7 @@ jobs:
             echo
             echo "## Install"
             echo
-            echo "Open **${{ steps.package.outputs.dmg }}** and drag Notchlimits to Applications,"
+            echo "Open **${PACKAGE_DMG}** and drag Notchlimits to Applications,"
             echo "then clear the quarantine flag and launch it:"
             echo
             echo '```bash'
@@ -167,7 +200,7 @@ jobs:
             echo "Without the DMG, from the archive:"
             echo
             echo '```bash'
-            echo "unzip ${{ steps.package.outputs.name }}"
+            echo "unzip ${PACKAGE_ZIP}"
             echo "mv Notchlimits.app /Applications/"
             echo "xattr -dr com.apple.quarantine /Applications/Notchlimits.app"
             echo "open /Applications/Notchlimits.app"
@@ -180,8 +213,8 @@ jobs:
             echo "The app runs in the background with no Dock icon. Hover over the notch or"
             echo "press ⌘P to open it; right-click the panel for settings and Quit."
             echo
-            # Раздел версии из CHANGELOG.md — от «## X.Y.Z - ДД/ММ/ГГГГ» до следующего «## ».
-            CHANGES=$(awk -v v="${{ steps.meta.outputs.version }}" '
+            # Extract this version's CHANGELOG section up to the next heading.
+            CHANGES=$(awk -v v="$RELEASE_VERSION" '
               $0 == "## " v || index($0, "## " v " ") == 1 { on = 1; next }
               on && /^## / { exit }
               on { print }
@@ -199,10 +232,10 @@ jobs:
             echo
             echo "| | |"
             echo "| --- | --- |"
-            echo "| Version | ${{ steps.meta.outputs.version }} |"
+            echo "| Version | ${RELEASE_VERSION} |"
             echo "| Minimum macOS | 13.0 |"
-            echo "| DMG size | ${{ steps.package.outputs.dmg_size }} |"
-            echo "| Archive size | ${{ steps.package.outputs.size }} |"
+            echo "| DMG size | ${DMG_SIZE} |"
+            echo "| Archive size | ${ZIP_SIZE} |"
             echo "| UI languages | ${LOCALES} |"
             echo "| App signature | Apple Development: a.a.ustinoff |"
             echo "| Update signature | Sparkle Ed25519 |"
@@ -213,38 +246,40 @@ jobs:
             echo "## Checksums"
             echo
             echo '```'
-            echo "SHA-256  ${{ steps.package.outputs.dmg_sha }}"
-            echo "         ${{ steps.package.outputs.dmg }}"
-            echo "SHA-256  ${{ steps.package.outputs.sha }}"
-            echo "         ${{ steps.package.outputs.name }}"
+            echo "SHA-256  ${DMG_SHA}"
+            echo "         ${PACKAGE_DMG}"
+            echo "SHA-256  ${ZIP_SHA}"
+            echo "         ${PACKAGE_ZIP}"
             echo '```'
           } > NOTES.md
 
           cat NOTES.md
 
-      # При ручном запуске тега ещё нет — ставим его на тот же коммит,
-      # который только что собрали, чтобы релиз и артефакт не разъехались.
-      - name: Тег для ручного запуска
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.meta.outputs.tag }}" -m "Notchlimits ${{ steps.meta.outputs.version }}"
-          git push origin "${{ steps.meta.outputs.tag }}"
-
-      - name: Публикация
+      - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+          RELEASE_SHA: ${{ needs.preflight.outputs.sha }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          PACKAGE_DMG: ${{ steps.package.outputs.dmg }}
+          PACKAGE_ZIP: ${{ steps.package.outputs.name }}
         run: |
-          gh release create "${{ steps.meta.outputs.tag }}" \
-            "${{ steps.package.outputs.dmg }}" \
-            "${{ steps.package.outputs.name }}" \
+          # Recheck the remote tag immediately before publication.
+          git fetch --quiet --no-tags origin "refs/tags/$RELEASE_TAG"
+          if [ "$(git rev-parse 'FETCH_HEAD^{commit}')" != "$RELEASE_SHA" ]; then
+            echo "::error::Remote tag $RELEASE_TAG does not match the build commit."
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" \
+            "$PACKAGE_DMG" \
+            "$PACKAGE_ZIP" \
             build/sparkle/appcast.xml \
             SHA256SUMS.txt \
-            --title "Notchlimits ${{ steps.meta.outputs.version }}" \
+            --verify-tag \
+            --title "Notchlimits $RELEASE_VERSION" \
             --notes-file NOTES.md
 
-      - name: Очистка временной связки ключей
+      - name: Remove temporary signing keychain
         if: always()
         run: |
           rm -f "$RUNNER_TEMP/notchlimits-signing.p12"
