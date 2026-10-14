@@ -40,6 +40,12 @@ enum ClaudeKeychain {
         case saved, changed, failed
     }
 
+    /// The secureStorage.mutate protocol was verified in Claude Code 2.1.278.
+    /// Leave credential writes to older or unidentified CLI versions.
+    static var supportsStorageLock: Bool {
+        BinaryLocator.claudeVersion(fallback: "0").compare("2.1.278", options: .numeric) != .orderedAscending
+    }
+
     /// Имена всех generic password с нашим префиксом.
     static func services() -> [String] { items().map(\.service) }
 
@@ -164,14 +170,14 @@ enum ClaudeKeychain {
 
     /// Записать обновлённые токены обратно в запись CLI.
     ///
-    /// Читаем прямо перед записью и накладываем изменения на свежий JSON:
-    /// между нашим чтением и записью CLI мог сам обновить токен, и затирать
-    /// его целой старой копией нельзя. Если токены уже сменились, ответ
-    /// старого запроса не пишем. Все незнакомые поля сохраняются.
-    /// Блокирующий вызов — только вне главного потока.
+    /// Hold the CLI's shared storage lock from read to write and merge into the
+    /// current JSON. Discard a stale response if the login changed, preserving
+    /// unknown fields. This blocking operation must run off the main thread.
     @discardableResult
     static func save(service: String, tokens: ClaudeOAuth.Tokens,
                      expected: Credentials) -> SaveResult {
+        guard let storageLock = storageLock(service: service) else { return .failed }
+        defer { storageLock.release() }
         guard var json = rawItem(service: service) else { return .failed }
         guard let current = parse(json), current.hasSameTokens(as: expected),
               var oauth = json["claudeAiOauth"] as? [String: Any] else { return .changed }
@@ -193,6 +199,7 @@ enum ClaudeKeychain {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service
         ]
+        guard storageLock.isHeld else { return .failed }
         return SecItemUpdate(query as CFDictionary,
                              [kSecValueData as String: data] as CFDictionary) == errSecSuccess
             ? .saved : .failed
@@ -203,13 +210,30 @@ enum ClaudeKeychain {
     /// потом не записать, в Keychain останется мёртвый, а CLI, наткнувшись
     /// на него, обнулит вход. Блокирующий вызов — только вне главного потока.
     static func canWrite(service: String) -> Bool {
+        guard let storageLock = storageLock(service: service) else { return false }
+        defer { storageLock.release() }
         guard let data = rawData(service: service) else { return false }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service
         ]
+        guard storageLock.isHeld else { return false }
         return SecItemUpdate(query as CFDictionary,
                              [kSecValueData as String: data] as CFDictionary) == errSecSuccess
+    }
+
+    private static func storageLock(service: String) -> ClaudeStorageLock? {
+        guard supportsStorageLock else { return nil }
+        let directory: URL
+        if service == baseService {
+            directory = ProfileDirectories.home.appendingPathComponent(".claude")
+        } else if let profile = configDirectory(for: service) {
+            directory = profile
+        } else {
+            // The CLI's secureStorage directory for this record is unknown.
+            return nil
+        }
+        return try? ClaudeStorageLock(directory: directory)
     }
 
     /// Сырой blob записи Keychain — для копий keychain→keychain (свитчер

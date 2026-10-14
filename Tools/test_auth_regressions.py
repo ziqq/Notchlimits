@@ -17,6 +17,7 @@ class AuthenticationRegressions(unittest.TestCase):
         flags = () if "expected: Credentials" in keychain else ("-DLEGACY_CLAUDE_SAVE",)
         cls.executable = compile_fixture(cls.build.name, "Authentication", [
             "Model/Models.swift", "Model/Account.swift", "Core/JWT.swift",
+            *(["Core/ClaudeStorageLock.swift"] if (SOURCES / "Core/ClaudeStorageLock.swift").exists() else []),
             "Core/CodexAuthSwap.swift", "Core/AccountRemoval.swift",
             "Providers/ClaudeKeychain.swift", "Providers/ClaudeOAuth.swift",
             "Providers/ClaudeProvider.swift", "Providers/CodexOAuth.swift",
@@ -31,6 +32,12 @@ class AuthenticationRegressions(unittest.TestCase):
 
     def test_default_profile_has_its_own_identity(self):
         self.check_scenario("profile-identity")
+
+    def test_imported_profile_names_do_not_collide(self):
+        self.check_scenario("profile-collision")
+
+    def test_legacy_active_imported_profile_keeps_its_credentials(self):
+        self.check_scenario("profile-active-migration")
 
     def test_lost_refresh_response_is_not_retried(self):
         self.check_scenario("lost-response")
@@ -52,3 +59,27 @@ class AuthenticationRegressions(unittest.TestCase):
 
     def test_claude_pending_save_does_not_replace_a_new_login(self):
         self.check_scenario("claude-pending-changed")
+
+    def test_claude_preflight_does_not_replace_a_concurrent_cli_login(self):
+        self.check_scenario("claude-preflight-race")
+
+    def test_claude_save_does_not_replace_a_concurrent_cli_login(self):
+        self.check_scenario("claude-save-race")
+
+    def test_claude_defers_writes_while_cli_owns_the_storage_lock(self):
+        self.check_scenario("claude-lock-busy")
+
+    def test_claude_does_not_steal_a_stale_storage_lock(self):
+        self.check_scenario("claude-lock-stale")
+
+    def test_claude_does_not_write_or_release_another_lock_owner(self):
+        self.check_scenario("claude-lock-lost")
+
+    def test_claude_maintains_storage_lock_during_keychain_wait(self):
+        self.check_scenario("claude-lock-heartbeat")
+
+    def test_claude_profiles_use_separate_storage_locks(self):
+        self.check_scenario("claude-profile-lock")
+
+    def test_claude_does_not_renew_with_an_unsupported_cli(self):
+        self.check_scenario("claude-unsupported-cli")
