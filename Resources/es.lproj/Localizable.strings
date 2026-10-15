@@ -157,6 +157,7 @@
 // Ошибки в колонке
 "error.network" = "error de red";
 "error.keychainWrite" = "sin escritura en el llavero";
+"error.pendingCredentials" = "Las credenciales aún se están guardando. Desbloquea el llavero e intenta salir de nuevo.";
 "error.timeout" = "tiempo agotado";
 "error.noHTTP" = "sin respuesta HTTP";
 "error.http" = "HTTP %d";
@@ -177,3 +178,4 @@
 "appswitch.error.notInstalled" = "%@ no está instalado.";
 "appswitch.error.didNotQuit" = "%@ no se cerró: ciérralo e inténtalo de nuevo.";
 "appswitch.error.noAuth" = "Esta cuenta no tiene sesión de Codex (auth.json). Vuelve a iniciar sesión.";
+"appswitch.error.inProgress" = "Ya hay un cambio de cuenta en curso.";

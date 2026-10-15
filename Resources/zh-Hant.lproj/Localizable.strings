@@ -157,6 +157,7 @@
 // Ошибки в колонке
 "error.network" = "網路錯誤";
 "error.keychainWrite" = "無法寫入鑰匙圈";
+"error.pendingCredentials" = "憑證仍在儲存。請解鎖鑰匙圈後重試結束。";
 "error.timeout" = "逾時";
 "error.noHTTP" = "沒有 HTTP 回應";
 "error.http" = "HTTP %d";
@@ -177,3 +178,4 @@
 "appswitch.error.notInstalled" = "未安裝 %@。";
 "appswitch.error.didNotQuit" = "%@ 未結束——請關閉後再試一次。";
 "appswitch.error.noAuth" = "此帳號沒有 Codex 登入資訊 (auth.json)。請重新登入。";
+"appswitch.error.inProgress" = "正在切換帳號。";

@@ -131,6 +131,10 @@ enum ClaudeKeychain {
     /// Сырой JSON записи. Нужен отдельно, чтобы при записи сохранить поля,
     /// про которые мы не знаем: их пишет CLI, и терять их нельзя.
     private static func rawItem(service: String, interactive: Bool = true) -> [String: Any]? {
+        readItem(service: service, interactive: interactive).json
+    }
+
+    private static func readItem(service: String, interactive: Bool) -> (json: [String: Any]?, status: OSStatus) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -138,11 +142,9 @@ enum ClaudeKeychain {
             kSecReturnData as String: true
         ]
         var result: CFTypeRef?
-        guard access(interactive: interactive, { SecItemCopyMatching(query as CFDictionary, &result) }) == errSecSuccess,
-              let data = result as? Data,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        return json
+        let status = access(interactive: interactive) { SecItemCopyMatching(query as CFDictionary, &result) }
+        let json = (result as? Data).flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
+        return (status == errSecSuccess ? json : nil, status)
     }
 
     private static let interactionLock = NSLock()
@@ -196,7 +198,8 @@ enum ClaudeKeychain {
                      expected: Credentials, renewalLock: ClaudeRefreshLock? = nil) -> SaveResult {
         guard let storageLock = storageLock(service: service) else { return .failed }
         defer { storageLock.release() }
-        guard var json = rawItem(service: service, interactive: renewalLock == nil) else { return .failed }
+        let item = readItem(service: service, interactive: renewalLock == nil)
+        guard var json = item.json else { return item.status == errSecItemNotFound ? .changed : .failed }
         guard let current = parse(json), current.hasSameTokens(as: expected),
               var oauth = json["claudeAiOauth"] as? [String: Any] else { return .changed }
 
@@ -304,13 +307,26 @@ enum ClaudeKeychain {
 
     /// Папка профиля, соответствующая записи (нужна для подписи и меню).
     static func configDirectory(for service: String) -> URL? {
-        guard service != baseService else { return nil }
+        profileLocation(for: service)?.directory
+    }
+
+    /// Preserve the exact config string: the CLI hashes it before resolving paths.
+    static func configPath(for service: String) -> String? {
+        guard let path = profileLocation(for: service)?.path,
+              service == baseService + "-" + String(sha256Hex(path).prefix(8)) else { return nil }
+        return path
+    }
+
+    private static func profileLocation(for service: String) -> (directory: URL, path: String)? {
+        guard service.hasPrefix(baseService + "-") else { return nil }
         let suffix = String(service.dropFirst(baseService.count + 1))
         guard !suffix.isEmpty else { return nil }
         for directory in ProfileDirectories.claudeProfiles() {
             for variant in pathVariants(directory) {
                 let hex = sha256Hex(variant)
-                if hex.hasPrefix(suffix) || suffix.hasPrefix(hex) { return directory }
+                if hex.hasPrefix(suffix) || suffix.hasPrefix(hex) {
+                    return (directory, variant.precomposedStringWithCanonicalMapping)
+                }
             }
         }
         return nil
@@ -338,7 +354,13 @@ enum ProfileDirectories {
     static var claudeRoot: URL { home.appendingPathComponent(".claude-profiles") }
     static var codexRoot: URL { home.appendingPathComponent(".codex-profiles") }
 
-    static func claudeProfiles() -> [URL] { subdirectories(of: claudeRoot) }
+    static func claudeProfiles() -> [URL] {
+        // Foundation enumeration can reject a symlink as its root. Enumerate
+        // the physical directory but retain the original CLI config spelling.
+        subdirectories(of: claudeRoot.resolvingSymlinksInPath()).map {
+            claudeRoot.appendingPathComponent($0.lastPathComponent, isDirectory: true)
+        }
+    }
     static func codexProfiles() -> [URL] { subdirectories(of: codexRoot) }
 
     static func subdirectories(of root: URL) -> [URL] {

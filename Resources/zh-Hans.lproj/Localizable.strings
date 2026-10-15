@@ -157,6 +157,7 @@
 // Ошибки в колонке
 "error.network" = "网络错误";
 "error.keychainWrite" = "无法写入钥匙串";
+"error.pendingCredentials" = "凭据仍在保存。请解锁钥匙串后重试退出。";
 "error.timeout" = "超时";
 "error.noHTTP" = "没有 HTTP 响应";
 "error.http" = "HTTP %d";
@@ -177,3 +178,4 @@
 "appswitch.error.notInstalled" = "未安装 %@。";
 "appswitch.error.didNotQuit" = "%@ 未退出——请关闭后重试。";
 "appswitch.error.noAuth" = "此账户没有 Codex 登录信息 (auth.json)。请重新登录。";
+"appswitch.error.inProgress" = "正在切换账号。";

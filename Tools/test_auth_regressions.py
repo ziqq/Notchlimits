@@ -17,6 +17,9 @@ class AuthenticationRegressions(unittest.TestCase):
         # The assertion is identical for both revisions; only the old save API differs.
         keychain = (SOURCES / "Providers/ClaudeKeychain.swift").read_text()
         flags = () if "expected: Credentials" in keychain else ("-DLEGACY_CLAUDE_SAVE",)
+        provider = (SOURCES / "Providers/ClaudeProvider.swift").read_text()
+        if "func prepareForTermination(" in provider:
+            flags += ("-DCLAUDE_TERMINATION_DRAIN",)
         cls.executable = compile_fixture(cls.build.name, "Authentication", [
             "Model/Models.swift", "Model/Account.swift", "Core/JWT.swift",
             *(["Core/ClaudeStorageLock.swift"] if (SOURCES / "Core/ClaudeStorageLock.swift").exists() else []),
@@ -191,3 +194,73 @@ class AuthenticationRegressions(unittest.TestCase):
 
     def test_claude_bash_integration_preserves_existing_login_and_interactive_startup(self):
         self.check_scenario("claude-switch-bash")
+
+    def test_rotated_claude_credentials_reach_keychain_before_cli_can_refresh(self):
+        self.check_scenario("claude-persist-before-unlock")
+
+    def test_normal_quit_cannot_abandon_unsaved_claude_rotation(self):
+        self.check_scenario("claude-quit-pending")
+
+    def test_cli_selection_preserves_trailing_slash_service_identity(self):
+        self.check_scenario("claude-switch-trailing-path")
+
+    def test_cli_selection_preserves_resolved_path_service_identity(self):
+        self.check_scenario("claude-switch-resolved-path")
+
+    def test_failed_desktop_launch_restores_previous_cli_selection(self):
+        self.check_scenario("claude-launch-failed")
+
+    def test_failed_first_desktop_launch_preserves_default_cli_routing(self):
+        self.check_scenario("claude-first-launch-failed")
+
+    def test_failed_desktop_only_switch_leaves_cli_unchanged(self):
+        self.check_scenario("claude-desktop-only-failed")
+
+    def test_concurrent_account_switches_are_serialized(self):
+        self.check_scenario("claude-switch-concurrent")
+
+    def test_abandoned_notchlimits_oauth_locks_recover_without_running_claude(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-crash-recovery-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            crashed = run_fixture(self.executable, "claude-crash-owner", root)
+            self.assertEqual(crashed.returncode, 0, crashed.stdout + crashed.stderr)
+            recovered = run_fixture(self.executable, "claude-recover-owner", root)
+            self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
+
+    def test_live_notchlimits_lock_owner_survives_stale_mtime(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-live-owner-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            owner = subprocess.Popen([str(self.executable), "claude-live-owner", str(root)],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                self.assertEqual(owner.stdout.readline().strip(), "READY")
+                for path in (root / ".claude/.oauth_refresh.lock", root / ".claude.lock"):
+                    os.utime(path, (1, 1))
+                result = run_fixture(self.executable, "claude-preserve-owner", root)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            finally:
+                owner.kill()
+                owner.communicate(timeout=5)
+
+    def test_abandoned_record_does_not_authorize_removing_a_replacement_lock(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-replacement-owner-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            crashed = run_fixture(self.executable, "claude-crash-owner", root)
+            self.assertEqual(crashed.returncode, 0, crashed.stdout + crashed.stderr)
+            lock = root / ".claude/.oauth_refresh.lock"
+            lock.rename(lock.with_name(".previous-owner"))
+            lock.mkdir()
+            result = run_fixture(self.executable, "claude-preserve-owner", root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_cli_selection_preserves_symlink_path_service_identity(self):
+        self.check_scenario("claude-switch-aliased-path")
+
+    def test_normal_quit_waits_for_inflight_claude_refresh_persistence(self):
+        self.check_scenario("claude-quit-inflight")
+
+    def test_cli_selection_rejects_service_hash_its_native_cli_cannot_reproduce(self):
+        self.check_scenario("claude-switch-short-hash")
+
+    def test_disabling_cli_switching_before_desktop_opens_preserves_cli_account(self):
+        self.check_scenario("claude-switch-toggle-off")

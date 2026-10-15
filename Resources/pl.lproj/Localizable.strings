@@ -157,6 +157,7 @@
 // Ошибки в колонке
 "error.network" = "błąd sieci";
 "error.keychainWrite" = "brak zapisu do pęku kluczy";
+"error.pendingCredentials" = "Dane logowania są nadal zapisywane. Odblokuj pęk kluczy i spróbuj ponownie zamknąć aplikację.";
 "error.timeout" = "przekroczono czas";
 "error.noHTTP" = "brak odpowiedzi HTTP";
 "error.http" = "HTTP %d";
@@ -177,3 +178,4 @@
 "appswitch.error.notInstalled" = "%@ nie jest zainstalowany.";
 "appswitch.error.didNotQuit" = "%@ się nie zamknął — zamknij go i spróbuj ponownie.";
 "appswitch.error.noAuth" = "To konto nie ma logowania do Codex (auth.json). Zaloguj się ponownie.";
+"appswitch.error.inProgress" = "Przełączanie konta już trwa.";

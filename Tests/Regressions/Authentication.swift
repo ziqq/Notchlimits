@@ -38,6 +38,32 @@ private enum Fixture {
     static var loginBeforeOAuth = false
     static var refreshInput = ""
     static var loginAtWriteBoundary = false
+    static var cliClearedRevokedGrant = false
+    static var desktopFails = false
+    static var holdDesktopCompletion = false
+    static var desktopCalls = 0
+    static var desktopArguments: [String] = []
+    @MainActor static var desktopCompletion: ((Result<Void, Error>) -> Void)?
+
+    static func writes() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return keychainWrites
+    }
+
+    static func tryNativeRefresh() {
+        guard mkdir(oauthLock.path, 0o700) == 0 else { return }
+        defer { _ = rmdir(oauthLock.path) }
+        guard mkdir(legacyLock.path, 0o700) == 0 else { return }
+        defer { _ = rmdir(legacyLock.path) }
+        guard mkdir(storageLock.path, 0o700) == 0 else { return }
+        defer { _ = rmdir(storageLock.path) }
+        if ClaudeKeychain.parse(keychain)?.refreshToken == "synthetic-refresh-old-login" {
+            // Model native eRn after invalid_grant for the already rotated grant.
+            keychain["claudeAiOauth"] = ["accessToken": "", "refreshToken": "", "expiresAt": 0]
+            cliClearedRevokedGrant = true
+        }
+    }
 
     static var oauthLock: URL { oauthDirectory.appendingPathComponent(".oauth_refresh.lock") }
     static var legacyLock: URL { URL(fileURLWithPath: oauthDirectory.resolvingSymlinksInPath().path + ".lock") }
@@ -170,7 +196,17 @@ enum DesktopApp {
     static func url(bundleID: String) -> URL? { nil }
     @MainActor static func restart(bundleID: String, appName: String,
                                  prepare: () throws -> NSWorkspace.OpenConfiguration,
-                                 completion: @escaping (Result<Void, Error>) -> Void) {}
+                                 completion: @escaping (Result<Void, Error>) -> Void) {
+        Fixture.desktopCalls += 1
+        do {
+            Fixture.desktopArguments = try prepare().arguments
+            if Fixture.holdDesktopCompletion {
+                Fixture.desktopCompletion = completion
+            } else {
+                completion(Fixture.desktopFails ? .failure(Failure(description: "Synthetic Desktop launch failure")) : .success(()))
+            }
+        } catch { completion(.failure(error)) }
+    }
 }
 protocol AccountDiscovery { func discover() -> [DiscoveredAccount] }
 enum BinaryLocator { static func claudeVersion(fallback: String) -> String { Fixture.cliVersion }
@@ -346,6 +382,22 @@ enum Authentication {
             case "claude-switch-off": try claudeSwitchCLI(enabled: false)
             case "claude-switch-main": try claudeSwitchCLI(enabled: true, primary: true)
             case "claude-switch-bash": try claudeSwitchBash()
+            case "claude-persist-before-unlock": try await claudePersistBeforeUnlock()
+            case "claude-quit-pending": try await claudeQuitPending()
+            case "claude-quit-inflight": try await claudeQuitInFlight()
+            case "claude-switch-trailing-path": try claudeExactPath(symlink: false)
+            case "claude-switch-resolved-path": try claudeExactPath(symlink: true)
+            case "claude-switch-aliased-path": try claudeExactPath(symlink: true, resolved: false)
+            case "claude-switch-short-hash": try claudeRejectShortHash()
+            case "claude-launch-failed": try claudeLaunchFailed(first: false, enabled: true)
+            case "claude-first-launch-failed": try claudeLaunchFailed(first: true, enabled: true)
+            case "claude-desktop-only-failed": try claudeLaunchFailed(first: false, enabled: false)
+            case "claude-switch-concurrent": try claudeConcurrentSwitch()
+            case "claude-switch-toggle-off": try claudeToggleOffDuringSwitch()
+            case "claude-crash-owner": try claudeCrashOwner(live: false)
+            case "claude-live-owner": try claudeCrashOwner(live: true)
+            case "claude-recover-owner": try await claudeRecoverOwner(expectBusy: false)
+            case "claude-preserve-owner": try await claudeRecoverOwner(expectBusy: true)
             default: throw Failure(description: "Unknown scenario")
             }
             print("PASS: \(CommandLine.arguments[1])")
@@ -570,10 +622,13 @@ enum Authentication {
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.failKeychainSave = true
         let provider = ClaudeProvider()
-        _ = await provider.fetch(Fixture.claudeAccount)
-        try expect(Fixture.keychainWrites > 1, "Fixture did not attempt to save rotated tokens")
+        let renewal = Task { await provider.fetch(Fixture.claudeAccount) }
+        try await waitForFailedSave()
+        Fixture.lock.lock()
         Fixture.keychain = Fixture.claudeLogin("new-login", expired: false)
         Fixture.failKeychainSave = false
+        Fixture.lock.unlock()
+        _ = await renewal.value
         _ = await provider.fetch(Fixture.claudeAccount)
         try expect(Fixture.refreshCalls == 1, "Pending save made another refresh request")
         try expect(ClaudeKeychain.parse(Fixture.keychain)?.accessToken == "synthetic-new-login",
@@ -803,6 +858,18 @@ enum Authentication {
         try expect(Foundation.FileManager.default.fileExists(atPath: Fixture.storageDirectory.appendingPathComponent(".oauth_refresh.lock").path), "Profile renewal removed main lock")
     }
 
+    @MainActor
+    private static func switchSuccessfully(_ account: DiscoveredAccount) throws -> NSWorkspace.OpenConfiguration {
+        var result: Result<Void, Error>?
+        ClaudeAppSwitcher().switchTo(account) { result = $0 }
+        guard let result else { throw Failure(description: "Fixture did not complete Desktop launch") }
+        try result.get()
+        let config = NSWorkspace.OpenConfiguration()
+        config.arguments = Fixture.desktopArguments
+        return config
+    }
+
+    @MainActor
     private static func claudeSwitchCLI(enabled: Bool?, primary: Bool = false) throws {
         if let enabled { UserDefaults.standard.set(enabled, forKey: "switchClaudeCLI") }
         let startup = Fixture.root.appendingPathComponent(".zshrc")
@@ -818,7 +885,7 @@ enum Authentication {
             try Foundation.FileManager.default.createDirectory(at: pointer.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data("/previous/selection\n".utf8).write(to: pointer)
         }
-        let config = try ClaudeAppSwitcher().prepare(account)
+        let config = try switchSuccessfully(account)
         try expect(config.arguments.first?.hasPrefix("--user-data-dir=") == true, "Claude Desktop session switching changed")
         let selected = try? String(contentsOf: pointer, encoding: .utf8)
         if enabled == false {
@@ -826,7 +893,7 @@ enum Authentication {
             try expect((try String(contentsOf: startup)) == "# Existing user configuration\nexport USER_SETTING=preserved\n", "Desktop-only switch installed shell integration")
         } else {
             try expect(selected == (primary ? "\n" : profile.path + "\n"), "CLI selection did not follow Desktop by default")
-            _ = try ClaudeAppSwitcher().prepare(account)
+            _ = try switchSuccessfully(account)
             let content = try String(contentsOf: startup)
             try expect(content.hasPrefix("# Existing user configuration\nexport USER_SETTING=preserved\n"), "Shell integration replaced user configuration")
             try expect(content.components(separatedBy: "# Notchlimits Claude profile selection").count == 2, "Shell integration duplicated startup entries")
@@ -834,19 +901,221 @@ enum Authentication {
         try expect(Fixture.keychainWrites == 0 && Fixture.refreshCalls == 0, "Switching profiles copied or renewed credentials")
     }
 
+    @MainActor
     private static func claudeSwitchBash() throws {
         Fixture.shell = "/bin/bash"
         let profile = Fixture.root.appendingPathComponent(".profile")
         let bashrc = Fixture.root.appendingPathComponent(".bashrc")
         try Data("# Existing login profile\n".utf8).write(to: profile)
         try Data("# Existing interactive config\n".utf8).write(to: bashrc)
-        _ = try ClaudeAppSwitcher().prepare(Fixture.claudeAccount)
+        _ = try switchSuccessfully(Fixture.claudeAccount)
         try expect(!Foundation.FileManager.default.fileExists(atPath: Fixture.root.appendingPathComponent(".bash_profile").path),
                    "Creating .bash_profile shadowed the user's existing .profile")
         try expect((try String(contentsOf: profile)).hasPrefix("# Existing login profile\n"), "Login shell configuration was replaced")
         let interactive = try String(contentsOf: bashrc)
         try expect(interactive.hasPrefix("# Existing interactive config\n"), "Interactive shell configuration was replaced")
         try expect(interactive.contains("# Notchlimits Claude profile selection"), "Non-login bash did not load CLI routing")
+    }
+
+    private static func waitForFailedSave() async throws {
+        for _ in 0..<200 {
+            if Fixture.writes() >= 2 { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        throw Failure(description: "Fixture did not reach the post-refresh save failure")
+    }
+
+    private static func claudePersistBeforeUnlock() async throws {
+        Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
+        Fixture.failKeychainSave = true
+        let provider = ClaudeProvider()
+        let renewal = Task { await provider.fetch(Fixture.claudeAccount) }
+        try await waitForFailedSave()
+        // Let the old implementation finish and release its leases.
+        try await Task.sleep(nanoseconds: 120_000_000)
+        Fixture.lock.lock()
+        Fixture.tryNativeRefresh()
+        let cleared = Fixture.cliClearedRevokedGrant
+        Fixture.failKeychainSave = false
+        Fixture.lock.unlock()
+        let outcome = await renewal.value
+        try expect(!cleared, "CLI consumed the obsolete grant before rotated credentials were saved")
+        if case .success = outcome {} else { throw Failure(description: "Failed persistence did not recover within the same renewal") }
+        try expect(Fixture.refreshCalls == 1, "Persistence recovery spent another refresh token")
+        try expect(ClaudeKeychain.parse(Fixture.keychain)?.refreshToken == "synthetic-rotated", "Rotated credentials were not saved")
+        try expect(!Fixture.holdsOAuthLocks, "Successful persistence leaked OAuth locks")
+    }
+
+    private static func claudeQuitPending() async throws {
+        Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
+        Fixture.failKeychainSave = true
+        let provider = ClaudeProvider()
+        let renewal = Task { await provider.fetch(Fixture.claudeAccount) }
+        try await waitForFailedSave()
+        #if CLAUDE_TERMINATION_DRAIN
+        let ready = await provider.prepareForTermination(timeout: 0.2)
+        #else
+        // The old app has no termination hook and permits immediate termination.
+        let ready = true
+        #endif
+        Fixture.lock.lock()
+        Fixture.failKeychainSave = false
+        Fixture.lock.unlock()
+        _ = await renewal.value
+        try expect(!ready, "Normal termination abandoned an unsaved rotated grant")
+        #if CLAUDE_TERMINATION_DRAIN
+        let drained = await provider.prepareForTermination(timeout: 1)
+        try expect(drained, "Normal termination stayed blocked after credentials became durable")
+        #endif
+        try expect(Fixture.refreshCalls == 1, "Termination drain started another refresh request")
+    }
+
+    private static func claudeQuitInFlight() async throws {
+        Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
+        Fixture.response = .delayedRenewed
+        let provider = ClaudeProvider()
+        let renewal = Task { await provider.fetch(Fixture.claudeAccount) }
+        for _ in 0..<200 {
+            Fixture.lock.lock()
+            let started = Fixture.refreshCalls > 0
+            Fixture.lock.unlock()
+            if started { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        #if CLAUDE_TERMINATION_DRAIN
+        let ready = await provider.prepareForTermination(timeout: 1)
+        #else
+        let ready = true
+        #endif
+        Fixture.lock.lock()
+        let durableAtQuit = ClaudeKeychain.parse(Fixture.keychain)?.refreshToken == "synthetic-rotated"
+        Fixture.lock.unlock()
+        _ = await renewal.value
+        try expect(ready && durableAtQuit, "Normal termination left a refresh POST in flight before its tokens were saved")
+    }
+
+    @MainActor
+    private static func claudeExactPath(symlink: Bool, resolved: Bool = true) throws {
+        if symlink {
+            let physical = Fixture.root.appendingPathComponent("physical-profiles")
+            try Foundation.FileManager.default.createDirectory(at: physical, withIntermediateDirectories: true)
+            try Foundation.FileManager.default.createSymbolicLink(at: ProfileDirectories.claudeRoot, withDestinationURL: physical)
+        }
+        let directory = ProfileDirectories.claudeRoot.appendingPathComponent("work")
+        try Foundation.FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let selected = symlink ? (resolved ? directory.resolvingSymlinksInPath().path : directory.path) : directory.path + "/"
+        let suffix = SHA256.hash(data: Data(selected.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
+        let service = Fixture.service + "-" + suffix
+        let account = DiscoveredAccount(id: "claude:" + service, provider: .claude, profileName: "work",
+                                        source: .claudeKeychain(service: service, configDir: directory))
+        _ = try switchSuccessfully(account)
+        let pointer = DesktopApp.supportDirectory.appendingPathComponent("claude-cli/selected-profile")
+        let emitted = try String(contentsOf: pointer).trimmingCharacters(in: .newlines)
+        let actualHash = SHA256.hash(data: Data(emitted.precomposedStringWithCanonicalMapping.utf8))
+            .map { String(format: "%02x", $0) }.joined().prefix(8)
+        try expect(actualHash == suffix, "CLI selection changed the Keychain service of the selected account")
+        try expect(emitted == selected, "CLI selection lost the exact matching path variant")
+    }
+
+    @MainActor
+    private static func claudeRejectShortHash() throws {
+        let directory = ProfileDirectories.claudeRoot.appendingPathComponent("work")
+        try Foundation.FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let suffix = SHA256.hash(data: Data(directory.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(1)
+        let service = Fixture.service + "-" + suffix
+        let account = DiscoveredAccount(id: "claude:" + service, provider: .claude, profileName: "work",
+                                        source: .claudeKeychain(service: service, configDir: directory))
+        var refused = false
+        do { _ = try switchSuccessfully(account) } catch { refused = true }
+        try expect(refused, "CLI accepted a service identity its native path hash cannot reproduce")
+    }
+
+    @MainActor
+    private static func claudeLaunchFailed(first: Bool, enabled: Bool) throws {
+        UserDefaults.standard.set(enabled, forKey: "switchClaudeCLI")
+        UserDefaults.standard.set("previous-desktop", forKey: "currentClaudeAppAccount")
+        let pointer = DesktopApp.supportDirectory.appendingPathComponent("claude-cli/selected-profile")
+        if !first {
+            try Foundation.FileManager.default.createDirectory(at: pointer.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("/previous/cli/profile\n".utf8).write(to: pointer)
+        }
+        var account = Fixture.claudeAccount
+        var target = "\n"
+        if first {
+            let profile = ProfileDirectories.claudeRoot.appendingPathComponent("work")
+            try Foundation.FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+            let suffix = SHA256.hash(data: Data(profile.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
+            let service = Fixture.service + "-" + suffix
+            account = DiscoveredAccount(id: "claude:" + service, provider: .claude, profileName: "work",
+                                        source: .claudeKeychain(service: service, configDir: profile))
+            target = profile.path + "\n"
+        }
+        Fixture.desktopFails = true
+        var result: Result<Void, Error>?
+        ClaudeAppSwitcher().switchTo(account) { result = $0 }
+        if case .failure? = result {} else { throw Failure(description: "Desktop launch failure was not reported") }
+        let selected = try? String(contentsOf: pointer)
+        try expect(selected == (first ? "\n" : "/previous/cli/profile\n"), "Failed Desktop launch changed CLI account or broke first-use CLI routing")
+        try expect(UserDefaults.standard.string(forKey: "currentClaudeAppAccount") == "previous-desktop", "Failed launch committed the Desktop marker")
+        Fixture.desktopFails = false
+        ClaudeAppSwitcher().switchTo(account) { result = $0 }
+        if case .success? = result {} else { throw Failure(description: "Failure left subsequent account switches blocked") }
+        try expect((try? String(contentsOf: pointer)) == (enabled ? target : "/previous/cli/profile\n"), "Successful switch ignored the CLI setting")
+    }
+
+    @MainActor
+    private static func claudeConcurrentSwitch() throws {
+        let pointer = DesktopApp.supportDirectory.appendingPathComponent("claude-cli/selected-profile")
+        try Foundation.FileManager.default.createDirectory(at: pointer.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("/previous/cli/profile\n".utf8).write(to: pointer)
+        Fixture.holdDesktopCompletion = true
+        var first: Result<Void, Error>?
+        var second: Result<Void, Error>?
+        ClaudeAppSwitcher().switchTo(Fixture.claudeAccount) { first = $0 }
+        try expect((try String(contentsOf: pointer)) == "/previous/cli/profile\n", "Pending Desktop launch exposed an uncommitted CLI selection")
+        ClaudeAppSwitcher().switchTo(Fixture.claudeAccount) { second = $0 }
+        try expect(Fixture.desktopCalls == 1, "Concurrent switches entered Desktop restart twice")
+        if case .failure? = second {} else { throw Failure(description: "Concurrent switch was not rejected") }
+        Fixture.desktopCompletion?(.success(()))
+        if case .success? = first {} else { throw Failure(description: "Original switch did not complete") }
+    }
+
+    @MainActor
+    private static func claudeToggleOffDuringSwitch() throws {
+        let pointer = DesktopApp.supportDirectory.appendingPathComponent("claude-cli/selected-profile")
+        try Foundation.FileManager.default.createDirectory(at: pointer.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("/previous/cli/profile\n".utf8).write(to: pointer)
+        Fixture.holdDesktopCompletion = true
+        var result: Result<Void, Error>?
+        ClaudeAppSwitcher().switchTo(Fixture.claudeAccount) { result = $0 }
+        UserDefaults.standard.set(false, forKey: "switchClaudeCLI")
+        Fixture.desktopCompletion?(.success(()))
+        if case .success? = result {} else { throw Failure(description: "Desktop switch did not complete") }
+        try expect((try String(contentsOf: pointer)) == "/previous/cli/profile\n", "Disabling CLI switching during Desktop launch still changed the CLI account")
+    }
+
+    private static func claudeCrashOwner(live: Bool) throws {
+        guard let lease = ClaudeKeychain.refreshLock(service: Fixture.service) else {
+            throw Failure(description: "Could not acquire fixture OAuth locks")
+        }
+        withExtendedLifetime(lease) {
+            FileHandle.standardOutput.write(Data("READY\n".utf8))
+            if live { _ = FileHandle.standardInput.readData(ofLength: 1) }
+            _exit(0) // Simulate abrupt process death without releasing the directories.
+        }
+    }
+
+    private static func claudeRecoverOwner(expectBusy: Bool) async throws {
+        Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
+        let outcome = await ClaudeProvider().fetch(Fixture.claudeAccount)
+        if expectBusy {
+            try expect(Fixture.refreshCalls == 0 && Fixture.keychainWrites == 0, "Recovery stole an active or replacement owner's lock")
+            try expect(Fixture.holdsOAuthLocks, "Busy owner lost its OAuth locks")
+        } else {
+            if case .success = outcome {} else { throw Failure(description: "Abandoned Notchlimits OAuth locks permanently blocked renewal") }
+            try expect(Fixture.refreshCalls == 1, "Recovered profile did not renew exactly once")
+            try expect(!Fixture.holdsOAuthLocks, "Recovered OAuth locks were not released")
+        }
     }
 
     private static func claudeUnsupportedCLI() async throws {

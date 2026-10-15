@@ -157,6 +157,7 @@
 // Ошибки в колонке
 "error.network" = "erro de rede";
 "error.keychainWrite" = "sem gravação no Keychain";
+"error.pendingCredentials" = "As credenciais ainda estão sendo salvas. Desbloqueie as Chaves e tente sair novamente.";
 "error.timeout" = "tempo esgotado";
 "error.noHTTP" = "sem resposta HTTP";
 "error.http" = "HTTP %d";
@@ -177,3 +178,4 @@
 "appswitch.error.notInstalled" = "%@ não está instalado.";
 "appswitch.error.didNotQuit" = "%@ não foi fechado — feche-o e tente novamente.";
 "appswitch.error.noAuth" = "Esta conta não tem login no Codex (auth.json). Entre novamente.";
+"appswitch.error.inProgress" = "Uma troca de conta já está em andamento.";

@@ -157,6 +157,7 @@
 // Ошибки в колонке
 "error.network" = "Netzwerkfehler";
 "error.keychainWrite" = "kein Schreibzugriff auf den Schlüsselbund";
+"error.pendingCredentials" = "Anmeldedaten werden noch gespeichert. Entsperre den Schlüsselbund und versuche erneut zu beenden.";
 "error.timeout" = "Zeitüberschreitung";
 "error.noHTTP" = "keine HTTP-Antwort";
 "error.http" = "HTTP %d";
@@ -177,3 +178,4 @@
 "appswitch.error.notInstalled" = "%@ ist nicht installiert.";
 "appswitch.error.didNotQuit" = "%@ wurde nicht beendet – schließe die App und versuche es erneut.";
 "appswitch.error.noAuth" = "Dieses Konto hat keine Codex-Anmeldung (auth.json). Melde dich erneut an.";
+"appswitch.error.inProgress" = "Ein Kontowechsel läuft bereits.";

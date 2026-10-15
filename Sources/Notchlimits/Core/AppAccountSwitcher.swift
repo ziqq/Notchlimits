@@ -24,10 +24,13 @@ protocol AppAccountSwitcher {
     /// Приложение уже закрыто: подготовить аккаунт и вернуть параметры запуска.
     func prepare(_ account: DiscoveredAccount) throws -> NSWorkspace.OpenConfiguration
     /// Приложение открылось под аккаунтом — запомнить это.
-    func commit(_ account: DiscoveredAccount)
+    func commit(_ account: DiscoveredAccount) throws
+    func cancel()
 }
 
 extension AppAccountSwitcher {
+    func cancel() {}
+
     var isInstalled: Bool { DesktopApp.url(bundleID: bundleID) != nil }
 
     /// Закрыть приложение, подготовить аккаунт, открыть заново. `completion`
@@ -35,11 +38,36 @@ extension AppAccountSwitcher {
     @MainActor
     func switchTo(_ account: DiscoveredAccount,
                   completion: @escaping (Result<Void, Error>) -> Void) {
+        guard !AppSwitchState.inProgress.contains(account.provider) else {
+            completion(.failure(AppSwitchState.Busy()))
+            return
+        }
+        AppSwitchState.inProgress.insert(account.provider)
         DesktopApp.restart(bundleID: bundleID, appName: appName,
                            prepare: { try prepare(account) }) { result in
-            if case .success = result { commit(account) }
-            completion(result)
+            defer { AppSwitchState.inProgress.remove(account.provider) }
+            switch result {
+            case .success:
+                do {
+                    try commit(account)
+                    completion(result)
+                } catch {
+                    cancel()
+                    completion(.failure(error))
+                }
+            case .failure:
+                cancel()
+                completion(result)
+            }
         }
+    }
+}
+
+@MainActor
+private enum AppSwitchState {
+    static var inProgress: Set<Provider> = []
+    struct Busy: LocalizedError {
+        var errorDescription: String? { L.t("appswitch.error.inProgress") }
     }
 }
 
@@ -54,7 +82,8 @@ func appAccountSwitcher(for provider: Provider) -> any AppAccountSwitcher {
 
 /// Claude Desktop: своя папка данных (`--user-data-dir`) на колонку. Первый
 /// свич на аккаунт открывает приложение в пустой папке — там нужно войти.
-struct ClaudeAppSwitcher: AppAccountSwitcher {
+final class ClaudeAppSwitcher: AppAccountSwitcher {
+    private var cliChange: ClaudeCLISelection.Prepared?
     let bundleID = "com.anthropic.claudefordesktop"
     let appName = "Claude"
 
@@ -79,15 +108,21 @@ struct ClaudeAppSwitcher: AppAccountSwitcher {
     func prepare(_ account: DiscoveredAccount) throws -> NSWorkspace.OpenConfiguration {
         let dir = Self.root.appendingPathComponent(Self.key(for: account.id), isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        if ClaudeCLISelection.isEnabled { try ClaudeCLISelection.activate(account) }
+        if ClaudeCLISelection.isEnabled { cliChange = try ClaudeCLISelection.stage(account) }
         let config = NSWorkspace.OpenConfiguration()
         config.arguments = ["--user-data-dir=\(dir.path)"]
         return config
     }
 
-    func commit(_ account: DiscoveredAccount) {
-        UserDefaults.standard.set(Self.key(for: account.id), forKey: Self.currentKey)
+    func commit(_ account: DiscoveredAccount) throws {
+        // Desktop has opened: keep its marker truthful even if an external
+        // filesystem change prevents publishing the prepared CLI selection.
+        defer { UserDefaults.standard.set(Self.key(for: account.id), forKey: Self.currentKey) }
+        if ClaudeCLISelection.isEnabled { try cliChange?.commit() }
+        cliChange = nil
     }
+
+    func cancel() { cliChange = nil }
 }
 
 // MARK: - Codex

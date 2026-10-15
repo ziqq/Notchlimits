@@ -157,6 +157,7 @@
 // Ошибки в колонке
 "error.network" = "network error";
 "error.keychainWrite" = "no Keychain write access";
+"error.pendingCredentials" = "Credentials are still being saved. Unlock the Keychain and try quitting again.";
 "error.timeout" = "timeout";
 "error.noHTTP" = "no HTTP response";
 "error.http" = "HTTP %d";
@@ -177,3 +178,4 @@
 "appswitch.error.notInstalled" = "%@ isn't installed.";
 "appswitch.error.didNotQuit" = "%@ didn't quit — close it and try again.";
 "appswitch.error.noAuth" = "This account has no Codex sign-in (auth.json). Sign in to it again.";
+"appswitch.error.inProgress" = "An account switch is already in progress.";
