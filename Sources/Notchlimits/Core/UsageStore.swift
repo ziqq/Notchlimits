@@ -47,6 +47,7 @@ final class UsageStore: ObservableObject {
     init(providers: [Provider: UsageProvider], discovery: AccountDiscovery) {
         self.providers = providers
         self.discovery = discovery
+        DefaultsMigration.migrateCodexProfileSettingsIfNeeded()
         hidden = Set(UserDefaults.standard.stringArray(forKey: "hiddenColumns") ?? [])
         customNames = UserDefaults.standard.dictionary(forKey: "columnNames") as? [String: String] ?? [:]
     }

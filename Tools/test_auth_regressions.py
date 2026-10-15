@@ -19,6 +19,7 @@ class AuthenticationRegressions(unittest.TestCase):
             "Model/Models.swift", "Model/Account.swift", "Core/JWT.swift",
             *(["Core/ClaudeStorageLock.swift"] if (SOURCES / "Core/ClaudeStorageLock.swift").exists() else []),
             "Core/CodexAuthSwap.swift", "Core/AccountRemoval.swift",
+            "Core/DefaultsMigration.swift", "Core/UsageStore.swift", "Core/UsageCache.swift",
             "Providers/ClaudeKeychain.swift", "Providers/ClaudeOAuth.swift",
             "Providers/ClaudeProvider.swift", "Providers/CodexOAuth.swift",
             "Providers/CodexProvider.swift", "Providers/RealDiscovery.swift",
@@ -38,6 +39,18 @@ class AuthenticationRegressions(unittest.TestCase):
 
     def test_legacy_active_imported_profile_keeps_its_credentials(self):
         self.check_scenario("profile-active-migration")
+
+    def test_imported_profile_keeps_hidden_state_and_custom_name(self):
+        self.check_scenario("profile-settings-migration")
+
+    def test_profile_settings_preserve_current_values_and_user_edits(self):
+        self.check_scenario("profile-settings-existing")
+
+    def test_profile_settings_preserve_both_owners_of_legacy_collision(self):
+        self.check_scenario("profile-settings-collision")
+
+    def test_profile_settings_do_not_cascade_through_nested_prefixes(self):
+        self.check_scenario("profile-settings-nested")
 
     def test_lost_refresh_response_is_not_retried(self):
         self.check_scenario("lost-response")

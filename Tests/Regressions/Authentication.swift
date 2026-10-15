@@ -98,15 +98,28 @@ enum ProcessInfo {
     }
 }
 
-enum UserDefaults {
-    static let standard = MemoryDefaults()
-    final class MemoryDefaults {
-        private var values: [String: Any] = [:]
-        func string(forKey key: String) -> String? { values[key] as? String }
-        func dictionary(forKey key: String) -> [String: Any]? { values[key] as? [String: Any] }
-        func set(_ value: Any?, forKey key: String) { values[key] = value }
-        func removeObject(forKey key: String) { values[key] = nil }
-    }
+final class UserDefaults {
+    static let standard = UserDefaults()
+    private var values: [String: Any] = [:]
+    func string(forKey key: String) -> String? { values[key] as? String }
+    func stringArray(forKey key: String) -> [String]? { values[key] as? [String] }
+    func dictionary(forKey key: String) -> [String: Any]? { values[key] as? [String: Any] }
+    func data(forKey key: String) -> Data? { values[key] as? Data }
+    func bool(forKey key: String) -> Bool { values[key] as? Bool ?? false }
+    func persistentDomain(forName name: String) -> [String: Any]? { nil }
+    func set(_ value: Any?, forKey key: String) { values[key] = value }
+    func removeObject(forKey key: String) { values[key] = nil }
+}
+
+// History and notification delivery do not participate in settings migration.
+struct UsageHistory {
+    func purge(columnID: String) {}
+    func record(columnID: String, window: LimitWindow, now: Date) -> [Double] { [] }
+    static func projection(samples: [Double], current: Double, resetsAt: Date?, now: Date) -> Date? { nil }
+}
+struct ThresholdNotifier {
+    func purge(columnID: String) {}
+    func evaluate(column: AccountColumn) {}
 }
 
 enum DesktopApp { static var supportDirectory: URL { Fixture.root.appendingPathComponent("support") } }
@@ -211,6 +224,10 @@ enum Authentication {
             case "profile-identity": try profileIdentity()
             case "profile-collision": try profileCollision()
             case "profile-active-migration": try profileActiveMigration()
+            case "profile-settings-migration": try profileSettingsMigration()
+            case "profile-settings-existing": try profileSettingsExisting()
+            case "profile-settings-collision": try profileSettingsCollision()
+            case "profile-settings-nested": try profileSettingsNested()
             case "lost-response": try await lostResponse()
             case "failed-save": try await failedSave()
             case "temporary-response": try await temporaryResponse()
@@ -309,6 +326,76 @@ enum Authentication {
                    "Legacy migration saved live credentials to the wrong profile")
         try expect(CodexProvider.readAuth(codexHome: CodexAuthSwap.baseHome)?.accountID == "synthetic-main",
                    "Legacy migration did not restore main account")
+    }
+
+    @MainActor
+    private static func profileSettingsMigration() throws {
+        let name = "profile:work"
+        let home = ProfileDirectories.codexRoot.appendingPathComponent(name)
+        try Fixture.writeAuth(home, account: "synthetic-imported", refresh: "imported-refresh")
+        UserDefaults.standard.set(["codex:" + name], forKey: "hiddenColumns")
+        UserDefaults.standard.set(["codex:" + name: "Private account"], forKey: "columnNames")
+        let store = UsageStore(providers: [:], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        try expect(store.columns.count == 1, "Imported profile missing")
+        try expect(store.visibleColumns.isEmpty, "Previously hidden imported profile became visible")
+        try expect(store.columns[0].customName == "Private account", "Imported profile's custom name was lost")
+    }
+
+    @MainActor
+    private static func profileSettingsExisting() throws {
+        let name = "profile:work"
+        let home = ProfileDirectories.codexRoot.appendingPathComponent(name)
+        let currentID = CodexAuthSwap.profileColumnID(name)
+        try Fixture.writeAuth(home, account: "synthetic-imported", refresh: "imported-refresh")
+        UserDefaults.standard.set(["codex:" + name], forKey: "hiddenColumns")
+        UserDefaults.standard.set(["codex:" + name: "Legacy name", currentID: "Current name",
+                                   "claude:unrelated": "Unrelated name"], forKey: "columnNames")
+        let first = UsageStore(providers: [:], discovery: RealDiscovery())
+        first.rediscover(force: true)
+        try expect(first.columns[0].customName == "Current name", "Current custom name was overwritten")
+        first.setCustomName("Edited name", for: currentID)
+        first.setHidden(currentID, hidden: false)
+        let restarted = UsageStore(providers: [:], discovery: RealDiscovery())
+        restarted.rediscover(force: true)
+        try expect(restarted.visibleColumns.count == 1, "Repeated migration hid a profile the user unhid")
+        try expect(restarted.columns[0].customName == "Edited name", "Repeated migration replaced the user's edit")
+        try expect(restarted.customNames["claude:unrelated"] == "Unrelated name", "Unrelated provider settings changed")
+    }
+
+    @MainActor
+    private static func profileSettingsCollision() throws {
+        for name in ["default", "profile:default"] {
+            try Fixture.writeAuth(ProfileDirectories.codexRoot.appendingPathComponent(name),
+                                  account: "synthetic-" + name, refresh: "refresh-" + name)
+        }
+        let legacyID = "codex:profile:default"
+        UserDefaults.standard.set([legacyID], forKey: "hiddenColumns")
+        UserDefaults.standard.set([legacyID: "Shared legacy name"], forKey: "columnNames")
+        let store = UsageStore(providers: [:], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        try expect(store.columns.count == 2, "Colliding legacy profiles missing")
+        try expect(store.visibleColumns.isEmpty, "Legacy collision revealed a hidden account")
+        try expect(store.columns.allSatisfy { $0.customName == "Shared legacy name" },
+                   "Migration removed settings still owned by the default profile")
+    }
+
+    @MainActor
+    private static func profileSettingsNested() throws {
+        for name in ["profile:work", "profile:profile:work"] {
+            try Fixture.writeAuth(ProfileDirectories.codexRoot.appendingPathComponent(name),
+                                  account: "synthetic-" + name, refresh: "refresh-" + name)
+        }
+        UserDefaults.standard.set(["codex:profile:work"], forKey: "hiddenColumns")
+        UserDefaults.standard.set(["codex:profile:work": "First profile"], forKey: "columnNames")
+        let store = UsageStore(providers: [:], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        try expect(store.visibleColumns.map(\.profileName) == ["profile:profile:work"],
+                   "Nested ID migration copied hidden state to another profile")
+        try expect(store.columns.first { $0.profileName == "profile:work" }?.customName == "First profile",
+                   "Original profile's custom name was not migrated")
+        try expect(store.columns.first { $0.profileName == "profile:profile:work" }?.customName == nil,
+                   "Nested ID migration copied another profile's name")
     }
 
     private static func failedSave() async throws {
