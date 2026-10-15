@@ -68,6 +68,8 @@
 "menu.hotKey.standard" = "Padrão (⌘P)";
 "menu.hotKey.disable" = "Desativar";
 "menu.loginItem" = "Abrir ao iniciar sessão";
+"menu.switchCLI" = "Alternar CLI";
+"menu.switchCLI.help" = "Alternar também o Claude Code. Abra um novo terminal após a primeira troca. Sessões CLI em execução mantêm sua conta.";
 "menu.about" = "Sobre o Notchlimits";
 "menu.quit" = "Sair do Notchlimits";
 "menu.telemetry" = "Mostrar telemetria";
@@ -160,6 +162,8 @@
 "error.http" = "HTTP %d";
 "error.parse" = "resposta ilegível";
 "error.unknownSource" = "origem desconhecida";
+"error.cliProfile" = "Não foi possível identificar a pasta do perfil CLI.";
+"error.cliShell" = "A alternância de CLI suporta zsh e bash. Abra um novo terminal após a primeira troca.";
 "error.noProvider" = "sem provedor";
 "error.unreachable" = "rede indisponível";
 

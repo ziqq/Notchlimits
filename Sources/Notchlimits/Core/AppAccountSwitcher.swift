@@ -79,6 +79,7 @@ struct ClaudeAppSwitcher: AppAccountSwitcher {
     func prepare(_ account: DiscoveredAccount) throws -> NSWorkspace.OpenConfiguration {
         let dir = Self.root.appendingPathComponent(Self.key(for: account.id), isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if ClaudeCLISelection.isEnabled { try ClaudeCLISelection.activate(account) }
         let config = NSWorkspace.OpenConfiguration()
         config.arguments = ["--user-data-dir=\(dir.path)"]
         return config

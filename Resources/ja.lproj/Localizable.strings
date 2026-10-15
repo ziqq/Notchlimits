@@ -68,6 +68,8 @@
 "menu.hotKey.standard" = "デフォルト (⌘P)";
 "menu.hotKey.disable" = "オフにする";
 "menu.loginItem" = "ログイン時に起動";
+"menu.switchCLI" = "CLIを切り替える";
+"menu.switchCLI.help" = "Claude Codeも切り替えます。初回切替後に新しいターミナルを開いてください。実行中のCLIセッションは元のアカウントを維持します。";
 "menu.about" = "Notchlimits について";
 "menu.quit" = "Notchlimitsを終了";
 "menu.telemetry" = "テレメトリーを表示";
@@ -160,6 +162,8 @@
 "error.http" = "HTTP %d";
 "error.parse" = "応答を解析できません";
 "error.unknownSource" = "不明なソース";
+"error.cliProfile" = "CLIプロファイルのフォルダを特定できません。";
+"error.cliShell" = "CLI切替はzshとbashに対応しています。初回切替後に新しいターミナルを開いてください。";
 "error.noProvider" = "プロバイダなし";
 "error.unreachable" = "ネットワークに接続できません";
 

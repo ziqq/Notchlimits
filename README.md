@@ -71,7 +71,15 @@ On a notch-less screen the panel sits top-center; collapsed, it's a small pill w
 
 ![Collapsed panel](docs/collapsed.png)
 
-The context menu is separated into groups: **About Notchlimits** (native panel with the running version); **Refresh** (force-poll, bypassing timers and backoff), **Settings**, **Check for updates…** (signed updates through Sparkle); **Claude account**, **Codex account** (switch the app's account or **Add account…**), **Remove account** (with a confirmation — deletes the account's login and profile); **Hide column**, **Rename column**, **Show hidden columns**; **Quit Notchlimits**. **Settings** contains **Show telemetry**, **Keep Mac awake**, **Keep display on**, **Launch at login** (`SMAppService`), and **Hotkey**.
+The context menu is separated into groups: **About Notchlimits** (native panel with the running version); **Refresh** (force-poll, bypassing timers and backoff), **Settings**, **Check for updates…** (signed updates through Sparkle); **Claude account**, **Codex account** (switch the app's account or **Add account…**), **Remove account** (with a confirmation — deletes the account's login and profile); **Hide column**, **Rename column**, **Show hidden columns**; **Quit Notchlimits**. **Settings** contains **Show telemetry**, **Keep Mac awake**, **Keep display on**, **Launch at login** (`SMAppService`), **Switch CLI**, and **Hotkey**.
+
+### Claude account switching and renewal
+
+**Settings → Switch CLI** is on by default: switching a Claude Desktop account also selects its existing Claude Code profile. Turn it off to switch Desktop alone; the CLI keeps its previous selection. This does not change Codex switching.
+
+On the first CLI switch, Notchlimits appends a source line to `.zshrc` (for bash, `.bashrc` and its existing login startup file) without replacing existing contents. Open a new terminal once to load it. The shell function reads the selected profile on each new `claude` invocation, including when Notchlimits is closed. Running CLI sessions keep their account, and an explicitly set `CLAUDE_CONFIG_DIR` or `CLAUDE_SECURESTORAGE_CONFIG_DIR` takes precedence. A missing selected profile fails instead of silently using another account. Other shells are not supported for CLI switching; Desktop-only switching remains available.
+
+Sleeping Claude profiles renew directly over HTTP using their existing credentials, without another Notchlimits login or a background Claude process. With Claude Code 2.1.278 or later, renewal holds both native OAuth locks from the credential reread through persistence, maintains their heartbeats and takes the storage lock for each write. A busy or lost lock defers renewal. Keychain operations inside the critical section cannot request user interaction. Network errors and regional/proxy 403 responses preserve the login. This coordinates cooperating clients through the CLI's lease protocol; it does not provide an atomic Keychain compare-and-swap against arbitrary external writers or a process suspended beyond the leases.
 
 ## Column names
 
@@ -119,12 +127,7 @@ Below the windows, whatever extra numbers the endpoint returns are listed: credi
 
 ## Switching the active account
 
-Beyond monitoring several accounts as columns, the panel can switch which account the plain `codex` / `claude` command uses — like [codex-account-switcher](https://github.com/liuzhao1225/codex-account-switcher), for both providers, from the notch. Right-click → **Active Codex account →** / **Active Claude account →**:
-
-- **Save current** snapshots the active account into a local library.
-- Picking a saved account (checkmark marks the active one) confirms, then makes it active. The current account is always saved first, so nothing is lost.
-
-**Codex** swaps `~/.codex/auth.json` (file-based, reversible). **Claude** copies between Keychain entries (keychain→keychain, no tokens on disk) and updates the email in `~/.claude.json`; switching there prompts for Keychain access once. Heads-up: the active Claude credential is read by any running Claude Code session, so don't switch the account you're using in a live session — if any `claude` process is running, the confirmation flags the count and defaults to Cancel.
+Right-click → **Claude account** or **Codex account** to choose a Desktop account. Claude Desktop keeps a separate Electron data directory per account. **Switch CLI** controls whether the same action selects an existing Claude Code profile, as described above. Codex continues to swap only `~/.codex/auth.json`, preserving its projects and threads.
 
 ## Multiple accounts
 
@@ -171,16 +174,10 @@ Content-Type: application/json
 Three details that matter:
 
 - **The refresh token rotates.** When the response carries a new one, the old one stops working, so the result is written back to the Keychain entry — not writing it back would break the CLI's own login. The write merges into a *freshly read* entry, preserving `subscriptionType`, `rateLimitTier` and every field the panel doesn't know about.
-- **The Keychain is written only when the refresh token actually rotated.** If the server didn't issue a new refresh token, the old one is still valid and nothing is written — the new access token just lives in memory until the next refresh. This matters because every Keychain write pops a macOS authorization prompt; skipping the needless ones keeps them rare (grant it once with **Always Allow**).
+- **Renewed credentials are saved when the server returns a refresh token.** Otherwise the new access token stays in memory. A write preflight runs before the HTTP refresh; if a quiet Keychain update is not allowed, renewal is deferred before spending the refresh token.
 - **A 401 marks that exact token as rejected**, so the next cycle renews instead of re-reading the same dead token from the Keychain. If the entry meanwhile holds a different token, the CLI refreshed first and that one is used.
 
-Renewal happens only on expiry, never preemptively. Automatic Claude renewal
-requires Claude Code 2.1.278 or newer: Keychain writes share its per-profile
-`.storage-write.lock` protocol, including a heartbeat during macOS authorization
-dialogs. A busy or lost lock defers the write. Older or unidentified CLI versions
-retain usage polling with valid tokens and require CLI login after expiry.
-Extra profiles have independent locks, so a busy main profile does not block
-renewal of another profile.
+Renewal happens on expiry or after a usage 401. Automatic Claude renewal requires Claude Code 2.1.278 or newer and the native OAuth and storage locks described above. Profiles have independent locks. Older or unidentified CLI versions retain usage polling with valid tokens and require CLI login after expiry.
 
 **Codex.** Auth from `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`); `apikey` mode can't reach the usage endpoint — ChatGPT login is required. Token lifetime from the JWT `exp` claim, email for the column subtitle from `id_token`.
 
@@ -197,14 +194,14 @@ User-Agent: codex_cli_rs/<version>
 
 - Each account polls independently every 3 minutes, staggered 4 s apart — not in a burst.
 - Expanding the panel refreshes only columns older than two minutes.
-- 10 s request timeout, one retry on 5xx and network errors.
+- 10 s request timeout; usage requests retry once on 5xx and network errors. Refresh POSTs do not retry automatically.
 - **HTTP 429 isn't an error.** Backoff comes from `Retry-After`, else grows 2 → 4 → 8 → 15 min; last data stays with an age note.
 - Last successful values are cached in `UserDefaults` and shown right after a restart.
 - A threshold notification fires once per window and re-arms when `resets_at` changes (a new window began). When a window that reached ≥ 50 % rolls over, a "limit reset" notification fires — you were throttled, now you're free.
 
 ## Permissions
 
-- **Keychain.** On the first Claude refresh macOS asks for access to `Claude Code-credentials` — click **Always Allow**. The token is cached in memory until `expiresAt` or a 401, so Keychain isn't hit each cycle.
+- **Keychain.** On the first Claude refresh macOS asks for access to `Claude Code-credentials` — click **Always Allow**. The Keychain is reread each cycle to detect a new CLI login; valid tokens avoid unnecessary refresh requests. Writes inside renewal never display a dialog.
 - **Signing.** Release builds use the pinned Apple Development certificate for `a.a.ustinoff@gmail.com`. `build.sh` selects that identity, including for Sparkle helpers. Local builds without it use ad-hoc signing. Moving from ad-hoc or another identity may require a fresh Keychain grant; subsequent releases keep the same certificate requirement.
 - **Notifications.** Requested on first launch.
 - **No Accessibility needed** — the hotkey uses Carbon `RegisterEventHotKey`, and login runs via a `.command` file, not AppleScript.

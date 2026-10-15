@@ -68,6 +68,8 @@
 "menu.hotKey.standard" = "Domyślny (⌘P)";
 "menu.hotKey.disable" = "Wyłącz";
 "menu.loginItem" = "Uruchamiaj przy logowaniu";
+"menu.switchCLI" = "Przełączaj CLI";
+"menu.switchCLI.help" = "Przełączaj też Claude Code. Po pierwszej zmianie otwórz nowy terminal. Uruchomione sesje CLI zachowują swoje konto.";
 "menu.about" = "O programie Notchlimits";
 "menu.quit" = "Zakończ Notchlimits";
 "menu.telemetry" = "Pokaż telemetrię";
@@ -160,6 +162,8 @@
 "error.http" = "HTTP %d";
 "error.parse" = "nieczytelna odpowiedź";
 "error.unknownSource" = "nieznane źródło";
+"error.cliProfile" = "Nie można ustalić folderu profilu CLI.";
+"error.cliShell" = "Przełączanie CLI obsługuje zsh i bash. Po pierwszej zmianie otwórz nowy terminal.";
 "error.noProvider" = "brak dostawcy";
 "error.unreachable" = "sieć niedostępna";
 

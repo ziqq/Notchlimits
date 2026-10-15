@@ -68,6 +68,8 @@
 "menu.hotKey.standard" = "Default (⌘P)";
 "menu.hotKey.disable" = "Turn off";
 "menu.loginItem" = "Launch at login";
+"menu.switchCLI" = "Switch CLI";
+"menu.switchCLI.help" = "Also switch Claude Code. Open a new terminal after the first switch. Running CLI sessions keep their account.";
 "menu.about" = "About Notchlimits";
 "menu.quit" = "Quit Notchlimits";
 "menu.telemetry" = "Show telemetry";
@@ -160,6 +162,8 @@
 "error.http" = "HTTP %d";
 "error.parse" = "could not parse response";
 "error.unknownSource" = "unknown source";
+"error.cliProfile" = "The CLI profile directory could not be identified.";
+"error.cliShell" = "CLI switching supports zsh and bash. Open a new terminal after the first switch.";
 "error.noProvider" = "no provider";
 "error.unreachable" = "network unavailable";
 

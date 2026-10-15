@@ -45,7 +45,7 @@ ORDER = [
         "menu.refresh", "menu.addClaude", "menu.addCodex", "menu.hideColumn",
         "menu.noColumns", "menu.renameColumn", "menu.removeColumn", "menu.showHidden",
         "menu.hotKey", "menu.hotKey.change", "menu.hotKey.standard", "menu.hotKey.disable",
-        "menu.loginItem", "menu.about", "menu.quit", "menu.telemetry", "menu.settings",
+        "menu.loginItem", "menu.switchCLI", "menu.switchCLI.help", "menu.about", "menu.quit", "menu.telemetry", "menu.settings",
     ]),
     ("Удаление аккаунта", [
         "remove.title", "remove.body", "remove.delete", "remove.failed.title",
@@ -82,7 +82,7 @@ ORDER = [
                      "notification.reset.title", "notification.reset.body"]),
     ("Ошибки в колонке", [
         "error.network", "error.keychainWrite", "error.timeout", "error.noHTTP", "error.http",
-        "error.parse", "error.unknownSource", "error.noProvider",
+        "error.parse", "error.unknownSource", "error.cliProfile", "error.cliShell", "error.noProvider",
         "error.unreachable",
     ]),
     ("Переключение приложений", [
@@ -1449,6 +1449,45 @@ _SETTINGS = {
 }
 for _lang, _text in _SETTINGS.items():
     T[_lang]["menu.settings"] = _text
+
+# CLI routing is independent from desktop session storage.
+_SWITCH_CLI = {
+    "en": ("Switch CLI", "The CLI profile directory could not be identified.", "CLI switching supports zsh and bash. Open a new terminal after the first switch."),
+    "ru": ("Переключать CLI", "Не удалось определить папку профиля CLI.", "Переключение CLI поддерживает zsh и bash. После первого переключения откройте новый терминал."),
+    "uk": ("Перемикати CLI", "Не вдалося визначити папку профілю CLI.", "Перемикання CLI підтримує zsh і bash. Після першого перемикання відкрийте новий термінал."),
+    "de": ("CLI wechseln", "Das CLI-Profilverzeichnis wurde nicht gefunden.", "CLI-Wechsel unterstützt zsh und bash. Öffne nach dem ersten Wechsel ein neues Terminal."),
+    "es": ("Cambiar CLI", "No se pudo identificar la carpeta del perfil CLI.", "El cambio de CLI admite zsh y bash. Abre una nueva terminal tras el primer cambio."),
+    "fr": ("Changer la CLI", "Le dossier du profil CLI est introuvable.", "Le changement de CLI prend en charge zsh et bash. Ouvrez un nouveau terminal après le premier changement."),
+    "it": ("Cambia CLI", "Impossibile identificare la cartella del profilo CLI.", "Il cambio CLI supporta zsh e bash. Apri un nuovo terminale dopo il primo cambio."),
+    "pl": ("Przełączaj CLI", "Nie można ustalić folderu profilu CLI.", "Przełączanie CLI obsługuje zsh i bash. Po pierwszej zmianie otwórz nowy terminal."),
+    "pt-BR": ("Alternar CLI", "Não foi possível identificar a pasta do perfil CLI.", "A alternância de CLI suporta zsh e bash. Abra um novo terminal após a primeira troca."),
+    "tr": ("CLI değiştir", "CLI profil klasörü belirlenemedi.", "CLI geçişi zsh ve bash destekler. İlk geçişten sonra yeni bir terminal açın."),
+    "ja": ("CLIを切り替える", "CLIプロファイルのフォルダを特定できません。", "CLI切替はzshとbashに対応しています。初回切替後に新しいターミナルを開いてください。"),
+    "ko": ("CLI 전환", "CLI 프로필 폴더를 찾을 수 없습니다.", "CLI 전환은 zsh와 bash를 지원합니다. 첫 전환 후 새 터미널을 여세요."),
+    "zh-Hans": ("切换CLI", "无法确定CLI配置目录。", "CLI切换支持zsh和bash。首次切换后请打开新终端。"),
+    "zh-Hant": ("切換CLI", "無法確定CLI設定目錄。", "CLI切換支援zsh和bash。首次切換後請開啟新終端機。"),
+}
+for _lang, _values in _SWITCH_CLI.items():
+    T[_lang].update(zip(("menu.switchCLI", "error.cliProfile", "error.cliShell"), _values))
+
+_SWITCH_CLI_HELP = {
+    "en": "Also switch Claude Code. Open a new terminal after the first switch. Running CLI sessions keep their account.",
+    "ru": "Также переключать Claude Code. После первого переключения откройте новый терминал. Запущенные CLI-сессии сохраняют свой аккаунт.",
+    "uk": "Також перемикати Claude Code. Після першого перемикання відкрийте новий термінал. Запущені CLI-сеанси зберігають свій акаунт.",
+    "de": "Auch Claude Code wechseln. Nach dem ersten Wechsel ein neues Terminal öffnen. Laufende CLI-Sitzungen behalten ihr Konto.",
+    "es": "Cambiar también Claude Code. Abre una nueva terminal tras el primer cambio. Las sesiones CLI abiertas conservan su cuenta.",
+    "fr": "Changer aussi Claude Code. Ouvrez un nouveau terminal après le premier changement. Les sessions CLI actives gardent leur compte.",
+    "it": "Cambia anche Claude Code. Apri un nuovo terminale dopo il primo cambio. Le sessioni CLI attive mantengono il proprio account.",
+    "pl": "Przełączaj też Claude Code. Po pierwszej zmianie otwórz nowy terminal. Uruchomione sesje CLI zachowują swoje konto.",
+    "pt-BR": "Alternar também o Claude Code. Abra um novo terminal após a primeira troca. Sessões CLI em execução mantêm sua conta.",
+    "tr": "Claude Code hesabını da değiştir. İlk geçişten sonra yeni bir terminal açın. Çalışan CLI oturumları hesaplarını korur.",
+    "ja": "Claude Codeも切り替えます。初回切替後に新しいターミナルを開いてください。実行中のCLIセッションは元のアカウントを維持します。",
+    "ko": "Claude Code도 전환합니다. 첫 전환 후 새 터미널을 여세요. 실행 중인 CLI 세션은 기존 계정을 유지합니다.",
+    "zh-Hans": "同时切换Claude Code。首次切换后请打开新终端。正在运行的CLI会话保留原账号。",
+    "zh-Hant": "同時切換Claude Code。首次切換後請開啟新終端機。執行中的CLI工作階段保留原帳號。",
+}
+for _lang, _text in _SWITCH_CLI_HELP.items():
+    T[_lang]["menu.switchCLI.help"] = _text
 
 _ON_OFF = {
     "en": ("On", "Off"), "ru": ("Включено", "Выключено"),

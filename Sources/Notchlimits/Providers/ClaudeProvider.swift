@@ -19,6 +19,8 @@ actor ClaudeProvider: UsageProvider {
     }
 
     private var tokens: [String: CachedToken] = [:]
+    private var origins: [String: ClaudeKeychain.Credentials] = [:]
+    private var inFlight: [String: Task<CachedToken?, Never>] = [:]
     /// Токены, отвергнутые сервером: брать их из Keychain повторно бессмысленно.
     private var rejected: [String: String] = [:]
     /// Почта из CLI, по одной на профиль. Пустое значение — «уже пробовали,
@@ -83,13 +85,12 @@ actor ClaudeProvider: UsageProvider {
                 return .success(UsageSnapshot(subtitle: subtitle,
                                               windows: windows,
                                               stats: Self.stats(response.data)))
-            case 401, 403:
-                // Сервер отверг токен, хотя по сроку тот ещё жив — значит,
-                // он отозван. Помечаем, чтобы следующий заход не взял его же
-                // из Keychain снова, а сразу пошёл обновляться.
+            case 401:
                 rejected[service] = token.value
-                tokens[service] = nil
+                if tokens[service]?.value == token.value { tokens[service] = nil }
                 return .reauth(L.t("column.reauth"))
+            case 403:
+                return .failure(L.t("error.http", response.status))
             case 429:
                 return .rateLimited(retryAfter: response.retryAfter)
             default:
@@ -101,108 +102,129 @@ actor ClaudeProvider: UsageProvider {
     // MARK: - Токен
 
     private func token(for service: String) async -> CachedToken? {
+        if let running = inFlight[service] { return await running.value }
+        let running = Task { await resolveToken(for: service) }
+        inFlight[service] = running
+        let token = await running.value
+        inFlight[service] = nil
+        return token
+    }
+
+    private func resolveToken(for service: String) async -> CachedToken? {
         issues[service] = nil
-        if let pending = unsaved[service] {
-            // Сначала дописываем то, что не записалось в прошлый раз.
-            switch await write(pending, to: service) {
-            case .saved:
-                unsaved[service] = nil
-            case .changed:
-                unsaved[service] = nil
-                tokens[service] = nil
-                rejected[service] = nil
-                emails[service] = nil
-            case .failed:
-                break
-            }
-        }
-        if let cached = tokens[service], cached.isUsable { return cached }
-        tokens[service] = nil
-
-        guard let credentials = await read(service) else { return nil }
-        // Тот самый токен, что сервер уже отверг, брать снова нельзя — только
-        // обновлять. Если в записи оказался другой, значит CLI обновился сам.
-        let isRejected = rejected[service] == credentials.accessToken
-        if !isRejected {
-            rejected[service] = nil
-            if let cached = Self.cache(credentials) {
-                tokens[service] = cached
-                return cached
-            }
-        }
-
-        // Токен протух. Раньше мы просто просили запустить claude; теперь
-        // продлеваем сами — CLI мог не запускаться сутками.
-        guard let refreshToken = Self.refreshToken(pending: unsaved[service]?.tokens,
-                                                   stored: credentials) else { return nil }
+        // Authorize interactive reads before taking a lease. A Keychain dialog
+        // must not suspend the critical section beyond the CLI's lease timeout.
+        guard let observed = await read(service) else { return nil }
+        if unsaved[service] == nil, let cached = adopt(observed, service: service) { return cached }
         guard ClaudeKeychain.supportsStorageLock else { return nil }
 
-        // Сервер при продлении отзывает прежний refresh-токен. Не сможем
-        // записать новый — в Keychain останется мёртвый, и CLI обнулит вход.
-        // Поэтому без права записи не продлеваем вовсе.
+        guard let lease = await Task.detached(priority: .utility, operation: {
+            ClaudeKeychain.refreshLock(service: service)
+        }).value else {
+            issues[service] = L.t("error.keychainWrite")
+            return nil
+        }
+        defer { lease.release() }
+
+        // Another process may have refreshed or signed in while we waited.
+        guard lease.isHeld, var credentials = await read(service, interactive: false) else {
+            issues[service] = L.t("error.keychainWrite")
+            return nil
+        }
+        if let pending = unsaved[service] {
+            switch await write(pending, to: service, lease: lease) {
+            case .saved:
+                unsaved[service] = nil
+                guard let latest = await read(service, interactive: false) else {
+                    issues[service] = L.t("error.keychainWrite")
+                    return nil
+                }
+                credentials = latest
+            case .changed:
+                unsaved[service] = nil
+                forget(service)
+                guard let latest = await read(service, interactive: false) else { return nil }
+                credentials = latest
+            case .failed:
+                // Do not spend another refresh token until the rotated one is durable.
+                issues[service] = L.t("error.keychainWrite")
+                return nil
+            }
+        }
+        if let cached = adopt(credentials, service: service) { return cached }
+        guard credentials.isRefreshable, let refreshToken = credentials.refreshToken else { return nil }
+
         let writable = await Task.detached(priority: .utility) {
-            ClaudeKeychain.canWrite(service: service)
+            ClaudeKeychain.canWrite(service: service, renewalLock: lease)
         }.value
-        guard writable else {
+        guard writable, lease.isHeld else {
             issues[service] = L.t("error.keychainWrite")
             return nil
         }
 
-        switch await ClaudeOAuth.refresh(refreshToken: refreshToken, scopes: credentials.scopes) {
+        // Keep both native OAuth locks throughout the HTTP request and save.
+        // A compromised lease cancels the request and forbids subsequent writes.
+        let request = Task { await ClaudeOAuth.refresh(refreshToken: refreshToken, scopes: credentials.scopes) }
+        lease.onLost { request.cancel() }
+        switch await request.value {
         case .success(let fresh):
-            // В Keychain пишем ТОЛЬКО когда сервер сменил refresh-токен: старый
-            // тогда отозван, и без записи сломался бы вход CLI. Если ротации не
-            // было — новый refresh-токен не выдан, старый ещё годен, писать
-            // незачем: access-токен и так живёт в памяти до следующего обновления.
+            let pending = Pending(tokens: fresh, credentials: credentials)
             if fresh.refreshToken != nil {
-                let pending = Pending(tokens: fresh, credentials: credentials)
-                switch await write(pending, to: service) {
+                unsaved[service] = pending
+                switch await write(pending, to: service, lease: lease) {
                 case .saved:
                     unsaved[service] = nil
                 case .failed:
-                    unsaved[service] = pending
+                    issues[service] = L.t("error.keychainWrite")
+                    return nil
                 case .changed:
                     unsaved[service] = nil
-                    tokens[service] = nil
-                    rejected[service] = nil
-                    emails[service] = nil
-                    if let latest = await read(service), let cached = Self.cache(latest) {
-                        tokens[service] = cached
-                        return cached
-                    }
-                    return nil
-                }
-            } else {
-                // И без ротации ответ относится к старому входу: CLI мог войти в другой.
-                guard let latest = await read(service) else { return nil }
-                if !latest.hasSameTokens(as: credentials) {
-                    emails[service] = nil
-                    let cached = Self.cache(latest)
-                    tokens[service] = cached
-                    return cached
+                    forget(service)
+                    guard let latest = await read(service, interactive: false) else { return nil }
+                    return adopt(latest, service: service)
                 }
             }
-            let cached = CachedToken(value: fresh.accessToken,
-                                     expiresAt: fresh.expiresAt,
-                                     plan: credentials.plan)
+            guard lease.isHeld, let latest = await read(service, interactive: false) else {
+                issues[service] = L.t("error.keychainWrite")
+                return nil
+            }
+            let expectedAccess = fresh.refreshToken == nil ? credentials.accessToken : fresh.accessToken
+            guard latest.accessToken == expectedAccess,
+                  latest.refreshToken == (fresh.refreshToken ?? credentials.refreshToken) else {
+                forget(service)
+                return adopt(latest, service: service)
+            }
+            let cached = CachedToken(value: fresh.accessToken, expiresAt: fresh.expiresAt, plan: credentials.plan)
             rejected[service] = nil
             tokens[service] = cached
+            origins[service] = latest
             return cached
 
         case .rejected:
-            // Наш refresh-токен уже недействителен. Возможно, CLI успел
-            // обновиться сам между нашим чтением и запросом — перечитываем.
-            if let latest = await read(service), let cached = Self.cache(latest) {
-                tokens[service] = cached
-                return cached
-            }
-            return nil
+            guard let latest = await read(service, interactive: false) else { return nil }
+            return adopt(latest, service: service)
 
         case .unavailable:
-            // Сеть — не повод просить войти заново.
             issues[service] = L.t("error.network")
             return nil
         }
+    }
+
+    private func forget(_ service: String) {
+        tokens[service] = nil
+        origins[service] = nil
+        rejected[service] = nil
+        emails[service] = nil
+    }
+
+    private func adopt(_ credentials: ClaudeKeychain.Credentials, service: String) -> CachedToken? {
+        if let origin = origins[service], !origin.hasSameTokens(as: credentials) { forget(service) }
+        guard rejected[service] != credentials.accessToken else { return nil }
+        if let cached = tokens[service], cached.isUsable { return cached }
+        let cached = Self.cache(credentials)
+        tokens[service] = cached
+        origins[service] = credentials
+        return cached
     }
 
     /// Каким refresh-токеном продлевать. Не дописанный в Keychain новее того,
@@ -215,17 +237,17 @@ actor ClaudeProvider: UsageProvider {
         return stored.refreshToken
     }
 
-    private func write(_ pending: Pending, to service: String) async -> ClaudeKeychain.SaveResult {
+    private func write(_ pending: Pending, to service: String, lease: ClaudeRefreshLock) async -> ClaudeKeychain.SaveResult {
         await Task.detached(priority: .utility) {
             ClaudeKeychain.save(service: service, tokens: pending.tokens,
-                                expected: pending.credentials)
+                                expected: pending.credentials, renewalLock: lease)
         }.value
     }
 
     /// SecItemCopyMatching блокирует поток, пока пользователь отвечает на диалог.
-    private func read(_ service: String) async -> ClaudeKeychain.Credentials? {
+    private func read(_ service: String, interactive: Bool = true) async -> ClaudeKeychain.Credentials? {
         await Task.detached(priority: .utility) {
-            ClaudeKeychain.credentials(service: service)
+            ClaudeKeychain.credentials(service: service, interactive: interactive)
         }.value
     }
 
