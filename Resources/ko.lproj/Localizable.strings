@@ -68,6 +68,8 @@
 "menu.hotKey.standard" = "기본값 (⌘P)";
 "menu.hotKey.disable" = "끄기";
 "menu.loginItem" = "로그인 시 실행";
+"menu.switchCLI" = "CLI 전환";
+"menu.switchCLI.help" = "Claude Code도 전환합니다. 첫 전환 후 새 터미널을 여세요. 실행 중인 CLI 세션은 기존 계정을 유지합니다.";
 "menu.about" = "Notchlimits 정보";
 "menu.quit" = "Notchlimits 종료";
 "menu.telemetry" = "텔레메트리 표시";
@@ -160,6 +162,8 @@
 "error.http" = "HTTP %d";
 "error.parse" = "응답을 해석할 수 없음";
 "error.unknownSource" = "알 수 없는 소스";
+"error.cliProfile" = "CLI 프로필 폴더를 찾을 수 없습니다.";
+"error.cliShell" = "CLI 전환은 zsh와 bash를 지원합니다. 첫 전환 후 새 터미널을 여세요.";
 "error.noProvider" = "제공자 없음";
 "error.unreachable" = "네트워크 사용 불가";
 

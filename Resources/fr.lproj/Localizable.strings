@@ -68,6 +68,8 @@
 "menu.hotKey.standard" = "Par défaut (⌘P)";
 "menu.hotKey.disable" = "Désactiver";
 "menu.loginItem" = "Lancer à l’ouverture de session";
+"menu.switchCLI" = "Changer la CLI";
+"menu.switchCLI.help" = "Changer aussi Claude Code. Ouvrez un nouveau terminal après le premier changement. Les sessions CLI actives gardent leur compte.";
 "menu.about" = "À propos de Notchlimits";
 "menu.quit" = "Quitter Notchlimits";
 "menu.telemetry" = "Afficher la télémétrie";
@@ -160,6 +162,8 @@
 "error.http" = "HTTP %d";
 "error.parse" = "réponse illisible";
 "error.unknownSource" = "source inconnue";
+"error.cliProfile" = "Le dossier du profil CLI est introuvable.";
+"error.cliShell" = "Le changement de CLI prend en charge zsh et bash. Ouvrez un nouveau terminal après le premier changement.";
 "error.noProvider" = "aucun fournisseur";
 "error.unreachable" = "réseau indisponible";
 

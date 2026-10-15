@@ -68,6 +68,8 @@
 "menu.hotKey.standard" = "Standard (⌘P)";
 "menu.hotKey.disable" = "Ausschalten";
 "menu.loginItem" = "Beim Anmelden starten";
+"menu.switchCLI" = "CLI wechseln";
+"menu.switchCLI.help" = "Auch Claude Code wechseln. Nach dem ersten Wechsel ein neues Terminal öffnen. Laufende CLI-Sitzungen behalten ihr Konto.";
 "menu.about" = "Über Notchlimits";
 "menu.quit" = "Notchlimits beenden";
 "menu.telemetry" = "Telemetrie anzeigen";
@@ -160,6 +162,8 @@
 "error.http" = "HTTP %d";
 "error.parse" = "Antwort nicht lesbar";
 "error.unknownSource" = "unbekannte Quelle";
+"error.cliProfile" = "Das CLI-Profilverzeichnis wurde nicht gefunden.";
+"error.cliShell" = "CLI-Wechsel unterstützt zsh und bash. Öffne nach dem ersten Wechsel ein neues Terminal.";
 "error.noProvider" = "kein Anbieter";
 "error.unreachable" = "Netzwerk nicht verfügbar";
 

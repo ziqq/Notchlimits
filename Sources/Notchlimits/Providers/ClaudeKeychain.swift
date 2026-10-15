@@ -111,8 +111,8 @@ enum ClaudeKeychain {
     }
 
     /// Чтение секрета. Блокирующий вызов — только вне главного потока.
-    static func credentials(service: String) -> Credentials? {
-        guard let json = rawItem(service: service) else { return nil }
+    static func credentials(service: String, interactive: Bool = true) -> Credentials? {
+        guard let json = rawItem(service: service, interactive: interactive) else { return nil }
         return parse(json)
     }
 
@@ -125,12 +125,12 @@ enum ClaudeKeychain {
             kSecReturnData as String: true
         ]
         var result: CFTypeRef?
-        return SecItemCopyMatching(query as CFDictionary, &result)
+        return access { SecItemCopyMatching(query as CFDictionary, &result) }
     }
 
     /// Сырой JSON записи. Нужен отдельно, чтобы при записи сохранить поля,
     /// про которые мы не знаем: их пишет CLI, и терять их нельзя.
-    private static func rawItem(service: String) -> [String: Any]? {
+    private static func rawItem(service: String, interactive: Bool = true) -> [String: Any]? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -138,11 +138,29 @@ enum ClaudeKeychain {
             kSecReturnData as String: true
         ]
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+        guard access(interactive: interactive, { SecItemCopyMatching(query as CFDictionary, &result) }) == errSecSuccess,
               let data = result as? Data,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         return json
+    }
+
+    private static let interactionLock = NSLock()
+
+    /// Claude uses classic login Keychain items. LAContext's interaction flag
+    /// does not govern their legacy ACL dialogs. Serialize the process-wide
+    /// legacy interaction setting with all secret reads and restore it afterward.
+    static func access(interactive: Bool = true, _ operation: () -> OSStatus) -> OSStatus {
+        interactionLock.lock()
+        defer { interactionLock.unlock() }
+        guard !interactive else { return operation() }
+        var allowed: DarwinBoolean = false
+        guard SecKeychainGetUserInteractionAllowed(&allowed) == errSecSuccess,
+              SecKeychainSetUserInteractionAllowed(false) == errSecSuccess else {
+            return errSecInteractionNotAllowed
+        }
+        defer { _ = SecKeychainSetUserInteractionAllowed(allowed.boolValue) }
+        return operation()
     }
 
     /// Разбор записи. Вынесен отдельно — так его покрывает самопроверка,
@@ -175,10 +193,10 @@ enum ClaudeKeychain {
     /// unknown fields. This blocking operation must run off the main thread.
     @discardableResult
     static func save(service: String, tokens: ClaudeOAuth.Tokens,
-                     expected: Credentials) -> SaveResult {
+                     expected: Credentials, renewalLock: ClaudeRefreshLock? = nil) -> SaveResult {
         guard let storageLock = storageLock(service: service) else { return .failed }
         defer { storageLock.release() }
-        guard var json = rawItem(service: service) else { return .failed }
+        guard var json = rawItem(service: service, interactive: renewalLock == nil) else { return .failed }
         guard let current = parse(json), current.hasSameTokens(as: expected),
               var oauth = json["claudeAiOauth"] as? [String: Any] else { return .changed }
 
@@ -199,41 +217,45 @@ enum ClaudeKeychain {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service
         ]
-        guard storageLock.isHeld else { return .failed }
-        return SecItemUpdate(query as CFDictionary,
-                             [kSecValueData as String: data] as CFDictionary) == errSecSuccess
-            ? .saved : .failed
+        let status = access(interactive: false) {
+            guard storageLock.isHeld, renewalLock?.isHeld != false else { return errSecInteractionNotAllowed }
+            return SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        }
+        return status == errSecSuccess ? .saved : .failed
     }
 
     /// Можно ли писать в запись: перезаписываем её же содержимым. Проверяем
     /// ДО продления — сервер отзывает прежний refresh-токен, и если новый
     /// потом не записать, в Keychain останется мёртвый, а CLI, наткнувшись
     /// на него, обнулит вход. Блокирующий вызов — только вне главного потока.
-    static func canWrite(service: String) -> Bool {
+    static func canWrite(service: String, renewalLock: ClaudeRefreshLock? = nil) -> Bool {
         guard let storageLock = storageLock(service: service) else { return false }
         defer { storageLock.release() }
-        guard let data = rawData(service: service) else { return false }
+        guard let json = rawItem(service: service, interactive: renewalLock == nil),
+              let data = try? JSONSerialization.data(withJSONObject: json) else { return false }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service
         ]
-        guard storageLock.isHeld else { return false }
-        return SecItemUpdate(query as CFDictionary,
-                             [kSecValueData as String: data] as CFDictionary) == errSecSuccess
+        return access(interactive: false) {
+            guard storageLock.isHeld, renewalLock?.isHeld != false else { return errSecInteractionNotAllowed }
+            return SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        } == errSecSuccess
+    }
+
+    static func refreshLock(service: String) -> ClaudeRefreshLock? {
+        guard supportsStorageLock, let directory = storageDirectory(service: service) else { return nil }
+        return try? ClaudeRefreshLock(directory: directory)
     }
 
     private static func storageLock(service: String) -> ClaudeStorageLock? {
-        guard supportsStorageLock else { return nil }
-        let directory: URL
-        if service == baseService {
-            directory = ProfileDirectories.home.appendingPathComponent(".claude")
-        } else if let profile = configDirectory(for: service) {
-            directory = profile
-        } else {
-            // The CLI's secureStorage directory for this record is unknown.
-            return nil
-        }
+        guard supportsStorageLock, let directory = storageDirectory(service: service) else { return nil }
         return try? ClaudeStorageLock(directory: directory)
+    }
+
+    private static func storageDirectory(service: String) -> URL? {
+        service == baseService ? ProfileDirectories.home.appendingPathComponent(".claude")
+                               : configDirectory(for: service)
     }
 
     /// Сырой blob записи Keychain — для копий keychain→keychain (свитчер
@@ -246,7 +268,7 @@ enum ClaudeKeychain {
             kSecReturnData as String: true
         ]
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+        guard access({ SecItemCopyMatching(query as CFDictionary, &result) }) == errSecSuccess,
               let data = result as? Data else { return nil }
         return data
     }
@@ -258,13 +280,13 @@ enum ClaudeKeychain {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service
         ]
-        let updated = SecItemUpdate(base as CFDictionary,
-                                    [kSecValueData as String: data] as CFDictionary)
+        let updated = access { SecItemUpdate(base as CFDictionary,
+                                             [kSecValueData as String: data] as CFDictionary) }
         if updated == errSecSuccess { return true }
         if updated == errSecItemNotFound {
             var add = base
             add[kSecValueData as String] = data
-            return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+            return access { SecItemAdd(add as CFDictionary, nil) } == errSecSuccess
         }
         return false
     }
@@ -302,7 +324,7 @@ enum ClaudeKeychain {
     }
 
     private static func sha256Hex(_ string: String) -> String {
-        SHA256.hash(data: Data(string.utf8)).map { String(format: "%02x", $0) }.joined()
+        SHA256.hash(data: Data(string.precomposedStringWithCanonicalMapping.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
 

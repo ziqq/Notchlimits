@@ -68,6 +68,8 @@
 "menu.hotKey.standard" = "默认 (⌘P)";
 "menu.hotKey.disable" = "关闭";
 "menu.loginItem" = "登录时启动";
+"menu.switchCLI" = "切换CLI";
+"menu.switchCLI.help" = "同时切换Claude Code。首次切换后请打开新终端。正在运行的CLI会话保留原账号。";
 "menu.about" = "关于 Notchlimits";
 "menu.quit" = "退出 Notchlimits";
 "menu.telemetry" = "显示遥测";
@@ -160,6 +162,8 @@
 "error.http" = "HTTP %d";
 "error.parse" = "无法解析响应";
 "error.unknownSource" = "来源未知";
+"error.cliProfile" = "无法确定CLI配置目录。";
+"error.cliShell" = "CLI切换支持zsh和bash。首次切换后请打开新终端。";
 "error.noProvider" = "没有提供方";
 "error.unreachable" = "网络不可用";
 

@@ -15,7 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
 
     private enum Setting: Int {
-        case telemetry, keepAwake, keepDisplayOn, loginItem
+        case telemetry, keepAwake, keepDisplayOn, loginItem, switchCLI
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -181,6 +181,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         addKeepAwakeItems(to: menu)
         menu.addItem(settingItem(L.t("menu.loginItem"), .loginItem,
                           state: LoginItem.isEnabled ? .on : .off))
+        let switchCLI = settingItem(L.t("menu.switchCLI"), .switchCLI,
+                                    state: ClaudeCLISelection.isEnabled ? .on : .off)
+        switchCLI.toolTip = L.t("menu.switchCLI.help")
+        switchCLI.view?.toolTip = switchCLI.toolTip
+        menu.addItem(switchCLI)
         menu.addItem(.separator())
 
         let hotKeyItem = NSMenuItem(title: L.t("menu.hotKey", hotKeys.displayName),
@@ -263,6 +268,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .loginItem:
             toggleLoginItem()
             enabled = LoginItem.isEnabled
+        case .switchCLI:
+            ClaudeCLISelection.isEnabled.toggle()
+            enabled = ClaudeCLISelection.isEnabled
         case nil:
             return
         }

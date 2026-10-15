@@ -62,7 +62,7 @@ enum AccountRemoval {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service
         ]
-        let status = SecItemDelete(query as CFDictionary)
+        let status = ClaudeKeychain.access { SecItemDelete(query as CFDictionary) }
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw Failure.keychain(status)
         }
