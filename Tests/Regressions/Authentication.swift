@@ -43,12 +43,31 @@ private enum Fixture {
     static var holdDesktopCompletion = false
     static var desktopCalls = 0
     static var desktopArguments: [String] = []
+    static var keychainExists = true
+    static var denyKeychainDelete = false
+    static var discoveredClaudeService: String?
+    static var releaseRefreshReply = false
+    static var lockCrashPhase = ""
+    static var nativeAcquisitionAtPublish = false
+    static var nativeAcquisitionObserved = false
     @MainActor static var desktopCompletion: ((Result<Void, Error>) -> Void)?
 
     static func writes() -> Int {
         lock.lock()
         defer { lock.unlock() }
         return keychainWrites
+    }
+
+    static func releaseRefresh() {
+        lock.lock()
+        releaseRefreshReply = true
+        lock.unlock()
+    }
+
+    static func refreshIsPaused() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !releaseRefreshReply
     }
 
     static func tryNativeRefresh() {
@@ -103,7 +122,7 @@ private enum Fixture {
         }
     }
 
-    enum Response { case renewed, lost, temporary, unreadable, delayedLost, changedClaude, nativeLogin, forbidden, delayedRenewed, slowRenewed }
+    enum Response { case renewed, lost, temporary, unreadable, delayedLost, changedClaude, nativeLogin, forbidden, delayedRenewed, slowRenewed, heldRenewed }
     static var response: Response = .renewed
 
     static func didRefresh() {
@@ -148,6 +167,47 @@ private enum Fixture {
                           source: .claudeKeychain(service: service, configDir: nil),
                           email: "synthetic@example.invalid")
     }
+}
+
+// Faults are injected at OS boundaries in separate fixture processes.
+private func crashAtLockBoundary(_ phase: String) -> Never {
+    FileHandle.standardOutput.write(Data("FAULT:\(phase)\n".utf8))
+    _exit(86)
+}
+
+func mkdir(_ path: UnsafePointer<CChar>, _ mode: mode_t) -> Int32 {
+    let value = String(cString: path)
+    if Fixture.nativeAcquisitionAtPublish && value == Fixture.oauthLock.path {
+        Fixture.nativeAcquisitionAtPublish = false
+        Fixture.nativeAcquisitionObserved = Darwin.mkdir(path, mode) == 0
+    }
+    let result = Darwin.mkdir(path, mode)
+    if result == 0 && Fixture.lockCrashPhase == "mkdir" { crashAtLockBoundary("mkdir") }
+    return result
+}
+
+func pwrite(_ fd: Int32, _ bytes: UnsafeRawPointer?, _ count: Int, _ offset: off_t) -> Int {
+    if Fixture.lockCrashPhase == "record" {
+        _ = Darwin.pwrite(fd, bytes, count / 2, offset)
+        crashAtLockBoundary("record")
+    }
+    return Darwin.pwrite(fd, bytes, count, offset)
+}
+
+func fsetxattr(_ fd: Int32, _ name: UnsafePointer<CChar>, _ value: UnsafeRawPointer?,
+               _ count: Int, _ position: UInt32, _ options: Int32) -> Int32 {
+    let result = Darwin.fsetxattr(fd, name, value, count, position, options)
+    if result == 0 && Fixture.lockCrashPhase == "record" { crashAtLockBoundary("record") }
+    return result
+}
+
+func renameatx_np(_ fromFD: Int32, _ from: UnsafePointer<CChar>, _ toFD: Int32,
+                  _ to: UnsafePointer<CChar>, _ flags: UInt32) -> Int32 {
+    if Fixture.nativeAcquisitionAtPublish && String(cString: to) == Fixture.oauthLock.path {
+        Fixture.nativeAcquisitionAtPublish = false
+        Fixture.nativeAcquisitionObserved = Darwin.mkdir(to, 0o700) == 0
+    }
+    return Darwin.renameatx_np(fromFD, from, toFD, to, flags)
 }
 
 private final class FixtureFileManager: Foundation.FileManager, @unchecked Sendable {
@@ -225,8 +285,11 @@ func SecItemCopyMatching(_ query: CFDictionary, _ result: UnsafeMutablePointer<C
     Fixture.lock.lock()
     defer { Fixture.lock.unlock() }
     if (query as NSDictionary)[kSecReturnAttributes as String] as? Bool == true {
-        result?.pointee = NSArray()
+        if Fixture.keychainExists, let service = Fixture.discoveredClaudeService {
+            result?.pointee = [[kSecAttrService as String: service]] as NSArray
+        } else { result?.pointee = NSArray() }
     } else {
+        guard Fixture.keychainExists else { return errSecItemNotFound }
         let data = try! JSONSerialization.data(withJSONObject: Fixture.keychain)
         Fixture.keychainReads += 1
         if Fixture.slowKeychainRead { Thread.sleep(forTimeInterval: 6.5) }
@@ -246,6 +309,7 @@ func SecItemUpdate(_ query: CFDictionary, _ attributes: CFDictionary) -> OSStatu
     Fixture.lock.lock()
     defer { Fixture.lock.unlock() }
     Fixture.keychainWrites += 1
+    guard Fixture.keychainExists else { return errSecItemNotFound }
     Fixture.oauthHeldDuringWrite = Fixture.oauthHeldDuringWrite && Fixture.holdsOAuthLocks
     Fixture.noninteractiveWrites = Fixture.noninteractiveWrites && !Fixture.interactionAllowed
     if Fixture.denyNoninteractiveWrite && !Fixture.interactionAllowed { return errSecInteractionNotAllowed }
@@ -274,7 +338,13 @@ func SecKeychainSetUserInteractionAllowed(_ state: Bool) -> OSStatus {
     return errSecSuccess
 }
 
-func SecItemDelete(_ query: CFDictionary) -> OSStatus { errSecSuccess }
+func SecItemDelete(_ query: CFDictionary) -> OSStatus {
+    Fixture.lock.lock()
+    defer { Fixture.lock.unlock() }
+    guard !Fixture.denyKeychainDelete else { return errSecAuthFailed }
+    Fixture.keychainExists = false
+    return errSecSuccess
+}
 func SecItemAdd(_ attributes: CFDictionary, _ result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus { errSecSuccess }
 
 struct HTTPClient {
@@ -314,6 +384,8 @@ struct HTTPClient {
             try? await Task.sleep(nanoseconds: 6_500_000_000)
         case .delayedRenewed:
             try? await Task.sleep(nanoseconds: 100_000_000)
+        case .heldRenewed:
+            while Fixture.refreshIsPaused() { try? await Task.sleep(nanoseconds: 10_000_000) }
         case .renewed:
             break
         }
@@ -394,6 +466,20 @@ enum Authentication {
             case "claude-desktop-only-failed": try claudeLaunchFailed(first: false, enabled: false)
             case "claude-switch-concurrent": try claudeConcurrentSwitch()
             case "claude-switch-toggle-off": try claudeToggleOffDuringSwitch()
+            case "claude-switch-toggle-on": try claudeToggleOnDuringSwitch(fails: false)
+            case "claude-switch-toggle-on-failed": try claudeToggleOnDuringSwitch(fails: true)
+            case "claude-remove-inflight": try await claudeRemoveDuringRenewal(pending: false)
+            case "claude-remove-pending": try await claudeRemoveDuringRenewal(pending: true)
+            case "claude-remove-denied": try await claudeRemoveDuringRenewal(pending: true, denied: true)
+            case "claude-remove-readd": try await claudeRemoveDuringRenewal(pending: false, readded: true)
+            case "claude-native-publish": try await claudeNativePublish()
+            case "claude-crash-mkdir":
+                Fixture.lockCrashPhase = "mkdir"
+                try claudeCrashOwner(live: false)
+            case "claude-crash-record":
+                Fixture.lockCrashPhase = "record"
+                try claudeCrashOwner(live: false)
+            case "claude-crash-legacy": try claudeCrashLegacyOwner()
             case "claude-crash-owner": try claudeCrashOwner(live: false)
             case "claude-live-owner": try claudeCrashOwner(live: true)
             case "claude-recover-owner": try await claudeRecoverOwner(expectBusy: false)
@@ -1092,6 +1178,121 @@ enum Authentication {
         Fixture.desktopCompletion?(.success(()))
         if case .success? = result {} else { throw Failure(description: "Desktop switch did not complete") }
         try expect((try String(contentsOf: pointer)) == "/previous/cli/profile\n", "Disabling CLI switching during Desktop launch still changed the CLI account")
+    }
+
+    @MainActor
+    private static func claudeToggleOnDuringSwitch(fails: Bool) throws {
+        UserDefaults.standard.set(false, forKey: "switchClaudeCLI")
+        let pointer = DesktopApp.supportDirectory.appendingPathComponent("claude-cli/selected-profile")
+        try Foundation.FileManager.default.createDirectory(at: pointer.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("/previous/cli/profile\n".utf8).write(to: pointer)
+        Fixture.holdDesktopCompletion = true
+        var result: Result<Void, Error>?
+        ClaudeAppSwitcher().switchTo(Fixture.claudeAccount) { result = $0 }
+        try expect((try String(contentsOf: pointer)) == "/previous/cli/profile\n", "Pending Desktop launch changed CLI routing")
+        UserDefaults.standard.set(true, forKey: "switchClaudeCLI")
+        Fixture.desktopCompletion?(fails ? .failure(Failure(description: "Synthetic launch failure")) : .success(()))
+        if fails {
+            if case .failure? = result {} else { throw Failure(description: "Desktop launch failure was not reported") }
+        } else {
+            if case .success? = result {} else { throw Failure(description: "Desktop switch did not complete") }
+        }
+        try expect((try String(contentsOf: pointer)) == (fails ? "/previous/cli/profile\n" : "\n"),
+                   "Enabling CLI switching during launch did not honor the launch result")
+    }
+
+    @MainActor
+    private static func claudeRemoveDuringRenewal(pending: Bool, denied: Bool = false, readded: Bool = false) async throws {
+        let profile = ProfileDirectories.claudeRoot.appendingPathComponent("work")
+        try Foundation.FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+        let suffix = SHA256.hash(data: Data(profile.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
+        let service = Fixture.service + "-" + suffix
+        let account = DiscoveredAccount(id: "claude:" + service, provider: .claude, profileName: "work",
+                                        source: .claudeKeychain(service: service, configDir: profile))
+        Fixture.discoveredClaudeService = service
+        Fixture.expectedOAuthDirectory = profile
+        Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
+        Fixture.response = .heldRenewed
+        Fixture.failKeychainSave = pending
+        Fixture.denyKeychainDelete = denied
+        let provider = ClaudeProvider()
+        let store = UsageStore(providers: [.claude: provider], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        try expect(store.account(for: account.id) != nil, "Fixture did not discover the removable Claude profile")
+        let renewal = Task { await provider.fetch(account) }
+        var started = false
+        for _ in 0..<200 {
+            Fixture.lock.lock()
+            started = Fixture.refreshCalls > 0
+            Fixture.lock.unlock()
+            if started { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try expect(started, "Fixture did not start the refresh POST")
+        if pending {
+            Fixture.releaseRefresh()
+            try await waitForFailedSave()
+        }
+        var removalFailed = false
+        do { try store.removeAccount(id: account.id) } catch { removalFailed = true }
+        try expect(removalFailed == denied, "Account removal did not honor the Keychain deletion result")
+        if readded {
+            try Foundation.FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+            Fixture.lock.lock()
+            Fixture.keychainExists = true
+            Fixture.keychain = Fixture.claudeLogin("readded-login", expired: false)
+            Fixture.lock.unlock()
+        }
+        Fixture.releaseRefresh()
+        Fixture.lock.lock()
+        Fixture.failKeychainSave = false
+        Fixture.lock.unlock()
+        _ = await renewal.value
+        if readded {
+            let outcome = await provider.fetch(account)
+            if case .success = outcome {} else { throw Failure(description: "A removed service could not be used after a new login") }
+            try expect(Fixture.lastAuthorization == "Bearer synthetic-readded-login", "Late renewal replaced the newly re-added login")
+        }
+        let ready = await provider.prepareForTermination(timeout: 0.5)
+        try expect(ready, "A deleted Claude profile permanently blocked normal termination")
+        try expect(Fixture.refreshCalls == 1, "Removal started another refresh POST")
+        if denied {
+            try expect(Fixture.keychainExists && ClaudeKeychain.parse(Fixture.keychain)?.refreshToken == "synthetic-rotated",
+                       "Failed deletion discarded the pending rotated grant")
+        } else if !readded {
+            try expect(!Fixture.keychainExists && !Foundation.FileManager.default.fileExists(atPath: profile.path),
+                       "Late renewal resurrected the removed account or profile")
+        }
+    }
+
+    private static func claudeNativePublish() async throws {
+        Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
+        Fixture.nativeAcquisitionAtPublish = true
+        _ = await ClaudeProvider().fetch(Fixture.claudeAccount)
+        try expect(Fixture.nativeAcquisitionObserved, "Fixture did not acquire the native path before publication")
+        try expect(Foundation.FileManager.default.fileExists(atPath: Fixture.oauthLock.path), "Publication replaced the native owner's lock")
+        try expect(Fixture.refreshCalls == 0 && Fixture.keychainWrites == 0, "A competing native owner did not defer renewal")
+    }
+
+    private static func claudeCrashLegacyOwner() throws {
+        guard let lease = ClaudeKeychain.refreshLock(service: Fixture.service) else {
+            throw Failure(description: "Could not acquire fixture OAuth locks")
+        }
+        withExtendedLifetime(lease) {
+            for path in [Fixture.oauthLock.path, Fixture.legacyLock.path] {
+                _ = removexattr(path, "dev.ustinoff.notchlimits.lock-owner", XATTR_NOFOLLOW)
+                var info = stat()
+                guard lstat(path, &info) == 0 else { _exit(1) }
+                let record: [String: Any] = ["inode": UInt64(info.st_ino), "device": info.st_dev,
+                                           "birthSeconds": Int64(info.st_birthtimespec.tv_sec),
+                                           "birthNanoseconds": Int64(info.st_birthtimespec.tv_nsec)]
+                do {
+                    try JSONSerialization.data(withJSONObject: record)
+                        .write(to: URL(fileURLWithPath: path + ".notchlimits-owner"))
+                } catch { _exit(1) }
+            }
+            _exit(0)
+        }
     }
 
     private static func claudeCrashOwner(live: Bool) throws {

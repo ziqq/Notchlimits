@@ -22,6 +22,7 @@ actor ClaudeProvider: UsageProvider {
     private var origins: [String: ClaudeKeychain.Credentials] = [:]
     private var terminating = false
     private var renewing: Set<String> = []
+    private var removalGenerations: [String: UUID] = [:]
     private var inFlight: [String: Task<CachedToken?, Never>] = [:]
     /// Токены, отвергнутые сервером: брать их из Keychain повторно бессмысленно.
     private var rejected: [String: String] = [:]
@@ -113,6 +114,7 @@ actor ClaudeProvider: UsageProvider {
     }
 
     private func resolveToken(for service: String) async -> CachedToken? {
+        let generation = removalGenerations[service]
         issues[service] = nil
         if terminating && unsaved[service] == nil {
             issues[service] = L.t("error.keychainWrite")
@@ -136,9 +138,11 @@ actor ClaudeProvider: UsageProvider {
         defer { lease.release() }
 
         // Another process may have refreshed or signed in while we waited.
-        guard lease.isHeld else { return nil }
+        guard lease.isHeld, removalGenerations[service] == generation else { return nil }
         if let pending = unsaved[service] {
-            switch await persist(pending, to: service, lease: lease) {
+            let result = await persist(pending, to: service, lease: lease, generation: generation)
+            guard removalGenerations[service] == generation else { return nil }
+            switch result {
             case .saved:
                 unsaved[service] = nil
             case .changed:
@@ -161,7 +165,7 @@ actor ClaudeProvider: UsageProvider {
         let writable = await Task.detached(priority: .utility) {
             ClaudeKeychain.canWrite(service: service, renewalLock: lease)
         }.value
-        guard writable, lease.isHeld, !terminating else {
+        guard writable, lease.isHeld, !terminating, removalGenerations[service] == generation else {
             issues[service] = L.t("error.keychainWrite")
             return nil
         }
@@ -172,12 +176,16 @@ actor ClaudeProvider: UsageProvider {
         defer { renewing.remove(service) }
         let request = Task { await ClaudeOAuth.refresh(refreshToken: refreshToken, scopes: credentials.scopes) }
         lease.onLost { request.cancel() }
-        switch await request.value {
+        let response = await request.value
+        guard removalGenerations[service] == generation else { return nil }
+        switch response {
         case .success(let fresh):
             let pending = Pending(tokens: fresh, credentials: credentials)
             if fresh.refreshToken != nil {
                 unsaved[service] = pending
-                switch await persist(pending, to: service, lease: lease) {
+                let result = await persist(pending, to: service, lease: lease, generation: generation)
+                guard removalGenerations[service] == generation else { return nil }
+                switch result {
                 case .saved:
                     unsaved[service] = nil
                 case .failed:
@@ -223,6 +231,16 @@ actor ClaudeProvider: UsageProvider {
         emails[service] = nil
     }
 
+    /// Only a successful explicit removal may discard an unsaved grant.
+    /// Invalidate late refresh responses without blocking a later login to the same profile.
+    func accountRemoved(_ account: DiscoveredAccount) {
+        guard case .claudeKeychain(let service, _) = account.source else { return }
+        removalGenerations[service] = UUID()
+        unsaved[service] = nil
+        issues[service] = nil
+        forget(service)
+    }
+
     private func adopt(_ credentials: ClaudeKeychain.Credentials, service: String) -> CachedToken? {
         if let origin = origins[service], !origin.hasSameTokens(as: credentials) { forget(service) }
         guard rejected[service] != credentials.accessToken else { return nil }
@@ -246,9 +264,9 @@ actor ClaudeProvider: UsageProvider {
     /// A rotated grant must reach the CLI's record before its OAuth locks are
     /// released. Retry persistence only; never issue another refresh request.
     private func persist(_ pending: Pending, to service: String,
-                         lease: ClaudeRefreshLock) async -> ClaudeKeychain.SaveResult {
+                         lease: ClaudeRefreshLock, generation: UUID?) async -> ClaudeKeychain.SaveResult {
         var delay: UInt64 = 250_000_000
-        while lease.isHeld {
+        while lease.isHeld && removalGenerations[service] == generation {
             let result = await write(pending, to: service, lease: lease)
             switch result {
             case .saved, .changed:

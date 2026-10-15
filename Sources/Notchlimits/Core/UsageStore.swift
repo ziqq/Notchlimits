@@ -187,6 +187,10 @@ final class UsageStore: ObservableObject {
     func removeAccount(id: String) throws {
         guard let account = accounts.first(where: { $0.id == id }) else { return }
         try AccountRemoval.remove(account)
+        if let claude = providers[.claude] as? ClaudeProvider,
+           case .claudeKeychain = account.source {
+            Task { await claude.accountRemoved(account) }
+        }
 
         cache.remove(id: id)
         history.purge(columnID: id)
