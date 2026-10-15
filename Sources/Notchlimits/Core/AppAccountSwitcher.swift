@@ -118,7 +118,10 @@ final class ClaudeAppSwitcher: AppAccountSwitcher {
         // Desktop has opened: keep its marker truthful even if an external
         // filesystem change prevents publishing the prepared CLI selection.
         defer { UserDefaults.standard.set(Self.key(for: account.id), forKey: Self.currentKey) }
-        if ClaudeCLISelection.isEnabled { try cliChange?.commit() }
+        if ClaudeCLISelection.isEnabled {
+            let change = try cliChange ?? ClaudeCLISelection.stage(account)
+            try change.commit()
+        }
         cliChange = nil
     }
 

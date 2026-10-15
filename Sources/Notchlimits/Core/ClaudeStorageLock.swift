@@ -7,7 +7,8 @@ final class ClaudeStorageLock: @unchecked Sendable {
     enum Failure: Error { case busy, lost }
 
     private let path: String
-    private var identity: Identity
+    private let identity: Identity
+    private static let ownerAttribute = "dev.ustinoff.notchlimits.lock-owner"
     private let queue = DispatchQueue(label: "dev.ustinoff.notchlimits.claude-storage-lock")
     private let timer: DispatchSourceTimer
     private let ownerFD: Int32
@@ -27,36 +28,44 @@ final class ClaudeStorageLock: @unchecked Sendable {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         path = url.path
         self.lifetime = lifetime
-        // This sidecar stays empty of credentials. flock proves whether a
-        // Notchlimits owner is still alive, even after a crash or PID reuse.
+        // Keep flock on a stable inode. The directory's owner marker and this
+        // sidecar contain no credentials.
         let fd = open(path + ".notchlimits-owner", O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw Failure.busy }
         var keepFD = false
         defer { if !keepFD { _ = close(fd) } }
         guard flock(fd, LOCK_EX | LOCK_NB) == 0 else { throw Failure.busy }
-        if mkdir(path, 0o700) != 0 {
-            guard errno == EEXIST, Self.recoverAbandoned(path: path, ownerFD: fd),
-                  mkdir(path, 0o700) == 0 else { throw Failure.busy }
+        var existing = stat()
+        if lstat(path, &existing) == 0 {
+            guard Self.recoverAbandoned(path: path, ownerFD: fd) else {
+                throw Failure.busy
+            }
+        } else if errno != ENOENT {
+            throw Failure.busy
         }
+
+        // Prepare a private empty directory and its complete identity before
+        // exposing the native lock path. A crash during preparation cannot
+        // leave an unmarked native lock behind.
+        let prepared = url.deletingLastPathComponent()
+            .appendingPathComponent("." + url.lastPathComponent + ".notchlimits-" + UUID().uuidString).path
+        guard mkdir(prepared, 0o700) == 0 else { throw Failure.busy }
+        defer { _ = rmdir(prepared) }
         var info = stat()
-        guard lstat(path, &info) == 0 else {
-            _ = rmdir(path)
-            throw Failure.lost
-        }
+        guard lstat(prepared, &info) == 0 else { throw Failure.lost }
         let identity = Identity(info)
-        let directory = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        guard directory >= 0 else {
-            if Identity.at(path) == identity { _ = rmdir(path) }
-            throw Failure.lost
-        }
+        let directory = open(prepared, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard directory >= 0 else { throw Failure.lost }
         defer { if !keepFD { _ = close(directory) } }
         var opened = stat()
         guard fstat(directory, &opened) == 0, Identity(opened) == identity else { throw Failure.lost }
-        do {
-            try Self.store(identity, in: fd)
-        } catch {
-            if Identity.at(path) == identity { _ = rmdir(path) }
-            throw error
+        let marker = Data(UUID().uuidString.utf8)
+        guard marker.withUnsafeBytes({
+            fsetxattr(directory, Self.ownerAttribute, $0.baseAddress, $0.count, 0, 0)
+        }) == 0 else { throw Failure.lost }
+        // Never replace a native owner that acquired the path while preparing.
+        guard renameatx_np(AT_FDCWD, prepared, AT_FDCWD, path, UInt32(RENAME_EXCL)) == 0 else {
+            throw Failure.busy
         }
         ownerFD = fd
         directoryFD = directory
@@ -78,9 +87,8 @@ final class ClaudeStorageLock: @unchecked Sendable {
 
     private var ownsDirectory: Bool {
         guard let current = Identity.at(path) else { return false }
-        // Keeping the directory descriptor open prevents inode reuse while held.
-        // macOS can move birthtime backwards when a test or clock adjustment
-        // sets mtime before creation, so birthtime is only a recovery discriminator.
+        // The held descriptor prevents inode reuse while alive. Birthtime is
+        // checked only when recovering the previous JSON owner-record format.
         return current.inode == identity.inode && current.device == identity.device
     }
 
@@ -107,14 +115,7 @@ final class ClaudeStorageLock: @unchecked Sendable {
         }
         defer { stateLock.unlock() }
         do {
-            try FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: path)
-            var info = stat()
-            guard fstat(directoryFD, &info) == 0, ownsDirectory else { throw Failure.lost }
-            let current = Identity(info)
-            if current != identity {
-                try Self.store(current, in: ownerFD)
-                identity = current
-            }
+            guard futimes(directoryFD, nil) == 0, ownsDirectory else { throw Failure.lost }
             lastHeartbeat = .now()
         } catch {
             heartbeatFailed = true
@@ -131,7 +132,9 @@ final class ClaudeStorageLock: @unchecked Sendable {
         queue.sync {}
         // Preserve a replacement owner's lock. Never steal busy or stale CLI locks;
         // defer the write when ownership is uncertain.
-        if ownsDirectory && rmdir(path) == 0 { _ = ftruncate(ownerFD, 0) }
+        if ownsDirectory && rmdir(path) == 0 {
+            _ = ftruncate(ownerFD, 0)
+        }
         _ = close(directoryFD)
         _ = close(ownerFD)
     }
@@ -164,19 +167,29 @@ final class ClaudeStorageLock: @unchecked Sendable {
         }
     }
 
-    private static func store(_ identity: Identity, in fd: Int32) throws {
-        let record = try JSONEncoder().encode(identity)
-        guard ftruncate(fd, 0) == 0,
-              record.withUnsafeBytes({ pwrite(fd, $0.baseAddress, $0.count, 0) }) == record.count,
-              fsync(fd) == 0 else { throw Failure.lost }
+    private static func hasOwnerMarker(_ path: String) -> Bool {
+        var bytes = [UInt8](repeating: 0, count: 64)
+        let count = bytes.withUnsafeMutableBytes {
+            getxattr(path, ownerAttribute, $0.baseAddress, $0.count, 0, XATTR_NOFOLLOW)
+        }
+        guard count > 0, let value = String(bytes: bytes.prefix(count), encoding: .utf8) else { return false }
+        return UUID(uuidString: value) != nil
+    }
+
+    private static func readIdentity(_ fd: Int32) -> Identity? {
+        var bytes = [UInt8](repeating: 0, count: 512)
+        let count = pread(fd, &bytes, bytes.count, 0)
+        guard count > 0 else { return nil }
+        return try? JSONDecoder().decode(Identity.self, from: Data(bytes.prefix(count)))
     }
 
     private static func recoverAbandoned(path: String, ownerFD: Int32) -> Bool {
-        var bytes = [UInt8](repeating: 0, count: 512)
-        let count = pread(ownerFD, &bytes, bytes.count, 0)
-        guard count > 0,
-              let owned = try? JSONDecoder().decode(Identity.self, from: Data(bytes.prefix(count))),
-              Identity.at(path) == owned else { return false }
+        // Extended attributes keep the native lock directory empty for rmdir.
+        // The marker is set atomically before publishing the directory and is
+        // never rewritten by heartbeats. Also accept the previous JSON format.
+        let marked = hasOwnerMarker(path)
+        let legacy = readIdentity(ownerFD).map { Identity.at(path) == $0 } ?? false
+        guard Identity.at(path) != nil, marked || legacy else { return false }
         // Only our abandoned inode can be removed. An unmarked CLI lock or a
         // replacement owner is left intact, regardless of its mtime.
         return rmdir(path) == 0

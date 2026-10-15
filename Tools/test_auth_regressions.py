@@ -264,3 +264,74 @@ class AuthenticationRegressions(unittest.TestCase):
 
     def test_disabling_cli_switching_before_desktop_opens_preserves_cli_account(self):
         self.check_scenario("claude-switch-toggle-off")
+
+    def test_enabling_cli_switching_before_desktop_opens_selects_cli_account(self):
+        self.check_scenario("claude-switch-toggle-on")
+
+    def test_enabling_cli_during_failed_desktop_launch_preserves_cli_account(self):
+        self.check_scenario("claude-switch-toggle-on-failed")
+
+    def test_removing_claude_profile_during_refresh_does_not_block_quit(self):
+        self.check_scenario("claude-remove-inflight")
+
+    def test_removing_claude_profile_with_pending_save_does_not_block_quit(self):
+        self.check_scenario("claude-remove-pending")
+
+    def test_failed_claude_removal_preserves_and_saves_rotated_credentials(self):
+        self.check_scenario("claude-remove-denied")
+
+    def test_readding_removed_profile_preserves_new_login_during_late_refresh(self):
+        self.check_scenario("claude-remove-readd")
+
+    def test_native_lock_acquired_during_preparation_is_not_replaced(self):
+        self.check_scenario("claude-native-publish")
+
+    def test_crash_after_mkdir_does_not_leave_an_unrecoverable_lock(self):
+        self.check_lock_preparation_crash("mkdir")
+
+    def test_crash_during_owner_record_does_not_leave_an_unrecoverable_lock(self):
+        self.check_lock_preparation_crash("record")
+
+    def check_lock_preparation_crash(self, phase):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-preparation-crash-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            crashed = run_fixture(self.executable, "claude-crash-" + phase, root)
+            self.assertEqual(crashed.returncode, 86, crashed.stdout + crashed.stderr)
+            self.assertIn("FAULT:" + phase, crashed.stdout)
+            recovered = run_fixture(self.executable, "claude-recover-owner", root)
+            self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
+
+    def test_abandoned_previous_json_owner_record_remains_recoverable(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-legacy-owner-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            crashed = run_fixture(self.executable, "claude-crash-legacy", root)
+            self.assertEqual(crashed.returncode, 0, crashed.stdout + crashed.stderr)
+            recovered = run_fixture(self.executable, "claude-recover-owner", root)
+            self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
+
+    def test_abandoned_owner_recovers_after_torn_sidecar_write(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-torn-owner-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            owner = subprocess.Popen([str(self.executable), "claude-live-owner", str(root)],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                self.assertEqual(owner.stdout.readline().strip(), "READY")
+                for path in (root / ".claude/.oauth_refresh.lock.notchlimits-owner", root / ".claude.lock.notchlimits-owner"):
+                    path.write_bytes(b'{')
+            finally:
+                owner.kill()
+                owner.communicate(timeout=5)
+            recovered = run_fixture(self.executable, "claude-recover-owner", root)
+            self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
+
+    def test_native_rmdir_can_reap_abandoned_marked_lock_directories(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-native-reap-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            crashed = run_fixture(self.executable, "claude-crash-owner", root)
+            self.assertEqual(crashed.returncode, 0, crashed.stdout + crashed.stderr)
+            for path in (root / ".claude/.oauth_refresh.lock", root / ".claude.lock"):
+                self.assertEqual(list(path.iterdir()), [], "Owner metadata made the native lock directory nonempty")
+                os.utime(path, (1, 1))
+                path.rmdir()
+            recovered = run_fixture(self.executable, "claude-recover-owner", root)
+            self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
