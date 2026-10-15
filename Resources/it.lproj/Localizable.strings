@@ -157,6 +157,7 @@
 // Ошибки в колонке
 "error.network" = "errore di rete";
 "error.keychainWrite" = "nessuna scrittura nel portachiavi";
+"error.pendingCredentials" = "Le credenziali sono ancora in fase di salvataggio. Sblocca il portachiavi e riprova a uscire.";
 "error.timeout" = "timeout";
 "error.noHTTP" = "nessuna risposta HTTP";
 "error.http" = "HTTP %d";
@@ -177,3 +178,4 @@
 "appswitch.error.notInstalled" = "%@ non è installato.";
 "appswitch.error.didNotQuit" = "%@ non si è chiuso: chiudilo e riprova.";
 "appswitch.error.noAuth" = "Questo account non ha un accesso a Codex (auth.json). Accedi di nuovo.";
+"appswitch.error.inProgress" = "È già in corso un cambio account.";

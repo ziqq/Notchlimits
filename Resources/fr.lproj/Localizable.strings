@@ -157,6 +157,7 @@
 // Ошибки в колонке
 "error.network" = "erreur réseau";
 "error.keychainWrite" = "pas d'accès en écriture au trousseau";
+"error.pendingCredentials" = "Les identifiants sont en cours d’enregistrement. Déverrouillez le trousseau et réessayez de quitter.";
 "error.timeout" = "délai dépassé";
 "error.noHTTP" = "pas de réponse HTTP";
 "error.http" = "HTTP %d";
@@ -177,3 +178,4 @@
 "appswitch.error.notInstalled" = "%@ n’est pas installé.";
 "appswitch.error.didNotQuit" = "%@ ne s’est pas fermé — fermez-le et réessayez.";
 "appswitch.error.noAuth" = "Ce compte n’a pas de connexion Codex (auth.json). Reconnectez-vous.";
+"appswitch.error.inProgress" = "Un changement de compte est déjà en cours.";

@@ -7,10 +7,12 @@ final class ClaudeStorageLock: @unchecked Sendable {
     enum Failure: Error { case busy, lost }
 
     private let path: String
-    private let inode: ino_t
-    private let device: dev_t
+    private var identity: Identity
     private let queue = DispatchQueue(label: "dev.ustinoff.notchlimits.claude-storage-lock")
     private let timer: DispatchSourceTimer
+    private let ownerFD: Int32
+    private let directoryFD: Int32
+    private var released = false
     private var heartbeatFailed = false
     private var lastHeartbeat = DispatchTime.now()
     private let lifetime: TimeInterval
@@ -25,14 +27,41 @@ final class ClaudeStorageLock: @unchecked Sendable {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         path = url.path
         self.lifetime = lifetime
-        guard mkdir(path, 0o700) == 0 else { throw Failure.busy }
+        // This sidecar stays empty of credentials. flock proves whether a
+        // Notchlimits owner is still alive, even after a crash or PID reuse.
+        let fd = open(path + ".notchlimits-owner", O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw Failure.busy }
+        var keepFD = false
+        defer { if !keepFD { _ = close(fd) } }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else { throw Failure.busy }
+        if mkdir(path, 0o700) != 0 {
+            guard errno == EEXIST, Self.recoverAbandoned(path: path, ownerFD: fd),
+                  mkdir(path, 0o700) == 0 else { throw Failure.busy }
+        }
         var info = stat()
         guard lstat(path, &info) == 0 else {
             _ = rmdir(path)
             throw Failure.lost
         }
-        inode = info.st_ino
-        device = info.st_dev
+        let identity = Identity(info)
+        let directory = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard directory >= 0 else {
+            if Identity.at(path) == identity { _ = rmdir(path) }
+            throw Failure.lost
+        }
+        defer { if !keepFD { _ = close(directory) } }
+        var opened = stat()
+        guard fstat(directory, &opened) == 0, Identity(opened) == identity else { throw Failure.lost }
+        do {
+            try Self.store(identity, in: fd)
+        } catch {
+            if Identity.at(path) == identity { _ = rmdir(path) }
+            throw error
+        }
+        ownerFD = fd
+        directoryFD = directory
+        keepFD = true
+        self.identity = identity
         timer = DispatchSource.makeTimerSource(queue: queue)
         // CLI considers a lock stale after 15 seconds. Keychain can wait longer
         // for user authorization, so keep the heartbeat on a separate queue.
@@ -44,12 +73,15 @@ final class ClaudeStorageLock: @unchecked Sendable {
     var isHeld: Bool {
         stateLock.lock()
         defer { stateLock.unlock() }
-        return !heartbeatFailed && withinLease && ownsDirectory
+        return !released && !heartbeatFailed && withinLease && ownsDirectory
     }
 
     private var ownsDirectory: Bool {
-        var info = stat()
-        return lstat(path, &info) == 0 && info.st_ino == inode && info.st_dev == device
+        guard let current = Identity.at(path) else { return false }
+        // Keeping the directory descriptor open prevents inode reuse while held.
+        // macOS can move birthtime backwards when a test or clock adjustment
+        // sets mtime before creation, so birthtime is only a recovery discriminator.
+        return current.inode == identity.inode && current.device == identity.device
     }
 
     private var withinLease: Bool {
@@ -59,14 +91,14 @@ final class ClaudeStorageLock: @unchecked Sendable {
     func onLost(_ handler: @escaping () -> Void) {
         stateLock.lock()
         lossHandler = handler
-        let lost = heartbeatFailed || !withinLease || !ownsDirectory
+        let lost = released || heartbeatFailed || !withinLease || !ownsDirectory
         stateLock.unlock()
         if lost { handler() }
     }
 
     private func heartbeat() {
         stateLock.lock()
-        guard !heartbeatFailed && withinLease && ownsDirectory else {
+        guard !released && !heartbeatFailed && withinLease && ownsDirectory else {
             heartbeatFailed = true
             let handler = lossHandler
             stateLock.unlock()
@@ -76,6 +108,13 @@ final class ClaudeStorageLock: @unchecked Sendable {
         defer { stateLock.unlock() }
         do {
             try FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: path)
+            var info = stat()
+            guard fstat(directoryFD, &info) == 0, ownsDirectory else { throw Failure.lost }
+            let current = Identity(info)
+            if current != identity {
+                try Self.store(current, in: ownerFD)
+                identity = current
+            }
             lastHeartbeat = .now()
         } catch {
             heartbeatFailed = true
@@ -84,13 +123,63 @@ final class ClaudeStorageLock: @unchecked Sendable {
 
     func release() {
         stateLock.lock()
+        guard !released else { stateLock.unlock(); return }
+        released = true
         lossHandler = nil
         stateLock.unlock()
         timer.cancel()
         queue.sync {}
         // Preserve a replacement owner's lock. Never steal busy or stale CLI locks;
         // defer the write when ownership is uncertain.
-        if ownsDirectory { _ = rmdir(path) }
+        if ownsDirectory && rmdir(path) == 0 { _ = ftruncate(ownerFD, 0) }
+        _ = close(directoryFD)
+        _ = close(ownerFD)
+    }
+
+    deinit {
+        timer.cancel()
+        if !released {
+            _ = close(directoryFD)
+            _ = close(ownerFD)
+        }
+    }
+
+    private struct Identity: Codable, Equatable {
+        let inode: UInt64
+        let device: Int32
+        let birthSeconds: Int64
+        let birthNanoseconds: Int64
+
+        init(_ info: stat) {
+            inode = UInt64(info.st_ino)
+            device = info.st_dev
+            birthSeconds = Int64(info.st_birthtimespec.tv_sec)
+            birthNanoseconds = Int64(info.st_birthtimespec.tv_nsec)
+        }
+
+        static func at(_ path: String) -> Identity? {
+            var info = stat()
+            guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { return nil }
+            return Identity(info)
+        }
+    }
+
+    private static func store(_ identity: Identity, in fd: Int32) throws {
+        let record = try JSONEncoder().encode(identity)
+        guard ftruncate(fd, 0) == 0,
+              record.withUnsafeBytes({ pwrite(fd, $0.baseAddress, $0.count, 0) }) == record.count,
+              fsync(fd) == 0 else { throw Failure.lost }
+    }
+
+    private static func recoverAbandoned(path: String, ownerFD: Int32) -> Bool {
+        var bytes = [UInt8](repeating: 0, count: 512)
+        let count = pread(ownerFD, &bytes, bytes.count, 0)
+        guard count > 0,
+              let owned = try? JSONDecoder().decode(Identity.self, from: Data(bytes.prefix(count))),
+              Identity.at(path) == owned else { return false }
+        // Only our abandoned inode can be removed. An unmarked CLI lock or a
+        // replacement owner is left intact, regardless of its mtime.
+        return rmdir(path) == 0
     }
 }
 

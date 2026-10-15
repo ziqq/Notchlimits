@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Route new CLI invocations to existing profiles without copying credentials.
 /// The shell reads a persistent selection, so Claude works when Notchlimits is closed.
@@ -18,16 +19,19 @@ enum ClaudeCLISelection {
         let errorDescription: String?
     }
 
-    static func activate(_ account: DiscoveredAccount) throws {
+    static func stage(_ account: DiscoveredAccount) throws -> Prepared {
         guard case .claudeKeychain(let service, _) = account.source else {
             throw Failure(errorDescription: L.t("error.unknownSource"))
         }
         let selection: String
         if service == ClaudeKeychain.baseService {
             selection = ""
-        } else if let directory = ClaudeKeychain.configDirectory(for: service) {
-            selection = directory.path
+        } else if let path = ClaudeKeychain.configPath(for: service) {
+            selection = path
         } else {
+            throw Failure(errorDescription: L.t("error.cliProfile"))
+        }
+        guard !selection.contains("\n"), !selection.contains("\r") else {
             throw Failure(errorDescription: L.t("error.cliProfile"))
         }
         let home = ProfileDirectories.home
@@ -47,6 +51,12 @@ enum ClaudeCLISelection {
                                                 attributes: [.posixPermissions: 0o700])
         let pointer = root.appendingPathComponent("selected-profile")
         let script = root.appendingPathComponent("profile.sh")
+        let wasIntegrated = FileManager.default.fileExists(atPath: script.path)
+        if !wasIntegrated && !FileManager.default.fileExists(atPath: pointer.path) {
+            // Installing the function must preserve default CLI routing until commit.
+            try Data("\n".utf8).write(to: pointer, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: pointer.path)
+        }
         let content = """
         # Managed by Notchlimits. No credentials are stored in this file.
         function claude {
@@ -83,8 +93,37 @@ enum ClaudeCLISelection {
             try handle.seekToEnd()
             try handle.write(contentsOf: Data(("\n# Notchlimits Claude profile selection\n" + source + "\n").utf8))
         }
-        try Data((selection + "\n").utf8).write(to: pointer, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: pointer.path)
+        let staged = root.appendingPathComponent(".selected-profile-" + UUID().uuidString)
+        do {
+            try Data((selection + "\n").utf8).write(to: staged, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: staged.path)
+        } catch {
+            try? FileManager.default.removeItem(at: staged)
+            throw error
+        }
+        return Prepared(staged: staged, pointer: pointer)
+    }
+
+    final class Prepared {
+        private let staged: URL
+        private let pointer: URL
+        private var committed = false
+
+        fileprivate init(staged: URL, pointer: URL) {
+            self.staged = staged
+            self.pointer = pointer
+        }
+
+        func commit() throws {
+            guard rename(staged.path, pointer.path) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+            committed = true
+        }
+
+        deinit {
+            if !committed { try? FileManager.default.removeItem(at: staged) }
+        }
     }
 
     private static func quote(_ value: String) -> String {

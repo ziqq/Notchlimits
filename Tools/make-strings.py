@@ -81,7 +81,7 @@ ORDER = [
     ("Уведомления", ["notification.title", "notification.body",
                      "notification.reset.title", "notification.reset.body"]),
     ("Ошибки в колонке", [
-        "error.network", "error.keychainWrite", "error.timeout", "error.noHTTP", "error.http",
+        "error.network", "error.keychainWrite", "error.pendingCredentials", "error.timeout", "error.noHTTP", "error.http",
         "error.parse", "error.unknownSource", "error.cliProfile", "error.cliShell", "error.noProvider",
         "error.unreachable",
     ]),
@@ -89,7 +89,7 @@ ORDER = [
         "appswitch.title", "appswitch.title.codex", "appswitch.confirm.title",
         "appswitch.confirm.body", "appswitch.confirm.do", "appswitch.error.title",
         "appswitch.error.notInstalled", "appswitch.error.didNotQuit",
-        "appswitch.error.noAuth",
+        "appswitch.error.noAuth", "appswitch.error.inProgress",
     ]),
 ]
 
@@ -1488,6 +1488,26 @@ _SWITCH_CLI_HELP = {
 }
 for _lang, _text in _SWITCH_CLI_HELP.items():
     T[_lang]["menu.switchCLI.help"] = _text
+
+# Failed persistence must finish before normal termination can proceed.
+_AUTH_SAFETY = {
+    "en": ("Credentials are still being saved. Unlock the Keychain and try quitting again.", "An account switch is already in progress."),
+    "ru": ("Учётные данные ещё сохраняются. Разблокируйте Keychain и попробуйте выйти снова.", "Переключение аккаунта уже выполняется."),
+    "uk": ("Облікові дані ще зберігаються. Розблокуйте Keychain і спробуйте вийти знову.", "Перемикання акаунта вже виконується."),
+    "de": ("Anmeldedaten werden noch gespeichert. Entsperre den Schlüsselbund und versuche erneut zu beenden.", "Ein Kontowechsel läuft bereits."),
+    "es": ("Las credenciales aún se están guardando. Desbloquea el llavero e intenta salir de nuevo.", "Ya hay un cambio de cuenta en curso."),
+    "fr": ("Les identifiants sont en cours d’enregistrement. Déverrouillez le trousseau et réessayez de quitter.", "Un changement de compte est déjà en cours."),
+    "it": ("Le credenziali sono ancora in fase di salvataggio. Sblocca il portachiavi e riprova a uscire.", "È già in corso un cambio account."),
+    "pl": ("Dane logowania są nadal zapisywane. Odblokuj pęk kluczy i spróbuj ponownie zamknąć aplikację.", "Przełączanie konta już trwa."),
+    "pt-BR": ("As credenciais ainda estão sendo salvas. Desbloqueie as Chaves e tente sair novamente.", "Uma troca de conta já está em andamento."),
+    "tr": ("Kimlik bilgileri hâlâ kaydediliyor. Anahtar Zinciri kilidini açıp yeniden çıkmayı deneyin.", "Hesap geçişi zaten devam ediyor."),
+    "ja": ("認証情報を保存中です。キーチェーンのロックを解除してから終了を再試行してください。", "アカウントの切替中です。"),
+    "ko": ("인증 정보를 저장 중입니다. 키체인 잠금을 해제한 후 종료를 다시 시도하세요.", "계정 전환이 이미 진행 중입니다."),
+    "zh-Hans": ("凭据仍在保存。请解锁钥匙串后重试退出。", "正在切换账号。"),
+    "zh-Hant": ("憑證仍在儲存。請解鎖鑰匙圈後重試結束。", "正在切換帳號。"),
+}
+for _lang, _values in _AUTH_SAFETY.items():
+    T[_lang].update(zip(("error.pendingCredentials", "appswitch.error.inProgress"), _values))
 
 _ON_OFF = {
     "en": ("On", "Off"), "ru": ("Включено", "Выключено"),

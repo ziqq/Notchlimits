@@ -20,6 +20,8 @@ actor ClaudeProvider: UsageProvider {
 
     private var tokens: [String: CachedToken] = [:]
     private var origins: [String: ClaudeKeychain.Credentials] = [:]
+    private var terminating = false
+    private var renewing: Set<String> = []
     private var inFlight: [String: Task<CachedToken?, Never>] = [:]
     /// Токены, отвергнутые сервером: брать их из Keychain повторно бессмысленно.
     private var rejected: [String: String] = [:]
@@ -112,10 +114,17 @@ actor ClaudeProvider: UsageProvider {
 
     private func resolveToken(for service: String) async -> CachedToken? {
         issues[service] = nil
+        if terminating && unsaved[service] == nil {
+            issues[service] = L.t("error.keychainWrite")
+            return nil
+        }
         // Authorize interactive reads before taking a lease. A Keychain dialog
         // must not suspend the critical section beyond the CLI's lease timeout.
-        guard let observed = await read(service) else { return nil }
-        if unsaved[service] == nil, let cached = adopt(observed, service: service) { return cached }
+        if let observed = await read(service) {
+            if unsaved[service] == nil, let cached = adopt(observed, service: service) { return cached }
+        } else if unsaved[service] == nil {
+            return nil
+        }
         guard ClaudeKeychain.supportsStorageLock else { return nil }
 
         guard let lease = await Task.detached(priority: .utility, operation: {
@@ -127,43 +136,40 @@ actor ClaudeProvider: UsageProvider {
         defer { lease.release() }
 
         // Another process may have refreshed or signed in while we waited.
-        guard lease.isHeld, var credentials = await read(service, interactive: false) else {
-            issues[service] = L.t("error.keychainWrite")
-            return nil
-        }
+        guard lease.isHeld else { return nil }
         if let pending = unsaved[service] {
-            switch await write(pending, to: service, lease: lease) {
+            switch await persist(pending, to: service, lease: lease) {
             case .saved:
                 unsaved[service] = nil
-                guard let latest = await read(service, interactive: false) else {
-                    issues[service] = L.t("error.keychainWrite")
-                    return nil
-                }
-                credentials = latest
             case .changed:
                 unsaved[service] = nil
                 forget(service)
-                guard let latest = await read(service, interactive: false) else { return nil }
-                credentials = latest
             case .failed:
                 // Do not spend another refresh token until the rotated one is durable.
                 issues[service] = L.t("error.keychainWrite")
                 return nil
             }
         }
+        guard let credentials = await read(service, interactive: false) else {
+            issues[service] = L.t("error.keychainWrite")
+            return nil
+        }
         if let cached = adopt(credentials, service: service) { return cached }
+        guard !terminating else { return nil }
         guard credentials.isRefreshable, let refreshToken = credentials.refreshToken else { return nil }
 
         let writable = await Task.detached(priority: .utility) {
             ClaudeKeychain.canWrite(service: service, renewalLock: lease)
         }.value
-        guard writable, lease.isHeld else {
+        guard writable, lease.isHeld, !terminating else {
             issues[service] = L.t("error.keychainWrite")
             return nil
         }
 
         // Keep both native OAuth locks throughout the HTTP request and save.
         // A compromised lease cancels the request and forbids subsequent writes.
+        renewing.insert(service)
+        defer { renewing.remove(service) }
         let request = Task { await ClaudeOAuth.refresh(refreshToken: refreshToken, scopes: credentials.scopes) }
         lease.onLost { request.cancel() }
         switch await request.value {
@@ -171,7 +177,7 @@ actor ClaudeProvider: UsageProvider {
             let pending = Pending(tokens: fresh, credentials: credentials)
             if fresh.refreshToken != nil {
                 unsaved[service] = pending
-                switch await write(pending, to: service, lease: lease) {
+                switch await persist(pending, to: service, lease: lease) {
                 case .saved:
                     unsaved[service] = nil
                 case .failed:
@@ -235,6 +241,40 @@ actor ClaudeProvider: UsageProvider {
         if let pending = pending?.refreshToken { return pending }
         guard stored.isRefreshable else { return nil }
         return stored.refreshToken
+    }
+
+    /// A rotated grant must reach the CLI's record before its OAuth locks are
+    /// released. Retry persistence only; never issue another refresh request.
+    private func persist(_ pending: Pending, to service: String,
+                         lease: ClaudeRefreshLock) async -> ClaudeKeychain.SaveResult {
+        var delay: UInt64 = 250_000_000
+        while lease.isHeld {
+            let result = await write(pending, to: service, lease: lease)
+            switch result {
+            case .saved, .changed:
+                issues[service] = nil
+                return result
+            case .failed:
+                issues[service] = L.t("error.keychainWrite")
+                try? await Task.sleep(nanoseconds: delay)
+                delay = min(delay * 2, 1_000_000_000)
+            }
+        }
+        return .failed
+    }
+
+    /// Normal termination cannot abandon a refresh POST or an unsaved rotation.
+    /// A failed drain leaves the app running so its heartbeat and retries survive.
+    func prepareForTermination(timeout: TimeInterval = 25) async -> Bool {
+        terminating = true
+        let deadline = Date().addingTimeInterval(timeout)
+        let recovery = unsaved.keys.filter { inFlight[$0] == nil }
+        for service in recovery { Task { _ = await token(for: service) } }
+        while !renewing.isEmpty || !unsaved.isEmpty {
+            guard Date() < deadline else { terminating = false; return false }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return true
     }
 
     private func write(_ pending: Pending, to service: String, lease: ClaudeRefreshLock) async -> ClaudeKeychain.SaveResult {

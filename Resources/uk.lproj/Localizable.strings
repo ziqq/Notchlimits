@@ -157,6 +157,7 @@
 // Ошибки в колонке
 "error.network" = "збій мережі";
 "error.keychainWrite" = "немає запису в Keychain";
+"error.pendingCredentials" = "Облікові дані ще зберігаються. Розблокуйте Keychain і спробуйте вийти знову.";
 "error.timeout" = "тайм-аут";
 "error.noHTTP" = "немає HTTP-відповіді";
 "error.http" = "HTTP %d";
@@ -177,3 +178,4 @@
 "appswitch.error.notInstalled" = "%@ не встановлено.";
 "appswitch.error.didNotQuit" = "%@ не закрився — закрий його й спробуй ще раз.";
 "appswitch.error.noAuth" = "У цього акаунта немає входу в Codex (auth.json). Увійди в нього знову.";
+"appswitch.error.inProgress" = "Перемикання акаунта вже виконується.";

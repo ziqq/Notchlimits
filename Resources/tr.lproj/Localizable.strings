@@ -157,6 +157,7 @@
 // Ошибки в колонке
 "error.network" = "ağ hatası";
 "error.keychainWrite" = "Anahtar Zinciri'ne yazılamıyor";
+"error.pendingCredentials" = "Kimlik bilgileri hâlâ kaydediliyor. Anahtar Zinciri kilidini açıp yeniden çıkmayı deneyin.";
 "error.timeout" = "zaman aşımı";
 "error.noHTTP" = "HTTP yanıtı yok";
 "error.http" = "HTTP %d";
@@ -177,3 +178,4 @@
 "appswitch.error.notInstalled" = "%@ yüklü değil.";
 "appswitch.error.didNotQuit" = "%@ kapanmadı — kapatıp tekrar dene.";
 "appswitch.error.noAuth" = "Bu hesabın Codex oturumu (auth.json) yok. Yeniden giriş yap.";
+"appswitch.error.inProgress" = "Hesap geçişi zaten devam ediyor.";
