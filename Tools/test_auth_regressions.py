@@ -283,6 +283,15 @@ class AuthenticationRegressions(unittest.TestCase):
     def test_readding_removed_profile_preserves_new_login_during_late_refresh(self):
         self.check_scenario("claude-remove-readd")
 
+    def test_readded_login_does_not_join_removed_generation_result(self):
+        self.check_scenario("claude-readd-inflight")
+
+    def test_readded_expired_login_renews_once_after_removed_generation_finishes(self):
+        self.check_scenario("claude-readd-expired-inflight")
+
+    def test_save_already_resolving_a_profile_cannot_recreate_it_after_removal(self):
+        self.check_scenario("claude-remove-during-save")
+
     def test_native_lock_acquired_during_preparation_is_not_replaced(self):
         self.check_scenario("claude-native-publish")
 

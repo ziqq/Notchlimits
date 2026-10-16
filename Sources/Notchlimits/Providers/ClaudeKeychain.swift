@@ -196,7 +196,7 @@ enum ClaudeKeychain {
     @discardableResult
     static func save(service: String, tokens: ClaudeOAuth.Tokens,
                      expected: Credentials, renewalLock: ClaudeRefreshLock? = nil) -> SaveResult {
-        guard let storageLock = storageLock(service: service) else { return .failed }
+        guard let storageLock = storageLock(service: service, createParent: renewalLock == nil) else { return .failed }
         defer { storageLock.release() }
         let item = readItem(service: service, interactive: renewalLock == nil)
         guard var json = item.json else { return item.status == errSecItemNotFound ? .changed : .failed }
@@ -232,7 +232,7 @@ enum ClaudeKeychain {
     /// потом не записать, в Keychain останется мёртвый, а CLI, наткнувшись
     /// на него, обнулит вход. Блокирующий вызов — только вне главного потока.
     static func canWrite(service: String, renewalLock: ClaudeRefreshLock? = nil) -> Bool {
-        guard let storageLock = storageLock(service: service) else { return false }
+        guard let storageLock = storageLock(service: service, createParent: renewalLock == nil) else { return false }
         defer { storageLock.release() }
         guard let json = rawItem(service: service, interactive: renewalLock == nil),
               let data = try? JSONSerialization.data(withJSONObject: json) else { return false }
@@ -251,9 +251,10 @@ enum ClaudeKeychain {
         return try? ClaudeRefreshLock(directory: directory)
     }
 
-    private static func storageLock(service: String) -> ClaudeStorageLock? {
+    private static func storageLock(service: String, createParent: Bool) -> ClaudeStorageLock? {
         guard supportsStorageLock, let directory = storageDirectory(service: service) else { return nil }
-        return try? ClaudeStorageLock(directory: directory)
+        // Renewal already owns this directory. Do not recreate it after removal.
+        return try? ClaudeStorageLock(directory: directory, createParent: createParent)
     }
 
     private static func storageDirectory(service: String) -> URL? {

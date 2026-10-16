@@ -47,6 +47,9 @@ private enum Fixture {
     static var denyKeychainDelete = false
     static var discoveredClaudeService: String?
     static var releaseRefreshReply = false
+    static var pauseProfileSnapshot = false
+    static var profileSnapshotPaused = false
+    static var resumeProfileSnapshot = false
     static var lockCrashPhase = ""
     static var nativeAcquisitionAtPublish = false
     static var nativeAcquisitionObserved = false
@@ -212,6 +215,33 @@ func renameatx_np(_ fromFD: Int32, _ from: UnsafePointer<CChar>, _ toFD: Int32,
 
 private final class FixtureFileManager: Foundation.FileManager, @unchecked Sendable {
     override var homeDirectoryForCurrentUser: URL { Fixture.root }
+
+    override func contentsOfDirectory(at url: URL, includingPropertiesForKeys keys: [URLResourceKey]?,
+                                      options mask: DirectoryEnumerationOptions = []) throws -> [URL] {
+        var entries = try super.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: mask)
+        Fixture.lock.lock()
+        let pause = Fixture.pauseProfileSnapshot && url.path == ProfileDirectories.claudeRoot.resolvingSymlinksInPath().path
+        if pause { Fixture.pauseProfileSnapshot = false }
+        Fixture.lock.unlock()
+        guard pause else { return entries }
+        // Preserve the directory metadata already observed by this enumeration.
+        // Removal happens after resolution starts but before storage lock I/O.
+        for index in entries.indices {
+            let isDirectory = try entries[index].resourceValues(forKeys: [.isDirectoryKey]).isDirectory
+            entries[index].setTemporaryResourceValue(isDirectory, forKey: .isDirectoryKey)
+        }
+        Fixture.lock.lock()
+        Fixture.profileSnapshotPaused = true
+        Fixture.lock.unlock()
+        while true {
+            Fixture.lock.lock()
+            let resume = Fixture.resumeProfileSnapshot
+            Fixture.lock.unlock()
+            if resume { break }
+            Thread.sleep(forTimeInterval: 0.005)
+        }
+        return entries
+    }
 }
 
 enum FileManager { static let `default`: Foundation.FileManager = FixtureFileManager() }
@@ -472,6 +502,9 @@ enum Authentication {
             case "claude-remove-pending": try await claudeRemoveDuringRenewal(pending: true)
             case "claude-remove-denied": try await claudeRemoveDuringRenewal(pending: true, denied: true)
             case "claude-remove-readd": try await claudeRemoveDuringRenewal(pending: false, readded: true)
+            case "claude-readd-inflight": try await claudeReaddInFlight(expired: false)
+            case "claude-readd-expired-inflight": try await claudeReaddInFlight(expired: true)
+            case "claude-remove-during-save": try await claudeRemoveDuringSave()
             case "claude-native-publish": try await claudeNativePublish()
             case "claude-crash-mkdir":
                 Fixture.lockCrashPhase = "mkdir"
@@ -1263,6 +1296,115 @@ enum Authentication {
             try expect(!Fixture.keychainExists && !Foundation.FileManager.default.fileExists(atPath: profile.path),
                        "Late renewal resurrected the removed account or profile")
         }
+    }
+
+    @MainActor
+    private static func claudeReaddInFlight(expired: Bool) async throws {
+        let profile = ProfileDirectories.claudeRoot.appendingPathComponent("work")
+        try Foundation.FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+        let suffix = SHA256.hash(data: Data(profile.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
+        let service = Fixture.service + "-" + suffix
+        let account = DiscoveredAccount(id: "claude:" + service, provider: .claude, profileName: "work",
+                                        source: .claudeKeychain(service: service, configDir: profile))
+        Fixture.expectedOAuthDirectory = profile
+        Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
+        Fixture.response = .heldRenewed
+        let provider = ClaudeProvider()
+        let old = Task { await provider.fetch(account) }
+        var started = false
+        for _ in 0..<200 {
+            Fixture.lock.lock()
+            started = Fixture.refreshCalls > 0
+            Fixture.lock.unlock()
+            if started { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try expect(started, "Old refresh did not reach the held HTTP boundary")
+        try AccountRemoval.remove(account)
+        await provider.accountRemoved(account)
+        try Foundation.FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+        Fixture.lock.lock()
+        Fixture.keychainExists = true
+        Fixture.keychain = Fixture.claudeLogin("readded-login", expired: expired)
+        Fixture.lock.unlock()
+        Task {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            Fixture.releaseRefresh()
+        }
+        async let first = provider.fetch(account)
+        async let second = provider.fetch(account)
+        let outcomes = await [first, second]
+        _ = await old.value
+        let retry = await provider.fetch(account)
+        if case .success = retry {} else { throw Failure(description: "Replacement login control failed") }
+        try expect(Fixture.refreshCalls == (expired ? 2 : 1), "Replacement login duplicated or skipped its refresh")
+        try expect(ClaudeKeychain.parse(Fixture.keychain)?.refreshToken == (expired ? "synthetic-rotated" : "synthetic-refresh-readded-login"),
+                   "Late old response changed replacement credentials")
+        if expired {
+            try expect(Fixture.refreshInput == "synthetic-refresh-readded-login", "Replacement renewed the removed login")
+        } else {
+            try expect(Fixture.lastAuthorization == "Bearer synthetic-readded-login", "Replacement did not use its new login")
+        }
+        for outcome in outcomes {
+            if case .success = outcome {} else {
+                throw Failure(description: "Replacement login inherited the removed generation's inFlight failure")
+            }
+        }
+    }
+
+    @MainActor
+    private static func claudeRemoveDuringSave() async throws {
+        let profile = ProfileDirectories.claudeRoot.appendingPathComponent("work")
+        try Foundation.FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+        let suffix = SHA256.hash(data: Data(profile.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
+        let service = Fixture.service + "-" + suffix
+        let account = DiscoveredAccount(id: "claude:" + service, provider: .claude, profileName: "work",
+                                        source: .claudeKeychain(service: service, configDir: profile))
+        Fixture.discoveredClaudeService = service
+        Fixture.expectedOAuthDirectory = profile
+        Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
+        Fixture.response = .heldRenewed
+        let provider = ClaudeProvider()
+        let store = UsageStore(providers: [.claude: provider], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        let renewal = Task { await provider.fetch(account) }
+        var started = false
+        for _ in 0..<200 {
+            Fixture.lock.lock()
+            started = Fixture.refreshCalls > 0
+            Fixture.lock.unlock()
+            if started { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try expect(started, "Refresh did not reach the held HTTP boundary")
+        Fixture.lock.lock()
+        Fixture.pauseProfileSnapshot = true
+        Fixture.lock.unlock()
+        defer {
+            Fixture.lock.lock()
+            Fixture.resumeProfileSnapshot = true
+            Fixture.lock.unlock()
+        }
+        Fixture.releaseRefresh()
+        var paused = false
+        for _ in 0..<200 {
+            Fixture.lock.lock()
+            paused = Fixture.profileSnapshotPaused
+            Fixture.lock.unlock()
+            if paused { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try expect(paused, "Save did not reach its directory resolution boundary")
+        try store.removeAccount(id: account.id)
+        try expect(!Foundation.FileManager.default.fileExists(atPath: profile.path), "Removal itself left the directory behind")
+        Fixture.lock.lock()
+        Fixture.resumeProfileSnapshot = true
+        Fixture.lock.unlock()
+        _ = await renewal.value
+        let ready = await provider.prepareForTermination(timeout: 0.5)
+        try expect(!Fixture.keychainExists && ready, "Deletion did not clear pending credentials")
+        try expect(!Foundation.FileManager.default.fileExists(atPath: profile.path),
+                   "An already-started save recreated the successfully removed profile directory")
     }
 
     private static func claudeNativePublish() async throws {
