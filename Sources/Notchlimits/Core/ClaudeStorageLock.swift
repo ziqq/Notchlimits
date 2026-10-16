@@ -205,12 +205,15 @@ final class ClaudeRefreshLock: @unchecked Sendable {
     private let current: ClaudeStorageLock
     private let legacy: ClaudeStorageLock
 
-    init(directory: URL) throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        current = try ClaudeStorageLock(path: directory.appendingPathComponent(".oauth_refresh.lock"), lifetime: 60)
+    init(directory: URL, createParent: Bool) throws {
+        if createParent {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        current = try ClaudeStorageLock(path: directory.appendingPathComponent(".oauth_refresh.lock"),
+                                        lifetime: 60, createParent: false)
         do {
             let path = directory.resolvingSymlinksInPath().path + ".lock"
-            legacy = try ClaudeStorageLock(path: URL(fileURLWithPath: path), lifetime: 60)
+            legacy = try ClaudeStorageLock(path: URL(fileURLWithPath: path), lifetime: 60, createParent: false)
         } catch {
             current.release()
             throw error

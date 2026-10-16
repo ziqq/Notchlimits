@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import AppKit
 import Security
 import Darwin
@@ -47,6 +48,10 @@ private enum Fixture {
     static var denyKeychainDelete = false
     static var discoveredClaudeService: String?
     static var releaseRefreshReply = false
+    static var holdFirstUsage = false
+    static var usageCalls = 0
+    static var usageCompletions = 0
+    static var releaseFirstUsage = false
     static var pauseProfileSnapshot = false
     static var profileSnapshotPaused = false
     static var resumeProfileSnapshot = false
@@ -315,6 +320,11 @@ func SecItemCopyMatching(_ query: CFDictionary, _ result: UnsafeMutablePointer<C
     Fixture.lock.lock()
     defer { Fixture.lock.unlock() }
     if (query as NSDictionary)[kSecReturnAttributes as String] as? Bool == true {
+        if let service = (query as NSDictionary)[kSecAttrService as String] as? String {
+            guard Fixture.keychainExists else { return errSecItemNotFound }
+            result?.pointee = [kSecAttrService as String: service] as NSDictionary
+            return errSecSuccess
+        }
         if Fixture.keychainExists, let service = Fixture.discoveredClaudeService {
             result?.pointee = [[kSecAttrService as String: service]] as NSArray
         } else { result?.pointee = NSArray() }
@@ -427,6 +437,27 @@ struct HTTPClient {
     }
 
     func get(_ url: URL, headers: [String: String]) async -> Result<Response, Failure> {
+        Fixture.lock.lock()
+        Fixture.usageCalls += 1
+        let first = Fixture.usageCalls == 1
+        let hold = Fixture.holdFirstUsage && first
+        Fixture.lock.unlock()
+        if hold {
+            while true {
+                Fixture.lock.lock()
+                let release = Fixture.releaseFirstUsage
+                Fixture.lock.unlock()
+                if release { break }
+                try? await Task.sleep(nanoseconds: 5_000_000)
+            }
+        }
+        if Fixture.holdFirstUsage {
+            let data = try! JSONSerialization.data(withJSONObject: ["five_hour": ["utilization": first ? 12 : 84]])
+            Fixture.lock.lock()
+            Fixture.usageCompletions += 1
+            Fixture.lock.unlock()
+            return .success(Response(status: 200, data: data, retryAfter: nil))
+        }
         Fixture.lastAuthorization = headers["Authorization"] ?? ""
         let data = Data(#"{"five_hour":{"utilization":12},"rate_limit":{"primary_window":{"used_percent":12,"limit_window_seconds":18000}}}"#.utf8)
         return .success(Response(status: Fixture.usageStatus, data: data, retryAfter: nil))
@@ -505,6 +536,12 @@ enum Authentication {
             case "claude-readd-inflight": try await claudeReaddInFlight(expired: false)
             case "claude-readd-expired-inflight": try await claudeReaddInFlight(expired: true)
             case "claude-remove-during-save": try await claudeRemoveDuringSave()
+            case "claude-remove-during-oauth-lock": try await claudeRemoveDuringOAuthLock()
+            case "claude-remove-staged-cli": try claudeRemoveStagedCLI()
+            case "claude-remove-staged-cli-main": try claudeRemoveStagedCLI(primary: true)
+            case "claude-remove-staged-cli-off": try claudeRemoveStagedCLI(enabled: false)
+            case "claude-remove-staged-cli-denied": try claudeRemoveStagedCLI(denied: true)
+            case "claude-stale-usage-result": try await claudeStaleUsageResult()
             case "claude-native-publish": try await claudeNativePublish()
             case "claude-crash-mkdir":
                 Fixture.lockCrashPhase = "mkdir"
@@ -1405,6 +1442,156 @@ enum Authentication {
         try expect(!Fixture.keychainExists && ready, "Deletion did not clear pending credentials")
         try expect(!Foundation.FileManager.default.fileExists(atPath: profile.path),
                    "An already-started save recreated the successfully removed profile directory")
+    }
+
+    @MainActor
+    private static func claudeRemovableProfile() throws -> (URL, DiscoveredAccount) {
+        let profile = ProfileDirectories.claudeRoot.appendingPathComponent("work")
+        try Foundation.FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+        let suffix = SHA256.hash(data: Data(profile.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
+        let service = Fixture.service + "-" + suffix
+        let account = DiscoveredAccount(id: "claude:" + service, provider: .claude, profileName: "work",
+                                        source: .claudeKeychain(service: service, configDir: profile))
+        Fixture.discoveredClaudeService = service
+        Fixture.expectedOAuthDirectory = profile
+        return (profile, account)
+    }
+
+    @MainActor
+    private static func claudeRemoveDuringOAuthLock() async throws {
+        let (profile, account) = try claudeRemovableProfile()
+        Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
+        let provider = ClaudeProvider()
+        let store = UsageStore(providers: [.claude: provider], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        Fixture.pauseProfileSnapshot = true
+        let renewal = Task { await provider.fetch(account) }
+        var paused = false
+        for _ in 0..<200 {
+            Fixture.lock.lock()
+            paused = Fixture.profileSnapshotPaused
+            Fixture.lock.unlock()
+            if paused { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        defer {
+            Fixture.lock.lock()
+            Fixture.resumeProfileSnapshot = true
+            Fixture.lock.unlock()
+        }
+        try expect(paused, "OAuth acquisition did not reach directory resolution")
+        try store.removeAccount(id: account.id)
+        try expect(!Foundation.FileManager.default.fileExists(atPath: profile.path), "Removal itself did not remove profile")
+        await provider.accountRemoved(account)
+        Fixture.lock.lock()
+        Fixture.resumeProfileSnapshot = true
+        Fixture.lock.unlock()
+        _ = await renewal.value
+        try expect(Fixture.refreshCalls == 0 && !Fixture.keychainExists, "Deletion did not stop renewal")
+        try expect(!Foundation.FileManager.default.fileExists(atPath: profile.path),
+                   "OAuth lock acquisition recreated a successfully removed extra profile")
+    }
+
+    @MainActor
+    private static func claudeRemoveStagedCLI(primary: Bool = false, enabled: Bool = true, denied: Bool = false) throws {
+        let profile: URL?
+        let account: DiscoveredAccount
+        if primary {
+            profile = nil
+            Fixture.discoveredClaudeService = Fixture.service
+            account = DiscoveredAccount(id: "claude:" + Fixture.service, provider: .claude, profileName: "main",
+                                        source: .claudeKeychain(service: Fixture.service, configDir: nil))
+        } else {
+            (profile, account) = try claudeRemovableProfile()
+        }
+        if !enabled { ClaudeCLISelection.isEnabled = false }
+        let previous = Fixture.root.appendingPathComponent("previous-cli")
+        try Foundation.FileManager.default.createDirectory(at: previous, withIntermediateDirectories: true)
+        let pointer = DesktopApp.supportDirectory.appendingPathComponent("claude-cli/selected-profile")
+        try Foundation.FileManager.default.createDirectory(at: pointer.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let original = previous.path + "\n"
+        try Data(original.utf8).write(to: pointer)
+        Fixture.keychain = Fixture.claudeLogin("old-login", expired: false)
+        Fixture.denyKeychainDelete = denied
+        let store = UsageStore(providers: [.claude: ClaudeProvider()], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        Fixture.holdDesktopCompletion = true
+        var result: Result<Void, Error>?
+        ClaudeAppSwitcher().switchTo(account) { result = $0 }
+        try expect(Fixture.desktopCompletion != nil, "Desktop launch was not held")
+        try expect(try String(contentsOf: pointer) == original, "Staging changed CLI selection before launch")
+        var removalFailed = false
+        do { try store.removeAccount(id: account.id) } catch { removalFailed = true }
+        try expect(removalFailed == denied && Fixture.keychainExists == denied, "Removal did not honor the deletion result")
+        if let profile {
+            try expect(Foundation.FileManager.default.fileExists(atPath: profile.path) == denied,
+                       "Removal did not preserve only the undeleted profile")
+        }
+        let secretReads = Fixture.keychainReads
+        Fixture.desktopCompletion?(.success(()))
+        let selected = try String(contentsOf: pointer)
+        let expected = enabled && denied ? (profile?.path ?? "") + "\n" : original
+        try expect(selected == expected, "Desktop completion published a deleted CLI target over the previous valid selection")
+        if enabled && !denied {
+            if case .failure? = result {} else { throw Failure(description: "Deleted CLI target was reported as a successful switch") }
+        } else {
+            if case .success? = result {} else { throw Failure(description: "Desktop-only or undeleted target could not complete its switch") }
+        }
+        try expect(Fixture.keychainReads == secretReads, "CLI validation read the secret instead of checking attributes")
+        try expect(UserDefaults.standard.string(forKey: "currentClaudeAppAccount") == ClaudeAppSwitcher.key(for: account.id),
+                   "Successful Desktop launch lost its marker after CLI validation")
+    }
+
+    @MainActor
+    private static func claudeStaleUsageResult() async throws {
+        let (profile, account) = try claudeRemovableProfile()
+        Fixture.keychain = Fixture.claudeLogin("old-login", expired: false)
+        Fixture.holdFirstUsage = true
+        let provider = ClaudeProvider()
+        let store = UsageStore(providers: [.claude: provider], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        store.refreshAll(force: true)
+        var started = false
+        for _ in 0..<200 {
+            Fixture.lock.lock()
+            started = Fixture.usageCalls == 1
+            Fixture.lock.unlock()
+            if started { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try expect(started, "Old usage request did not start")
+        try store.removeAccount(id: account.id)
+        await provider.accountRemoved(account)
+        try Foundation.FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+        Fixture.lock.lock()
+        Fixture.keychainExists = true
+        Fixture.keychain = Fixture.claudeLogin("readded-login", expired: false)
+        Fixture.lock.unlock()
+        store.rediscover(force: true)
+        store.refreshAll(force: true)
+        var fresh = false
+        for _ in 0..<200 {
+            fresh = store.columns.first { $0.id == account.id }?.windows.first?.utilization == 84
+            if fresh { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try expect(fresh, "Replacement usage did not complete before old reply")
+        var staleObserved = false
+        let observation = store.$columns.sink { columns in
+            if columns.first(where: { $0.id == account.id })?.windows.first?.utilization == 12 { staleObserved = true }
+        }
+        defer { observation.cancel() }
+        Fixture.lock.lock()
+        Fixture.releaseFirstUsage = true
+        Fixture.lock.unlock()
+        for _ in 0..<100 {
+            if staleObserved { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try expect(Fixture.usageCompletions == 2, "Old usage reply did not complete after release")
+        try expect(!staleObserved, "Old usage reply overwrote the replacement account's fresh column")
+        try expect(UsageCache().load(id: account.id)?.windows.first?.utilization == 84,
+                   "Old usage reply overwrote the replacement account's persistent cache")
     }
 
     private static func claudeNativePublish() async throws {

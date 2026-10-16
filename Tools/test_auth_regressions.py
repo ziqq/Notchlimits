@@ -292,6 +292,24 @@ class AuthenticationRegressions(unittest.TestCase):
     def test_save_already_resolving_a_profile_cannot_recreate_it_after_removal(self):
         self.check_scenario("claude-remove-during-save")
 
+    def test_oauth_lock_resolution_cannot_recreate_a_removed_extra_profile(self):
+        self.check_scenario("claude-remove-during-oauth-lock")
+
+    def test_deleted_cli_profile_is_not_published_after_desktop_opens(self):
+        self.check_scenario("claude-remove-staged-cli")
+
+    def test_deleted_main_login_is_not_published_after_desktop_opens(self):
+        self.check_scenario("claude-remove-staged-cli-main")
+
+    def test_desktop_only_switch_survives_target_profile_removal(self):
+        self.check_scenario("claude-remove-staged-cli-off")
+
+    def test_failed_profile_removal_preserves_the_staged_cli_switch(self):
+        self.check_scenario("claude-remove-staged-cli-denied")
+
+    def test_removed_account_usage_cannot_overwrite_replacement_column_and_cache(self):
+        self.check_scenario("claude-stale-usage-result")
+
     def test_native_lock_acquired_during_preparation_is_not_replaced(self):
         self.check_scenario("claude-native-publish")
 
