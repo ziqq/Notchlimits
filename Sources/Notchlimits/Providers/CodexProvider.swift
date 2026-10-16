@@ -42,7 +42,10 @@ struct CodexProvider: UsageProvider {
     private func request(_ account: DiscoveredAccount, home: URL) async -> FetchOutcome {
         // Вход колонки может быть временно в ~/.codex (открыт в приложении).
         let live = CodexAuthSwap.liveHome(columnID: account.id, home: home)
-        guard let auth = Self.readAuth(codexHome: live) else {
+        let data: Data?
+        do { data = try CodexAuthSwap.authData(home: live) }
+        catch { return .failure(error.localizedDescription) }
+        guard let data, let auth = Self.parseAuth(data) else {
             return .reauth(L.t("column.reauth"))
         }
         if let expiresAt = auth.expiresAt, expiresAt.timeIntervalSinceNow < 60 {
@@ -84,9 +87,12 @@ struct CodexProvider: UsageProvider {
     // MARK: - auth.json
 
     static func readAuth(codexHome: URL) -> Auth? {
-        let url = codexHome.appendingPathComponent("auth.json")
-        guard let data = try? Data(contentsOf: url),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let data = try? CodexAuthSwap.authData(home: codexHome) else { return nil }
+        return parseAuth(data)
+    }
+
+    private static func parseAuth(_ data: Data) -> Auth? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
 
         // Режим apikey до usage-эндпоинта не дотягивается — нужен вход через ChatGPT.

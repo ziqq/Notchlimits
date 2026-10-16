@@ -157,6 +157,8 @@
 
 // Ошибки в колонке
 "error.network" = "網路錯誤";
+"error.codexStorage" = "無法讀取 Codex 儲存設定，或不支援此儲存方式。";
+"error.codexEphemeral" = "Codex 僅在其程序內保留此登入。若要使用持久帳號，請在 Codex 中選擇 file、keyring 或 auto。";
 "error.keychainWrite" = "無法寫入鑰匙圈";
 "error.pendingCredentials" = "憑證仍在儲存。請解鎖鑰匙圈後重試結束。";
 "error.timeout" = "逾時";
@@ -178,5 +180,5 @@
 "appswitch.error.title" = "無法切換帳號";
 "appswitch.error.notInstalled" = "未安裝 %@。";
 "appswitch.error.didNotQuit" = "%@ 未結束——請關閉後再試一次。";
-"appswitch.error.noAuth" = "此帳號沒有 Codex 登入資訊 (auth.json)。請重新登入。";
+"appswitch.error.noAuth" = "此帳號沒有 Codex 登入資訊。請重新登入。";
 "appswitch.error.inProgress" = "正在切換帳號。";

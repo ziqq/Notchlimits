@@ -157,6 +157,8 @@
 
 // Ошибки в колонке
 "error.network" = "ネットワークエラー";
+"error.codexStorage" = "Codexの保存設定を読み取れないか、この保存方式はサポートされていません。";
+"error.codexEphemeral" = "Codexはこのログインを自身のプロセス内にのみ保持します。永続的なアカウントにはCodexでfile、keyring、autoのいずれかを選択してください。";
 "error.keychainWrite" = "キーチェーンに書き込めません";
 "error.pendingCredentials" = "認証情報を保存中です。キーチェーンのロックを解除してから終了を再試行してください。";
 "error.timeout" = "タイムアウト";
@@ -178,5 +180,5 @@
 "appswitch.error.title" = "アカウントを切り替えられませんでした";
 "appswitch.error.notInstalled" = "%@ がインストールされていません。";
 "appswitch.error.didNotQuit" = "%@ が終了しませんでした。終了してからもう一度お試しください。";
-"appswitch.error.noAuth" = "このアカウントには Codex のサインイン (auth.json) がありません。もう一度サインインしてください。";
+"appswitch.error.noAuth" = "このアカウントには Codex のサインイン がありません。もう一度サインインしてください。";
 "appswitch.error.inProgress" = "アカウントの切替中です。";

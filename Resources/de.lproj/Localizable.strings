@@ -157,6 +157,8 @@
 
 // Ошибки в колонке
 "error.network" = "Netzwerkfehler";
+"error.codexStorage" = "Die Codex-Speichereinstellungen können nicht gelesen werden oder dieses Speicherverfahren wird nicht unterstützt.";
+"error.codexEphemeral" = "Codex speichert diese Anmeldung nur im eigenen Prozess. Wähle in Codex file, keyring oder auto für dauerhafte Konten.";
 "error.keychainWrite" = "kein Schreibzugriff auf den Schlüsselbund";
 "error.pendingCredentials" = "Anmeldedaten werden noch gespeichert. Entsperre den Schlüsselbund und versuche erneut zu beenden.";
 "error.timeout" = "Zeitüberschreitung";
@@ -178,5 +180,5 @@
 "appswitch.error.title" = "Konto konnte nicht gewechselt werden";
 "appswitch.error.notInstalled" = "%@ ist nicht installiert.";
 "appswitch.error.didNotQuit" = "%@ wurde nicht beendet – schließe die App und versuche es erneut.";
-"appswitch.error.noAuth" = "Dieses Konto hat keine Codex-Anmeldung (auth.json). Melde dich erneut an.";
+"appswitch.error.noAuth" = "Dieses Konto hat keine Codex-Anmeldung. Melde dich erneut an.";
 "appswitch.error.inProgress" = "Ein Kontowechsel läuft bereits.";

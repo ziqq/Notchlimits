@@ -157,6 +157,8 @@
 
 // Ошибки в колонке
 "error.network" = "сбой сети";
+"error.codexStorage" = "Не удалось прочитать настройки хранилища Codex или этот тип хранилища не поддерживается.";
+"error.codexEphemeral" = "Codex хранит этот вход только в своём процессе. Для постоянных аккаунтов выбери в Codex file, keyring или auto.";
 "error.keychainWrite" = "нет записи в Keychain";
 "error.pendingCredentials" = "Учётные данные ещё сохраняются. Разблокируйте Keychain и попробуйте выйти снова.";
 "error.timeout" = "таймаут";
@@ -178,5 +180,5 @@
 "appswitch.error.title" = "Не удалось переключить аккаунт";
 "appswitch.error.notInstalled" = "%@ не установлен.";
 "appswitch.error.didNotQuit" = "%@ не закрылся — закрой его и попробуй ещё раз.";
-"appswitch.error.noAuth" = "У этого аккаунта нет входа в Codex (auth.json). Войди в него заново.";
+"appswitch.error.noAuth" = "У этого аккаунта нет входа в Codex. Войди в него заново.";
 "appswitch.error.inProgress" = "Переключение аккаунта уже выполняется.";

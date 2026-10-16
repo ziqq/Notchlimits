@@ -157,6 +157,8 @@
 
 // Ошибки в колонке
 "error.network" = "збій мережі";
+"error.codexStorage" = "Не вдалося прочитати налаштування сховища Codex або цей тип сховища не підтримується.";
+"error.codexEphemeral" = "Codex зберігає цей вхід лише у своєму процесі. Для постійних облікових записів вибери в Codex file, keyring або auto.";
 "error.keychainWrite" = "немає запису в Keychain";
 "error.pendingCredentials" = "Облікові дані ще зберігаються. Розблокуйте Keychain і спробуйте вийти знову.";
 "error.timeout" = "тайм-аут";
@@ -178,5 +180,5 @@
 "appswitch.error.title" = "Не вдалося перемкнути акаунт";
 "appswitch.error.notInstalled" = "%@ не встановлено.";
 "appswitch.error.didNotQuit" = "%@ не закрився — закрий його й спробуй ще раз.";
-"appswitch.error.noAuth" = "У цього акаунта немає входу в Codex (auth.json). Увійди в нього знову.";
+"appswitch.error.noAuth" = "У цього акаунта немає входу в Codex. Увійди в нього знову.";
 "appswitch.error.inProgress" = "Перемикання акаунта вже виконується.";

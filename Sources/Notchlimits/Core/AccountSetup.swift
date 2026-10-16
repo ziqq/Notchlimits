@@ -205,7 +205,7 @@ enum AccountSetup {
             mainExists: {
                 let home = CodexAuthSwap.liveHome(columnID: CodexAuthSwap.defaultColumnID,
                                                   home: CodexAuthSwap.baseHome)
-                return FileManager.default.fileExists(atPath: home.appendingPathComponent("auth.json").path)
+                return CodexAuthSwap.hasAuth(home: home)
             },
             mainScriptDirectory: DesktopApp.supportDirectory.appendingPathComponent("login/codex-main"))
     }

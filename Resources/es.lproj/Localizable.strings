@@ -157,6 +157,8 @@
 
 // Ошибки в колонке
 "error.network" = "error de red";
+"error.codexStorage" = "No se puede leer la configuración de almacenamiento de Codex o este tipo de almacenamiento no es compatible.";
+"error.codexEphemeral" = "Codex conserva esta sesión solo en su proceso. Elige file, keyring o auto en Codex para usar cuentas persistentes.";
 "error.keychainWrite" = "sin escritura en el llavero";
 "error.pendingCredentials" = "Las credenciales aún se están guardando. Desbloquea el llavero e intenta salir de nuevo.";
 "error.timeout" = "tiempo agotado";
@@ -178,5 +180,5 @@
 "appswitch.error.title" = "No se pudo cambiar la cuenta";
 "appswitch.error.notInstalled" = "%@ no está instalado.";
 "appswitch.error.didNotQuit" = "%@ no se cerró: ciérralo e inténtalo de nuevo.";
-"appswitch.error.noAuth" = "Esta cuenta no tiene sesión de Codex (auth.json). Vuelve a iniciar sesión.";
+"appswitch.error.noAuth" = "Esta cuenta no tiene sesión de Codex. Vuelve a iniciar sesión.";
 "appswitch.error.inProgress" = "Ya hay un cambio de cuenta en curso.";

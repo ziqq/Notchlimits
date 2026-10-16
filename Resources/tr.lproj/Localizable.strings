@@ -157,6 +157,8 @@
 
 // Ошибки в колонке
 "error.network" = "ağ hatası";
+"error.codexStorage" = "Codex depolama ayarları okunamıyor veya bu depolama türü desteklenmiyor.";
+"error.codexEphemeral" = "Codex bu oturumu yalnızca kendi işleminde tutar. Kalıcı hesaplar için Codex içinde file, keyring veya auto seç.";
 "error.keychainWrite" = "Anahtar Zinciri'ne yazılamıyor";
 "error.pendingCredentials" = "Kimlik bilgileri hâlâ kaydediliyor. Anahtar Zinciri kilidini açıp yeniden çıkmayı deneyin.";
 "error.timeout" = "zaman aşımı";
@@ -178,5 +180,5 @@
 "appswitch.error.title" = "Hesap değiştirilemedi";
 "appswitch.error.notInstalled" = "%@ yüklü değil.";
 "appswitch.error.didNotQuit" = "%@ kapanmadı — kapatıp tekrar dene.";
-"appswitch.error.noAuth" = "Bu hesabın Codex oturumu (auth.json) yok. Yeniden giriş yap.";
+"appswitch.error.noAuth" = "Bu hesabın Codex oturumu yok. Yeniden giriş yap.";
 "appswitch.error.inProgress" = "Hesap geçişi zaten devam ediyor.";

@@ -157,6 +157,8 @@
 
 // Ошибки в колонке
 "error.network" = "erro de rede";
+"error.codexStorage" = "Não foi possível ler as configurações de armazenamento do Codex ou este tipo de armazenamento não é compatível.";
+"error.codexEphemeral" = "O Codex mantém este login apenas no próprio processo. Escolha file, keyring ou auto no Codex para usar contas persistentes.";
 "error.keychainWrite" = "sem gravação no Keychain";
 "error.pendingCredentials" = "As credenciais ainda estão sendo salvas. Desbloqueie as Chaves e tente sair novamente.";
 "error.timeout" = "tempo esgotado";
@@ -178,5 +180,5 @@
 "appswitch.error.title" = "Não foi possível trocar de conta";
 "appswitch.error.notInstalled" = "%@ não está instalado.";
 "appswitch.error.didNotQuit" = "%@ não foi fechado — feche-o e tente novamente.";
-"appswitch.error.noAuth" = "Esta conta não tem login no Codex (auth.json). Entre novamente.";
+"appswitch.error.noAuth" = "Esta conta não tem login no Codex. Entre novamente.";
 "appswitch.error.inProgress" = "Uma troca de conta já está em andamento.";

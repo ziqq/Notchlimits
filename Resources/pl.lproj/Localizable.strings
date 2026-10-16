@@ -157,6 +157,8 @@
 
 // Ошибки в колонке
 "error.network" = "błąd sieci";
+"error.codexStorage" = "Nie można odczytać ustawień przechowywania Codex lub ten typ magazynu nie jest obsługiwany.";
+"error.codexEphemeral" = "Codex przechowuje to logowanie tylko w swoim procesie. Wybierz file, keyring lub auto w Codex, aby używać trwałych kont.";
 "error.keychainWrite" = "brak zapisu do pęku kluczy";
 "error.pendingCredentials" = "Dane logowania są nadal zapisywane. Odblokuj pęk kluczy i spróbuj ponownie zamknąć aplikację.";
 "error.timeout" = "przekroczono czas";
@@ -178,5 +180,5 @@
 "appswitch.error.title" = "Nie udało się przełączyć konta";
 "appswitch.error.notInstalled" = "%@ nie jest zainstalowany.";
 "appswitch.error.didNotQuit" = "%@ się nie zamknął — zamknij go i spróbuj ponownie.";
-"appswitch.error.noAuth" = "To konto nie ma logowania do Codex (auth.json). Zaloguj się ponownie.";
+"appswitch.error.noAuth" = "To konto nie ma logowania do Codex. Zaloguj się ponownie.";
 "appswitch.error.inProgress" = "Przełączanie konta już trwa.";

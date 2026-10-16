@@ -13,6 +13,12 @@ private enum Fixture {
     static let lock = NSLock()
     static var keychain: [String: Any] = [:]
     static var keychainWrites = 0
+    static var codexKeychain: [String: Data] = [:]
+    static var denyCodexRead = false
+    static var denyCodexWrite = false
+    static var denyCodexDelete = false
+    static var codexSecretReads = 0
+    static var managedCodex: [String: String] = [:]
     static var failKeychainSave = false
     static var refreshCalls = 0
     static var lastAuthorization = ""
@@ -165,6 +171,28 @@ private enum Fixture {
         ], "unknown": "preserved"]
     }
 
+    static func codexKey(_ home: URL) -> String {
+        let hash = SHA256.hash(data: Data(home.resolvingSymlinksInPath().path.utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        return "cli|" + hash.prefix(16)
+    }
+
+    static func codexMode(_ home: URL, _ mode: String) throws {
+        try Foundation.FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try Data(("cli_auth_credentials_store = \"" + mode + "\"\n").utf8)
+            .write(to: home.appendingPathComponent("config.toml"))
+    }
+
+    static func codexLogin(_ home: URL, account: String, mode: String, expired: Bool = false) throws {
+        try writeAuth(home, account: account, refresh: "synthetic-refresh-" + account, expired: expired)
+        try codexMode(home, mode)
+        if mode != "file" {
+            let file = home.appendingPathComponent("auth.json")
+            codexKeychain[codexKey(home)] = try Data(contentsOf: file)
+            try Foundation.FileManager.default.removeItem(at: file)
+        }
+    }
+
     static func codexAccount(_ name: String) throws -> DiscoveredAccount {
         let home = ProfileDirectories.codexRoot.appendingPathComponent(name)
         try writeAuth(home, account: "synthetic-\(name)", refresh: "synthetic-refresh-\(name)")
@@ -250,6 +278,13 @@ func renameatx_np(_ fromFD: Int32, _ from: UnsafePointer<CChar>, _ toFD: Int32,
 
 private final class FixtureFileManager: Foundation.FileManager, @unchecked Sendable {
     override var homeDirectoryForCurrentUser: URL { Fixture.root }
+
+    private func configPath(_ path: String) -> String {
+        path.hasPrefix("/etc/codex/") ? Fixture.root.path + "/system/" + URL(fileURLWithPath: path).lastPathComponent : path
+    }
+    override func fileExists(atPath path: String) -> Bool { super.fileExists(atPath: configPath(path)) }
+    override func contents(atPath path: String) -> Data? { super.contents(atPath: configPath(path)) }
+
 
     override func contentsOfDirectory(at url: URL, includingPropertiesForKeys keys: [URLResourceKey]?,
                                       options mask: DirectoryEnumerationOptions = []) throws -> [URL] {
@@ -344,11 +379,30 @@ enum Format {
     static func money(minor: Double, places: Int, currency: String) -> String { String(minor) }
 }
 
+func CFPreferencesAppValueIsForced(_ key: CFString, _ applicationID: CFString) -> Bool {
+    Fixture.managedCodex[key as String] != nil
+}
+func CFPreferencesCopyAppValue(_ key: CFString, _ applicationID: CFString) -> CFPropertyList? {
+    Fixture.managedCodex[key as String].map { $0 as CFString }
+}
+
 // Swift resolves these local declarations before the imported Security functions.
 // No test reads or writes the user's Keychain.
 func SecItemCopyMatching(_ query: CFDictionary, _ result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus {
     Fixture.lock.lock()
     defer { Fixture.lock.unlock() }
+    if (query as NSDictionary)[kSecAttrService as String] as? String == "Codex Auth" {
+        let key = (query as NSDictionary)[kSecAttrAccount as String] as! String
+        guard let data = Fixture.codexKeychain[key] else { return errSecItemNotFound }
+        if (query as NSDictionary)[kSecReturnData as String] as? Bool == true {
+            Fixture.codexSecretReads += 1
+            guard !Fixture.denyCodexRead else { return errSecInteractionNotAllowed }
+            result?.pointee = data as CFData
+        } else {
+            result?.pointee = [kSecAttrService as String: "Codex Auth", kSecAttrAccount as String: key] as NSDictionary
+        }
+        return errSecSuccess
+    }
     if (query as NSDictionary)[kSecReturnAttributes as String] as? Bool == true {
         if let service = (query as NSDictionary)[kSecAttrService as String] as? String {
             guard Fixture.keychainExists else { return errSecItemNotFound }
@@ -378,6 +432,13 @@ func SecItemCopyMatching(_ query: CFDictionary, _ result: UnsafeMutablePointer<C
 func SecItemUpdate(_ query: CFDictionary, _ attributes: CFDictionary) -> OSStatus {
     Fixture.lock.lock()
     defer { Fixture.lock.unlock() }
+    if (query as NSDictionary)[kSecAttrService as String] as? String == "Codex Auth" {
+        let key = (query as NSDictionary)[kSecAttrAccount as String] as! String
+        guard Fixture.codexKeychain[key] != nil else { return errSecItemNotFound }
+        guard !Fixture.denyCodexWrite else { return errSecAuthFailed }
+        Fixture.codexKeychain[key] = (attributes as NSDictionary)[kSecValueData as String] as? Data
+        return errSecSuccess
+    }
     Fixture.keychainWrites += 1
     guard Fixture.keychainExists else { return errSecItemNotFound }
     Fixture.oauthHeldDuringWrite = Fixture.oauthHeldDuringWrite && Fixture.holdsOAuthLocks
@@ -411,11 +472,24 @@ func SecKeychainSetUserInteractionAllowed(_ state: Bool) -> OSStatus {
 func SecItemDelete(_ query: CFDictionary) -> OSStatus {
     Fixture.lock.lock()
     defer { Fixture.lock.unlock() }
+    if (query as NSDictionary)[kSecAttrService as String] as? String == "Codex Auth" {
+        guard !Fixture.denyCodexDelete else { return errSecAuthFailed }
+        let key = (query as NSDictionary)[kSecAttrAccount as String] as! String
+        Fixture.codexKeychain[key] = nil
+        return errSecSuccess
+    }
     guard !Fixture.denyKeychainDelete else { return errSecAuthFailed }
     Fixture.keychainExists = false
     return errSecSuccess
 }
-func SecItemAdd(_ attributes: CFDictionary, _ result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus { errSecSuccess }
+func SecItemAdd(_ attributes: CFDictionary, _ result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus {
+    if (attributes as NSDictionary)[kSecAttrService as String] as? String == "Codex Auth" {
+        guard !Fixture.denyCodexWrite else { return errSecAuthFailed }
+        let key = (attributes as NSDictionary)[kSecAttrAccount as String] as! String
+        Fixture.codexKeychain[key] = (attributes as NSDictionary)[kSecValueData as String] as? Data
+    }
+    return errSecSuccess
+}
 
 struct HTTPClient {
     static let shared = HTTPClient()
@@ -504,6 +578,33 @@ enum Authentication {
     static func main() async {
         do {
             switch CommandLine.arguments[1] {
+            case "codex-store-keyring": try codexStoreRead("keyring")
+            case "codex-store-auto": try codexStoreRead("auto")
+            case "codex-store-file": try codexStoreRead("file")
+            case "codex-store-auto-missing": try codexStoreRead("auto", missing: true)
+            case "codex-store-auto-denied": try codexStoreRead("auto", denied: true)
+            case "codex-store-keyring-denied": try codexStoreRead("keyring", denied: true)
+            case "codex-store-ephemeral": try codexStoreRead("ephemeral")
+            case "codex-store-invalid": try codexStoreRead("unknown")
+            case "codex-store-discovery": try codexStoreDiscovery()
+            case "codex-store-symlink": try codexStoreDiscovery(symlink: true)
+            case "codex-store-auto-switch": try codexStoreSwitch(baseMode: "auto", profileMode: "auto")
+            case "codex-store-auto-fallback-switch": try codexStoreSwitch(baseMode: "auto", profileMode: "file", fallback: true)
+            case "codex-store-ephemeral-current": try codexStoreEphemeralSwitch(alreadyActive: true)
+            case "codex-store-encrypted": try codexStoreEncryptedBackend()
+            case "codex-store-switch": try codexStoreSwitch()
+            case "codex-store-switch-incoming-keyring": try codexStoreSwitch(baseMode: "file")
+            case "codex-store-switch-incoming-file": try codexStoreSwitch(profileMode: "file")
+            case "codex-store-auto-renewal": try await codexStoreRenewal(mode: "auto")
+            case "codex-store-auto-renewal-denied": try await codexStoreRenewal(mode: "auto", denied: true)
+            case "codex-store-renewal": try await codexStoreRenewal()
+            case "codex-store-renewal-denied": try await codexStoreRenewal(denied: true)
+            case "codex-store-remove": try codexStoreRemove()
+            case "codex-store-remove-denied": try codexStoreRemove(denied: true)
+            case "codex-store-root-settings": try codexStoreSettings()
+            case "codex-store-system-requirements": try codexStoreSettings(requirements: true)
+            case "codex-store-managed-requirements": try codexStoreSettings(managed: true)
+            case "codex-store-ephemeral-switch": try codexStoreEphemeralSwitch()
             case "profile-identity": try profileIdentity()
             case "profile-collision": try profileCollision()
             case "profile-active-migration": try profileActiveMigration()
@@ -605,6 +706,156 @@ enum Authentication {
         }
     }
 
+    private static func codexStoreRead(_ mode: String, missing: Bool = false, denied: Bool = false) throws {
+        let home = CodexAuthSwap.baseHome
+        try Fixture.codexLogin(home, account: "secure", mode: "keyring")
+        if missing { Fixture.codexKeychain = [:] }
+        Fixture.denyCodexRead = denied
+        try Fixture.writeAuth(home, account: "stale-file", refresh: "stale-file-refresh", expired: false)
+        try Fixture.codexMode(home, mode)
+        let auth = CodexProvider.readAuth(codexHome: home)
+        if mode == "ephemeral" || mode == "unknown" || mode == "keyring" && denied {
+            try expect(auth == nil, "Persistent file credentials bypassed the selected Codex storage mode")
+        } else {
+            let expected = mode == "file" || missing || denied ? "stale-file" : "secure"
+            try expect(auth?.accountID == expected, "Codex loaded a stale or wrong credential backend")
+        }
+        if mode == "ephemeral" || mode == "file" { try expect(Fixture.codexSecretReads == 0, "Storage mode probed an unrelated Keychain secret") }
+    }
+
+    private static func codexStoreDiscovery(symlink: Bool = false) throws {
+        let main = CodexAuthSwap.baseHome
+        let profile = ProfileDirectories.codexRoot.appendingPathComponent("secure")
+        try Fixture.codexLogin(main, account: "main", mode: "keyring")
+        try Fixture.codexLogin(profile, account: "profile", mode: "keyring")
+        if symlink {
+            let alias = Fixture.root.appendingPathComponent("codex-alias")
+            try Foundation.FileManager.default.createSymbolicLink(at: alias, withDestinationURL: profile)
+            try expect(CodexProvider.readAuth(codexHome: alias)?.accountID == "profile", "Keychain service key ignored the canonical CODEX_HOME")
+        }
+        let reads = Fixture.codexSecretReads
+        let accounts = RealDiscovery().discover().filter { $0.provider == .codex }
+        try expect(Set(accounts.map(\.id)) == [CodexAuthSwap.defaultColumnID, "codex:secure"], "Keychain-only Codex accounts were not discovered")
+        try expect(Fixture.codexSecretReads == reads, "Discovery read credential secrets instead of metadata")
+        try expect(CodexProvider.readAuth(codexHome: main)?.accountID == "main", "Keychain primary account could not be read")
+    }
+
+    @MainActor
+    private static func codexStoreSwitch(baseMode: String = "keyring", profileMode: String = "keyring", fallback: Bool = false) throws {
+        let main = CodexAuthSwap.baseHome
+        let profile = ProfileDirectories.codexRoot.appendingPathComponent("secure")
+        try Fixture.codexLogin(main, account: "main", mode: fallback ? "file" : baseMode)
+        try Fixture.codexMode(main, baseMode)
+        try Fixture.codexLogin(profile, account: "profile", mode: profileMode)
+        Fixture.denyCodexWrite = fallback
+        let projects = main.appendingPathComponent("synthetic-projects")
+        try Data("preserved".utf8).write(to: projects)
+        ClaudeCLISelection.isEnabled = false // Claude's setting cannot change Codex switching.
+        do { try CodexAuthSwap.activate(columnID: "codex:secure", home: profile) }
+        catch { throw Failure(description: "Codex switch rejected an existing persistent Keychain profile") }
+        try expect(CodexProvider.readAuth(codexHome: main)?.accountID == "profile", "Desktop/CLI did not select the profile in the base backend")
+        try expect(CodexProvider.readAuth(codexHome: CodexAuthSwap.stashHome)?.accountID == "main", "Main credentials were not retained in their backend")
+        try Fixture.codexLogin(main, account: "profile", mode: fallback ? "file" : baseMode, expired: false)
+        try Fixture.codexMode(main, baseMode)
+        // Model native refresh while this profile owns the Desktop/CLI base home.
+        if baseMode != "file" && !fallback {
+            let data = Fixture.codexKeychain[Fixture.codexKey(main)]!
+            var root = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+            var tokens = root["tokens"] as! [String: Any]
+            tokens["refresh_token"] = "native-rotated"
+            root["tokens"] = tokens
+            Fixture.codexKeychain[Fixture.codexKey(main)] = try JSONSerialization.data(withJSONObject: root)
+        } else {
+            try Fixture.writeAuth(main, account: "profile", refresh: "native-rotated", expired: false)
+        }
+        try CodexAuthSwap.restoreDefault()
+        try expect(CodexProvider.readAuth(codexHome: main)?.accountID == "main", "Main account did not restore")
+        try expect(CodexRenewal.refreshToken(profile.appendingPathComponent("auth.json")) == "native-rotated", "Native refreshed profile credentials were not returned to their selected backend")
+        try expect(try String(contentsOf: projects) == "preserved", "Switch changed Desktop projects")
+        if baseMode != "file" && !fallback { try expect(!Foundation.FileManager.default.fileExists(atPath: main.appendingPathComponent("auth.json").path), "Switch exported base Keychain credentials to auth.json") }
+        if profileMode != "file" { try expect(!Foundation.FileManager.default.fileExists(atPath: profile.appendingPathComponent("auth.json").path), "Switch exported profile Keychain credentials to auth.json") }
+    }
+
+    private static func codexStoreRenewal(mode: String = "keyring", denied: Bool = false) async throws {
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("secure")
+        try Fixture.codexLogin(home, account: "secure", mode: mode, expired: true)
+        let account = DiscoveredAccount(id: "codex:secure", provider: .codex, profileName: "secure", source: .codexHome(home))
+        Fixture.denyCodexWrite = denied
+        _ = await CodexProvider().fetch(account)
+        try expect(Fixture.refreshCalls == 1, "Sleeping Keychain profile was not renewed")
+        if denied {
+            try expect(CodexRenewal.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-refresh-secure", "Denied persistence did not preserve the stored grant")
+            Fixture.denyCodexWrite = false
+        }
+        let outcome = await CodexProvider().fetch(account)
+        if case .success = outcome {} else { throw Failure(description: "Keychain renewal did not recover persistence") }
+        try expect(Fixture.refreshCalls == 1 && CodexRenewal.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated", "Keychain persistence lost tokens or repeated the refresh POST")
+        try expect(!Foundation.FileManager.default.fileExists(atPath: home.appendingPathComponent("auth.json").path), "Keychain renewal wrote plaintext credentials")
+    }
+
+    @MainActor
+    private static func codexStoreRemove(denied: Bool = false) throws {
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("secure")
+        try Fixture.codexLogin(home, account: "secure", mode: "keyring")
+        Fixture.denyCodexDelete = denied
+        let account = DiscoveredAccount(id: "codex:secure", provider: .codex, profileName: "secure", source: .codexHome(home))
+        var failed = false
+        do { try AccountRemoval.remove(account) } catch { failed = true }
+        try expect(failed == denied, "Codex removal ignored its Keychain deletion result")
+        try expect((Fixture.codexKeychain[Fixture.codexKey(home)] != nil) == denied,
+                   "Codex removal left credentials behind or deleted a refused account")
+        try expect(Foundation.FileManager.default.fileExists(atPath: home.path) == denied, "Codex removal did not preserve the profile on failure")
+    }
+
+    private static func codexStoreSettings(requirements: Bool = false, managed: Bool = false) throws {
+        let home = CodexAuthSwap.baseHome
+        try Fixture.codexLogin(home, account: "secure", mode: "keyring")
+        try Fixture.writeAuth(home, account: "stale", refresh: "stale", expired: false)
+        if requirements || managed {
+            try Fixture.codexMode(home, "file")
+            if requirements {
+                let directory = Fixture.root.appendingPathComponent("system")
+                try Foundation.FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try Data("cli_auth_credentials_store = 'keyring'\n".utf8).write(to: directory.appendingPathComponent("requirements.toml"))
+            } else {
+                Fixture.managedCodex["requirements_toml_base64"] = Data("cli_auth_credentials_store = 'keyring'\n".utf8).base64EncodedString()
+            }
+        } else {
+            let text = "description = \"\"\"\ncli_auth_credentials_store = 'file'\n\"\"\"\n\"cli_auth_credentials_store\" = 'keyring' # root\n[other]\ncli_auth_credentials_store = 'file'\n"
+            try Data(text.utf8).write(to: home.appendingPathComponent("config.toml"))
+        }
+        try expect(CodexProvider.readAuth(codexHome: home)?.accountID == "secure", "Codex ignored root/managed storage settings or parsed a nested/string value as root")
+    }
+
+    private static func codexStoreEncryptedBackend() throws {
+        let home = CodexAuthSwap.baseHome
+        try Fixture.writeAuth(home, account: "stale", refresh: "stale", expired: false)
+        try Data("cli_auth_credentials_store = 'keyring'\n[features]\nsecret_auth_storage = true\n".utf8)
+            .write(to: home.appendingPathComponent("config.toml"))
+        try expect(CodexProvider.readAuth(codexHome: home) == nil,
+                   "Encrypted secrets mode was mistaken for a direct Keychain or file login")
+    }
+
+    private static func codexStoreEphemeralSwitch(alreadyActive: Bool = false) throws {
+        let main = CodexAuthSwap.baseHome
+        let profile = ProfileDirectories.codexRoot.appendingPathComponent("file")
+        try Fixture.writeAuth(main, account: "stale-main", refresh: "stale", expired: false)
+        try Fixture.codexMode(main, "ephemeral")
+        try Fixture.codexLogin(profile, account: "profile", mode: "file")
+        let before = try Data(contentsOf: main.appendingPathComponent("auth.json"))
+        if alreadyActive {
+            UserDefaults.standard.set("codex:file", forKey: "codexAppAccountID")
+            UserDefaults.standard.set(profile.path, forKey: "codexAppAccountHome")
+        }
+        let previousID = CodexAuthSwap.activeColumnID
+        var failed = false
+        do { try CodexAuthSwap.activate(columnID: "codex:file", home: profile) } catch { failed = true }
+        try expect(failed && CodexAuthSwap.activeColumnID == previousID,
+                   "Ephemeral mode allowed a persistent Desktop/CLI switch")
+        try expect(try Data(contentsOf: main.appendingPathComponent("auth.json")) == before, "Ephemeral mode mutated a persistent cache")
+    }
+
+    @MainActor
     private static func profileIdentity() throws {
         let main = CodexAuthSwap.baseHome
         let extra = ProfileDirectories.codexRoot.appendingPathComponent("default")

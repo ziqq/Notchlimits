@@ -127,7 +127,7 @@ Below the windows, whatever extra numbers the endpoint returns are listed: credi
 
 ## Switching the active account
 
-Right-click → **Claude account** or **Codex account** to choose a Desktop account. Claude Desktop keeps a separate Electron data directory per account. **Switch CLI** controls whether the same action selects an existing Claude Code profile, as described above. Codex continues to swap only `~/.codex/auth.json`, preserving its projects and threads.
+Right-click → **Claude account** or **Codex account** to choose a Desktop account. Claude Desktop keeps a separate Electron data directory per account. **Switch CLI** controls whether the same action selects an existing Claude Code profile, as described above. Codex swaps only credentials in the base home’s configured backend, preserving its projects and threads. Its Desktop and CLI selection remains independent of the Claude **Switch CLI** setting.
 
 ## Multiple accounts
 
@@ -179,7 +179,7 @@ Three details that matter:
 
 Renewal happens on expiry or after a usage 401. Automatic Claude renewal requires Claude Code 2.1.278 or newer and the native OAuth and storage locks described above. Profiles have independent locks. Older or unidentified CLI versions retain usage polling with valid tokens and require CLI login after expiry.
 
-**Codex.** Auth from `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`); `apikey` mode can't reach the usage endpoint — ChatGPT login is required. Token lifetime from the JWT `exp` claim, email for the column subtitle from `id_token`.
+**Codex.** The root `cli_auth_credentials_store` setting selects `file`, `keyring` or `auto` for each `CODEX_HOME`. The default is `file`. On macOS, direct Keychain storage uses the native `Codex Auth` service and `cli|` plus the first 16 SHA-256 hex characters of the canonical home path. `auto` reads Keychain first and falls back to `auth.json` when absent or unreadable. Renewal writes back to the backend that supplied the grant; a denied Keychain update keeps rotated credentials pending and never issues another refresh POST. Discovery checks metadata without reading Keychain secrets. System config, legacy managed config, local requirements and forced macOS preferences are respected; per-invocation CLI overrides are outside this process. The opt-in encrypted secrets backend is rejected rather than confused with direct Keychain storage. `ephemeral` is process-local: Notchlimits cannot read another process’s memory, ignores leftover persistent credentials and refuses persistent switching in this mode. No extra Notchlimits login is introduced. Auth from the selected backend; `apikey` mode can't reach the usage endpoint — ChatGPT login is required. Token lifetime from the JWT `exp` claim, email for the column subtitle from `id_token`.
 
 ```
 GET https://chatgpt.com/backend-api/wham/usage
@@ -208,7 +208,7 @@ User-Agent: codex_cli_rs/<version>
 
 ## Privacy
 
-The app makes no automatic request beyond the usage endpoints and token renewal described above. Update checks are manual: Sparkle fetches the signed `appcast.xml` from GitHub on click, and downloads the update archive only after you choose **Install Update**. Automatic checks and system profiling are disabled by default. Archive signatures are verified before extraction. Tokens are never logged and never written to a plain file; the only thing written back is the refreshed Claude token, into the same Keychain entry the CLI already owns. The `claude` binary is never run (running it makes the CLI read its credentials via `/usr/bin/security`, popping a Keychain prompt) — its version for the User-Agent comes from the install path, and the account email from the CLI's `~/.claude.json`. Only `codex --version` is executed, and Codex keeps its auth in a file, not the Keychain. Only settings and last percentages (with reset times) go to `UserDefaults`, without a single token. Usage requests use an ephemeral `URLSession`, with no cookies or disk cache.
+The app makes no automatic request beyond the usage endpoints and token renewal described above. Update checks are manual: Sparkle fetches the signed `appcast.xml` from GitHub on click, and downloads the update archive only after you choose **Install Update**. Automatic checks and system profiling are disabled by default. Archive signatures are verified before extraction. Tokens are never logged. Refreshed Claude tokens are written into the same Keychain entry the CLI already owns; Codex writes follow its configured storage mode. The `claude` binary is never run (running it makes the CLI read its credentials via `/usr/bin/security`, popping a Keychain prompt) — its version for the User-Agent comes from the install path, and the account email from the CLI's `~/.claude.json`. Only `codex --version` is executed automatically. Codex credentials remain in the configured file or direct Keychain backend; file credentials keep mode 0600. Switching can transfer credentials between the explicitly configured source and destination backends. Primary-account backups retain their original backend. Only settings and last percentages (with reset times) go to `UserDefaults`, without a single token. Usage requests use an ephemeral `URLSession`, with no cookies or disk cache.
 
 ## CI & releases
 
@@ -261,7 +261,7 @@ Sources/Notchlimits/
   Notch/      notch geometry, NSPanel, hover logic and animations
   UI/         SwiftUI panel layout
   Model/      column and limit-window types
-  Providers/  Claude (Keychain + api.anthropic.com), Codex (auth.json + chatgpt.com)
+  Providers/  Claude (Keychain + api.anthropic.com), Codex (file/Keychain + chatgpt.com)
   Core/       poll scheduler, cache, history + burn-rate, notifications, hotkeys, account setup
 Tools/
   make-strings.py   translations for every language
