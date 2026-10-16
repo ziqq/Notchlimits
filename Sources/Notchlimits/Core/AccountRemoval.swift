@@ -58,13 +58,9 @@ enum AccountRemoval {
                [CodexAuthSwap.defaultColumnID, CodexAuthSwap.activeColumnID].contains(account.id) {
                 try CodexAuthSwap.restoreDefault()
             }
+            try CodexAuthSwap.removeAuth(home: url)
             if url.path.hasPrefix(ProfileDirectories.codexRoot.path + "/") {
                 try fileManager.removeItem(at: url)           // доп. профиль — вся папка
-            } else {
-                let auth = url.appendingPathComponent("auth.json")
-                if fileManager.fileExists(atPath: auth.path) {
-                    try fileManager.removeItem(at: auth)      // основной — только выход
-                }
             }
 
         case .mock:

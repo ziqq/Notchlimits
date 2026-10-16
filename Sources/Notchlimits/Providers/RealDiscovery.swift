@@ -38,7 +38,7 @@ struct RealDiscovery: AccountDiscovery {
 
         let defaultHome = CodexAuthSwap.baseHome
         let defaultLive = CodexAuthSwap.liveHome(columnID: CodexAuthSwap.defaultColumnID, home: defaultHome)
-        if FileManager.default.fileExists(atPath: defaultLive.appendingPathComponent("auth.json").path) {
+        if CodexAuthSwap.hasAuth(home: defaultLive) {
             homes.append((id: CodexAuthSwap.defaultColumnID,
                           name: ProfileDirectories.primaryName, url: defaultHome))
         }
@@ -47,9 +47,7 @@ struct RealDiscovery: AccountDiscovery {
             let folder = directory.lastPathComponent
             let id = CodexAuthSwap.profileColumnID(folder)
             let live = CodexAuthSwap.liveHome(columnID: id, home: directory)
-            guard FileManager.default.fileExists(
-                atPath: live.appendingPathComponent("auth.json").path
-            ) else { continue }
+            guard CodexAuthSwap.hasAuth(home: live) else { continue }
             homes.append((id: id, name: folder, url: directory))
         }
 

@@ -23,6 +23,7 @@ class AuthenticationRegressions(unittest.TestCase):
         cls.executable = compile_fixture(cls.build.name, "Authentication", [
             "Model/Models.swift", "Model/Account.swift", "Core/JWT.swift",
             *(["Core/ClaudeStorageLock.swift"] if (SOURCES / "Core/ClaudeStorageLock.swift").exists() else []),
+            *(["Core/CodexAuthStorage.swift"] if (SOURCES / "Core/CodexAuthStorage.swift").exists() else []),
             "Core/CodexAuthSwap.swift", "Core/AccountRemoval.swift",
             "Core/AccountSwitcher.swift", "Core/AppAccountSwitcher.swift",
             *(["Core/ClaudeCLISelection.swift"] if (SOURCES / "Core/ClaudeCLISelection.swift").exists() else []),
@@ -405,3 +406,84 @@ class AuthenticationRegressions(unittest.TestCase):
 
     def test_pending_desktop_only_launch_does_not_mark_replacement_open(self):
         self.check_scenario("claude-readd-staged-cli-off")
+
+    def test_codex_store_keyring(self):
+        self.check_scenario("codex-store-keyring")
+
+    def test_codex_store_auto(self):
+        self.check_scenario("codex-store-auto")
+
+    def test_codex_store_file(self):
+        self.check_scenario("codex-store-file")
+
+    def test_codex_store_auto_missing(self):
+        self.check_scenario("codex-store-auto-missing")
+
+    def test_codex_store_auto_denied(self):
+        self.check_scenario("codex-store-auto-denied")
+
+    def test_codex_store_keyring_denied(self):
+        self.check_scenario("codex-store-keyring-denied")
+
+    def test_codex_store_ephemeral(self):
+        self.check_scenario("codex-store-ephemeral")
+
+    def test_codex_store_invalid(self):
+        self.check_scenario("codex-store-invalid")
+
+    def test_codex_store_discovery(self):
+        self.check_scenario("codex-store-discovery")
+
+    def test_codex_store_symlink(self):
+        self.check_scenario("codex-store-symlink")
+
+    def test_codex_store_switch(self):
+        self.check_scenario("codex-store-switch")
+
+    def test_codex_store_switch_incoming_keyring(self):
+        self.check_scenario("codex-store-switch-incoming-keyring")
+
+    def test_codex_store_switch_incoming_file(self):
+        self.check_scenario("codex-store-switch-incoming-file")
+
+    def test_codex_store_renewal(self):
+        self.check_scenario("codex-store-renewal")
+
+    def test_codex_store_renewal_denied(self):
+        self.check_scenario("codex-store-renewal-denied")
+
+    def test_codex_store_remove(self):
+        self.check_scenario("codex-store-remove")
+
+    def test_codex_store_remove_denied(self):
+        self.check_scenario("codex-store-remove-denied")
+
+    def test_codex_store_root_settings(self):
+        self.check_scenario("codex-store-root-settings")
+
+    def test_codex_store_system_requirements(self):
+        self.check_scenario("codex-store-system-requirements")
+
+    def test_codex_store_managed_requirements(self):
+        self.check_scenario("codex-store-managed-requirements")
+
+    def test_codex_store_ephemeral_switch(self):
+        self.check_scenario("codex-store-ephemeral-switch")
+
+    def test_codex_store_auto_renewal(self):
+        self.check_scenario("codex-store-auto-renewal")
+
+    def test_codex_store_auto_renewal_denied(self):
+        self.check_scenario("codex-store-auto-renewal-denied")
+
+    def test_codex_store_auto_switch(self):
+        self.check_scenario("codex-store-auto-switch")
+
+    def test_codex_store_auto_fallback_switch(self):
+        self.check_scenario("codex-store-auto-fallback-switch")
+
+    def test_codex_store_ephemeral_current(self):
+        self.check_scenario("codex-store-ephemeral-current")
+
+    def test_codex_store_encrypted(self):
+        self.check_scenario("codex-store-encrypted")

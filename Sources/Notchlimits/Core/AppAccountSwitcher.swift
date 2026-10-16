@@ -155,9 +155,8 @@ final class ClaudeAppSwitcher: AppAccountSwitcher {
 
 // MARK: - Codex
 
-/// Codex (`ChatGPT.app`): приложение всегда на `~/.codex`, свич — подмена
-/// `auth.json` (см. `CodexAuthSwap`). Голая `codex` в терминале при этом
-/// работает под тем же аккаунтом, что и приложение.
+/// Desktop and CLI share the base CODEX_HOME and its configured auth backend.
+/// Swap credentials only, preserving the application's projects and threads.
 struct CodexAppSwitcher: AppAccountSwitcher {
     let bundleID = "com.openai.codex"
     let appName = "Codex"

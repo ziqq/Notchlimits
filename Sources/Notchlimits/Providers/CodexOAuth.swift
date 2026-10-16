@@ -197,7 +197,7 @@ actor CodexRenewal {
     }
 
     static func refreshToken(_ file: URL) -> String? {
-        guard let data = try? Data(contentsOf: file),
+        guard let data = try? CodexAuthSwap.authData(home: file.deletingLastPathComponent()),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               (root["auth_mode"] as? String).map({ $0 == "chatgpt" }) ?? true,
               let tokens = root["tokens"] as? [String: Any],

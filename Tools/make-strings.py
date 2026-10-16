@@ -81,7 +81,7 @@ ORDER = [
     ("Уведомления", ["notification.title", "notification.body",
                      "notification.reset.title", "notification.reset.body"]),
     ("Ошибки в колонке", [
-        "error.network", "error.keychainWrite", "error.pendingCredentials", "error.timeout", "error.noHTTP", "error.http",
+        "error.network", "error.codexStorage", "error.codexEphemeral", "error.keychainWrite", "error.pendingCredentials", "error.timeout", "error.noHTTP", "error.http",
         "error.parse", "error.unknownSource", "error.cliProfile", "error.cliShell", "error.noProvider",
         "error.unreachable",
     ]),
@@ -1418,6 +1418,28 @@ for _lang, _values in _ACCOUNT_UPDATES.items():
 _KEYCHAIN_WRITE = {'en': 'no Keychain write access', 'ru': 'нет записи в Keychain', 'de': 'kein Schreibzugriff auf den Schlüsselbund', 'fr': "pas d'accès en écriture au trousseau", 'es': 'sin escritura en el llavero', 'it': 'nessuna scrittura nel portachiavi', 'pt-BR': 'sem gravação no Keychain', 'uk': 'немає запису в Keychain', 'pl': 'brak zapisu do pęku kluczy', 'tr': "Anahtar Zinciri'ne yazılamıyor", 'ja': 'キーチェーンに書き込めません', 'ko': '키체인에 쓸 수 없음', 'zh-Hans': '无法写入钥匙串', 'zh-Hant': '無法寫入鑰匙圈'}
 for _lang, _text in _KEYCHAIN_WRITE.items():
     T[_lang]["error.keychainWrite"] = _text
+
+# Storage errors describe configuration and process-local authentication without exposing credentials.
+_CODEX_STORAGE = {
+    "en": ("Cannot read the Codex storage settings or this storage backend is unsupported.", "Codex keeps this sign-in only in its process. Choose file, keyring or auto in Codex to use persistent accounts."),
+    "ru": ("Не удалось прочитать настройки хранилища Codex или этот тип хранилища не поддерживается.", "Codex хранит этот вход только в своём процессе. Для постоянных аккаунтов выбери в Codex file, keyring или auto."),
+    "uk": ("Не вдалося прочитати налаштування сховища Codex або цей тип сховища не підтримується.", "Codex зберігає цей вхід лише у своєму процесі. Для постійних облікових записів вибери в Codex file, keyring або auto."),
+    "de": ("Die Codex-Speichereinstellungen können nicht gelesen werden oder dieses Speicherverfahren wird nicht unterstützt.", "Codex speichert diese Anmeldung nur im eigenen Prozess. Wähle in Codex file, keyring oder auto für dauerhafte Konten."),
+    "es": ("No se puede leer la configuración de almacenamiento de Codex o este tipo de almacenamiento no es compatible.", "Codex conserva esta sesión solo en su proceso. Elige file, keyring o auto en Codex para usar cuentas persistentes."),
+    "fr": ("Impossible de lire les paramètres de stockage de Codex, ou ce type de stockage n’est pas pris en charge.", "Codex conserve cette connexion uniquement dans son processus. Choisissez file, keyring ou auto dans Codex pour des comptes persistants."),
+    "it": ("Impossibile leggere le impostazioni di archiviazione di Codex oppure questo tipo di archivio non è supportato.", "Codex conserva questo accesso solo nel proprio processo. Scegli file, keyring o auto in Codex per usare account persistenti."),
+    "pl": ("Nie można odczytać ustawień przechowywania Codex lub ten typ magazynu nie jest obsługiwany.", "Codex przechowuje to logowanie tylko w swoim procesie. Wybierz file, keyring lub auto w Codex, aby używać trwałych kont."),
+    "pt-BR": ("Não foi possível ler as configurações de armazenamento do Codex ou este tipo de armazenamento não é compatível.", "O Codex mantém este login apenas no próprio processo. Escolha file, keyring ou auto no Codex para usar contas persistentes."),
+    "tr": ("Codex depolama ayarları okunamıyor veya bu depolama türü desteklenmiyor.", "Codex bu oturumu yalnızca kendi işleminde tutar. Kalıcı hesaplar için Codex içinde file, keyring veya auto seç."),
+    "ja": ("Codexの保存設定を読み取れないか、この保存方式はサポートされていません。", "Codexはこのログインを自身のプロセス内にのみ保持します。永続的なアカウントにはCodexでfile、keyring、autoのいずれかを選択してください。"),
+    "ko": ("Codex 저장 설정을 읽을 수 없거나 이 저장 방식은 지원되지 않습니다.", "Codex는 이 로그인을 자체 프로세스에만 보관합니다. 영구 계정에는 Codex에서 file, keyring 또는 auto를 선택하세요."),
+    "zh-Hans": ("无法读取 Codex 存储设置，或不支持此存储方式。", "Codex 仅在其进程内保留此登录。要使用持久账号，请在 Codex 中选择 file、keyring 或 auto。"),
+    "zh-Hant": ("無法讀取 Codex 儲存設定，或不支援此儲存方式。", "Codex 僅在其程序內保留此登入。若要使用持久帳號，請在 Codex 中選擇 file、keyring 或 auto。"),
+}
+for _lang, (_storage, _ephemeral) in _CODEX_STORAGE.items():
+    T[_lang]["error.codexStorage"] = _storage
+    T[_lang]["error.codexEphemeral"] = _ephemeral
+    T[_lang]["appswitch.error.noAuth"] = T[_lang]["appswitch.error.noAuth"].replace(" (auth.json)", "").replace("(auth.json)", "")
 
 # «Управление»: Keep Awake — не давать Mac уснуть и не гасить экран.
 _KEEP_AWAKE = {

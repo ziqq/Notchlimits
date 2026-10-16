@@ -157,6 +157,8 @@
 
 // Ошибки в колонке
 "error.network" = "网络错误";
+"error.codexStorage" = "无法读取 Codex 存储设置，或不支持此存储方式。";
+"error.codexEphemeral" = "Codex 仅在其进程内保留此登录。要使用持久账号，请在 Codex 中选择 file、keyring 或 auto。";
 "error.keychainWrite" = "无法写入钥匙串";
 "error.pendingCredentials" = "凭据仍在保存。请解锁钥匙串后重试退出。";
 "error.timeout" = "超时";
@@ -178,5 +180,5 @@
 "appswitch.error.title" = "无法切换账户";
 "appswitch.error.notInstalled" = "未安装 %@。";
 "appswitch.error.didNotQuit" = "%@ 未退出——请关闭后重试。";
-"appswitch.error.noAuth" = "此账户没有 Codex 登录信息 (auth.json)。请重新登录。";
+"appswitch.error.noAuth" = "此账户没有 Codex 登录信息。请重新登录。";
 "appswitch.error.inProgress" = "正在切换账号。";

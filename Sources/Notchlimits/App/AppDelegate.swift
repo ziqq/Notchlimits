@@ -378,7 +378,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard runModalAbovePanel(alert) == .alertFirstButtonReturn else { return }
 
         do {
-            try FileManager.default.removeItem(at: url)
+            if url.path.hasPrefix(ProfileDirectories.codexRoot.path + "/") {
+                try AccountRemoval.remove(DiscoveredAccount(
+                    id: CodexAuthSwap.profileColumnID(url.lastPathComponent), provider: .codex,
+                    profileName: url.lastPathComponent, source: .codexHome(url)))
+            } else {
+                try FileManager.default.removeItem(at: url)
+            }
             store.rediscover(force: true)
         } catch {
             errorAlert(L.t("remove.failed.title"), error)
