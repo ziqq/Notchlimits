@@ -10,7 +10,16 @@ import Security
 /// (запись Keychain / `auth.json`), не задевая остальной конфиг CLI.
 enum AccountRemoval {
 
-    enum Failure: Error { case keychain(OSStatus) }
+    enum Failure: LocalizedError {
+        case keychain(OSStatus), busy
+
+        var errorDescription: String? {
+            switch self {
+            case .keychain(let status): return SecCopyErrorMessageString(status, nil) as String?
+            case .busy: return L.t("remove.busy")
+            }
+        }
+    }
 
     /// Доп. профиль (папку создавали мы) или основной аккаунт CLI.
     static func isExtraProfile(_ account: DiscoveredAccount) -> Bool {
@@ -28,12 +37,18 @@ enum AccountRemoval {
         let fileManager = FileManager.default
         switch account.source {
         case .claudeKeychain(let service, let configDir):
-            try deleteKeychainEntry(service: service)
-            // Папку доп. профиля сносим целиком; основной (configDir == nil)
-            // не трогаем — там живёт сам CLI пользователя.
-            if let configDir,
-               configDir.path.hasPrefix(ProfileDirectories.claudeRoot.path + "/") {
-                try? fileManager.removeItem(at: configDir)
+            do {
+                try ClaudeKeychain.withRemovalLock(service: service, configDir: configDir) {
+                    try deleteClaudeCredentials(service: service, configDir: configDir)
+                    // Only managed extra profiles belong to us; preserve the main CLI config.
+                    if let configDir,
+                       configDir.path.hasPrefix(ProfileDirectories.claudeRoot.path + "/") {
+                        try? fileManager.removeItem(at: configDir)
+                    }
+                    ClaudeAppSwitcher.accountRemoved(columnID: account.id)
+                }
+            } catch is ClaudeStorageLock.Failure {
+                throw Failure.busy
             }
 
         case .codexHome(let url):
@@ -43,17 +58,29 @@ enum AccountRemoval {
                [CodexAuthSwap.defaultColumnID, CodexAuthSwap.activeColumnID].contains(account.id) {
                 try CodexAuthSwap.restoreDefault()
             }
+            try CodexAuthSwap.removeAuth(home: url)
             if url.path.hasPrefix(ProfileDirectories.codexRoot.path + "/") {
                 try fileManager.removeItem(at: url)           // доп. профиль — вся папка
-            } else {
-                let auth = url.appendingPathComponent("auth.json")
-                if fileManager.fileExists(atPath: auth.path) {
-                    try fileManager.removeItem(at: auth)      // основной — только выход
-                }
             }
 
         case .mock:
             break
+        }
+    }
+
+    private static func deleteClaudeCredentials(service: String, configDir: URL?) throws {
+        let file = configDir?.appendingPathComponent(".credentials.json") ?? ClaudeKeychain.credentialFile(service: service)
+        let backup = try file.flatMap { FileManager.default.fileExists(atPath: $0.path) ? try Data(contentsOf: $0) : nil }
+        // An unlink failure must leave Keychain and pending grants untouched.
+        if let file, backup != nil { try FileManager.default.removeItem(at: file) }
+        do {
+            try deleteKeychainEntry(service: service)
+        } catch {
+            if let file, let backup,
+               !FileManager.default.createFile(atPath: file.path, contents: backup, attributes: [.posixPermissions: 0o600]) {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            throw error
         }
     }
 
@@ -62,7 +89,7 @@ enum AccountRemoval {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service
         ]
-        let status = SecItemDelete(query as CFDictionary)
+        let status = ClaudeKeychain.access { SecItemDelete(query as CFDictionary) }
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw Failure.keychain(status)
         }

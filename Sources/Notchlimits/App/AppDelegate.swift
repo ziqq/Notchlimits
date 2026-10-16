@@ -6,6 +6,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var store: UsageStore!
     private var panel: PanelController!
+    private var claudeProvider: ClaudeProvider?
+    private var terminationPending = false
     private var hotKeys: HotKeyManager!
     private lazy var updater = UpdaterController(
         suppressPanel: { [weak self] in self?.panel.setModalSuppression($0) },
@@ -15,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
 
     private enum Setting: Int {
-        case telemetry, keepAwake, keepDisplayOn, loginItem
+        case telemetry, keepAwake, keepDisplayOn, loginItem, switchCLI
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -26,9 +28,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let useMock = ProcessInfo.processInfo.environment["NOTCHLIMITS_MOCK"] == "1"
         let discovery: AccountDiscovery = useMock ? MockDiscovery() : RealDiscovery()
+        let claude = ClaudeProvider()
+        claudeProvider = useMock ? nil : claude
         let providers: [Provider: UsageProvider] = useMock
             ? [.claude: MockProvider(), .codex: MockProvider()]
-            : [.claude: ClaudeProvider(), .codex: CodexProvider()]
+            : [.claude: claude, .codex: CodexProvider()]
 
         store = UsageStore(providers: providers, discovery: discovery)
         panel = PanelController(store: store, keepAwake: .shared, power: .shared)
@@ -67,6 +71,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Открытие панели с клавиатуры. Carbon-хоткей не требует Accessibility.
         hotKeys = HotKeyManager { [weak self] in self?.panel.toggle() }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let claudeProvider else { return .terminateNow }
+        guard !terminationPending else { return .terminateLater }
+        terminationPending = true
+        Task {
+            let ready = await claudeProvider.prepareForTermination()
+            if !ready {
+                let alert = NSAlert()
+                alert.messageText = L.t("error.pendingCredentials")
+                alert.informativeText = L.t("error.keychainWrite")
+                alert.addButton(withTitle: L.t("common.ok"))
+                runModalAbovePanel(alert)
+            }
+            terminationPending = false
+            sender.reply(toApplicationShouldTerminate: ready)
+        }
+        return .terminateLater
     }
 
     // MARK: - Контекстное меню
@@ -181,6 +204,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         addKeepAwakeItems(to: menu)
         menu.addItem(settingItem(L.t("menu.loginItem"), .loginItem,
                           state: LoginItem.isEnabled ? .on : .off))
+        let switchCLI = settingItem(L.t("menu.switchCLI"), .switchCLI,
+                                    state: ClaudeCLISelection.isEnabled ? .on : .off)
+        switchCLI.toolTip = L.t("menu.switchCLI.help")
+        switchCLI.view?.toolTip = switchCLI.toolTip
+        menu.addItem(switchCLI)
         menu.addItem(.separator())
 
         let hotKeyItem = NSMenuItem(title: L.t("menu.hotKey", hotKeys.displayName),
@@ -263,6 +291,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .loginItem:
             toggleLoginItem()
             enabled = LoginItem.isEnabled
+        case .switchCLI:
+            ClaudeCLISelection.isEnabled.toggle()
+            enabled = ClaudeCLISelection.isEnabled
         case nil:
             return
         }
@@ -347,7 +378,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard runModalAbovePanel(alert) == .alertFirstButtonReturn else { return }
 
         do {
-            try FileManager.default.removeItem(at: url)
+            if url.path.hasPrefix(ProfileDirectories.codexRoot.path + "/") {
+                try AccountRemoval.remove(DiscoveredAccount(
+                    id: CodexAuthSwap.profileColumnID(url.lastPathComponent), provider: .codex,
+                    profileName: url.lastPathComponent, source: .codexHome(url)))
+            } else {
+                try FileManager.default.removeItem(at: url)
+            }
             store.rediscover(force: true)
         } catch {
             errorAlert(L.t("remove.failed.title"), error)

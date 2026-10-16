@@ -1,23 +1,17 @@
 import Foundation
 
-/// Чей вход сейчас лежит в `~/.codex/auth.json`.
-///
-/// Приложение Codex держит в CODEX_HOME и вход, и проекты с тредами, поэтому
-/// аккаунт переключаем подменой одного `auth.json`, а не всей папки:
-///
-/// - основной аккаунт (колонка `codex:default`), пока он не в `~/.codex`,
-///   ждёт в `Notchlimits/codex-app/default/auth.json`;
-/// - вход доп. профиля, пока он в `~/.codex`, живёт там (приложение может
-///   обновить токены), а при следующем свиче возвращается в папку профиля.
-///
-/// Колонки при этом не меняются: `liveHome` говорит, откуда читать вход
-/// колонки прямо сейчас.
+/// Keep Desktop and CLI on the base CODEX_HOME while swapping only credentials.
+/// Projects and threads stay in place. The primary account waits in an internal
+/// backup using its original backend; native token changes return to the selected
+/// profile's backend before the next switch. liveHome keeps column identities stable.
 enum CodexAuthSwap {
 
     enum Failure: LocalizedError {
-        case missingAuth
+        case missingAuth, busy
 
-        var errorDescription: String? { L.t("appswitch.error.noAuth") }
+        var errorDescription: String? {
+            L.t(self == .busy ? "appswitch.error.inProgress" : "appswitch.error.noAuth")
+        }
     }
 
     static let defaultColumnID = "codex:default"
@@ -31,10 +25,21 @@ enum CodexAuthSwap {
 
     private static let activeIDKey = "codexAppAccountID"
     private static let activeHomeKey = "codexAppAccountHome"
+    private static let stashStoreKey = "codexAppStashStore"
 
     /// Перестановка входов и запись продлённых токенов не должны пересечься:
     /// иначе в `~/.codex` уедет уже потраченный refresh-токен.
     private static let lock = NSLock()
+    struct Renewal {
+        let id = UUID()
+        let columnID: String
+        let key: String
+        let generation: UUID?
+        let storage: CodexAuthStorage
+        let record: CodexAuthStorage.Record
+    }
+    private static var generations: [String: UUID] = [:]
+    private static var renewals: [String: Renewal] = [:]
 
     /// Базовый CODEX_HOME: его берут голая `codex` и приложение.
     static var baseHome: URL {
@@ -71,25 +76,35 @@ enum CodexAuthSwap {
     }
 
     static func isBaseHome(_ url: URL) -> Bool {
-        url.standardizedFileURL.path == baseHome.standardizedFileURL.path
+        homeKey(url) == homeKey(baseHome)
     }
+
+    private static func homeKey(_ home: URL) -> String { home.resolvingSymlinksInPath().path }
 
     /// Положить в `~/.codex` вход колонки. Приложение должно быть закрыто.
     static func activate(columnID: String, home: URL) throws {
         lock.lock()
         defer { lock.unlock() }
+        let base = try storage(at: baseHome)
+        guard base.mode != .ephemeral else { throw CodexAuthStorage.Failure.ephemeral }
         guard columnID != activeColumnID else { return }
+        guard renewals[homeKey(home)] == nil,
+              !renewals.values.contains(where: { $0.columnID == columnID || $0.columnID == activeColumnID }) else {
+            throw Failure.busy
+        }
         let incoming = columnID == defaultColumnID ? stashHome : home
-        // Проверяем до всяких перестановок, чтобы не остаться на полпути.
-        guard columnID == defaultColumnID || exists(auth(incoming)) else { throw Failure.missingAuth }
-
+        let payload = try storage(at: incoming).load()?.data
+        guard columnID == defaultColumnID || payload != nil else { throw Failure.missingAuth }
+        try FileManager.default.createDirectory(at: baseHome, withIntermediateDirectories: true)
         try giveBackCurrent()
+        if let payload { try base.save(payload) } else { try base.delete() }
         if columnID == defaultColumnID {
-            try move(auth(stashHome), to: auth(baseHome))
+            // The restored login is durable before its backup is removed.
+            try? storage(at: stashHome).delete()
             UserDefaults.standard.removeObject(forKey: activeIDKey)
             UserDefaults.standard.removeObject(forKey: activeHomeKey)
+            UserDefaults.standard.removeObject(forKey: stashStoreKey)
         } else {
-            try copy(auth(home), to: auth(baseHome))
             UserDefaults.standard.set(columnID, forKey: activeIDKey)
             UserDefaults.standard.set(home.path, forKey: activeHomeKey)
         }
@@ -100,20 +115,50 @@ enum CodexAuthSwap {
         try activate(columnID: defaultColumnID, home: baseHome)
     }
 
-    /// Записать продлённые токены туда, где вход колонки лежит сейчас.
-    /// Пишем, только если в файле всё ещё тот refresh-токен, которым мы
-    /// продлевали: иначе его уже обновил кто-то другой, и наш ответ устарел.
+    /// Reserve the source before any refresh POST. Switching cannot publish its
+    /// old grant until persistence finishes; successful removal retires the owner.
+    static func beginRenewal(columnID: String, home: URL) throws -> Renewal? {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = homeKey(home)
+        guard renewals[key] == nil else { throw Failure.busy }
+        let live = liveHome(columnID: columnID, home: home)
+        guard !isBaseHome(live) else { return nil }
+        let source = try storage(at: live)
+        guard let record = try source.load() else { return nil }
+        let renewal = Renewal(columnID: columnID, key: key, generation: generations[key],
+                              storage: source, record: record)
+        renewals[key] = renewal
+        return renewal
+    }
+
+    static func isCurrent(_ renewal: Renewal) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return renewals[renewal.key]?.id == renewal.id
+    }
+
+    static func finishRenewal(_ renewal: Renewal) {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = renewal.key
+        if renewals[key]?.id == renewal.id { renewals[key] = nil }
+    }
+
+    /// Retry only the backend that supplied the submitted refresh grant. In auto
+    /// mode a temporary Keychain error must not turn a file fallback into a re-login.
     @discardableResult
-    static func storeRenewed(columnID: String, home: URL, usedRefreshToken: String,
+    static func storeRenewed(_ renewal: Renewal, usedRefreshToken: String,
                              tokens: CodexOAuth.Tokens) throws -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        let file = auth(liveHome(columnID: columnID, home: home))
-        let data = try Data(contentsOf: file)
-        guard let updated = renewedAuth(data, usedRefreshToken: usedRefreshToken,
+        let key = renewal.key
+        guard generations[key] == renewal.generation, renewals[key]?.id == renewal.id else { return false }
+        let destination = renewal.storage
+        guard let record = try destination.load(backend: renewal.record.backend) else { return false }
+        guard let updated = renewedAuth(record.data, usedRefreshToken: usedRefreshToken,
                                        tokens: tokens, now: Date()) else { return false }
-        try updated.write(to: file, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        try destination.save(updated, backend: record.backend)
         return true
     }
 
@@ -145,57 +190,54 @@ enum CodexAuthSwap {
 
     /// Вход, что сейчас в `~/.codex`, — обратно владельцу.
     private static func giveBackCurrent() throws {
-        let live = auth(baseHome)
-        guard isSwapped else {
-            // Основной уходит в запас. Нет входа — и запасать нечего.
+        let live = try storage(at: baseHome)
+        let payload = try live.load()?.data
+        if !isSwapped {
             try FileManager.default.createDirectory(at: stashHome, withIntermediateDirectories: true)
-            if exists(live) { try copy(live, to: auth(stashHome)) } else { remove(auth(stashHome)) }
+            let stash = try CodexAuthStorage(home: stashHome, mode: live.mode)
+            if let payload { try stash.save(payload) } else { try stash.delete() }
+            // A CLI re-login into our internal backup must use that same backend.
+            try ("cli_auth_credentials_store = \"" + live.mode.rawValue + "\"\n")
+                .write(to: stashHome.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+            UserDefaults.standard.set(live.mode.rawValue, forKey: stashStoreKey)
             return
         }
-        guard exists(live),
-              let path = UserDefaults.standard.string(forKey: activeHomeKey) else { return }
-        let profile = auth(URL(fileURLWithPath: path))
-        // Кладём обратно, только если это тот же аккаунт (приложение могло
-        // обновить токены). Кто-то перелогинился в `~/.codex` иначе или папку
-        // профиля удалили — не затираем профиль, а сохраняем копию рядом.
-        if exists(profile), accountID(live) == accountID(profile) {
-            try copy(live, to: profile)
+        guard let payload, let path = UserDefaults.standard.string(forKey: activeHomeKey) else { return }
+        let profile = try storage(at: URL(fileURLWithPath: path))
+        if let previous = try profile.load()?.data, accountID(payload) == accountID(previous) {
+            try profile.save(payload)
         } else {
-            let stamp = Int(Date().timeIntervalSince1970)
-            try copy(live, to: stashHome.appendingPathComponent("orphaned-auth-\(stamp).json"))
+            // Retain an unexpected native login without exporting a Keychain login to plaintext.
+            let orphan = stashHome.deletingLastPathComponent().appendingPathComponent("orphaned-" + UUID().uuidString)
+            try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
+            try CodexAuthStorage(home: orphan, mode: live.mode).save(payload)
         }
     }
 
-    // MARK: - Файлы
+    static func authData(home: URL) throws -> Data? { try storage(at: home).load()?.data }
+    static func hasAuth(home: URL) -> Bool { (try? storage(at: home))?.contains() ?? false }
 
-    private static func auth(_ home: URL) -> URL { home.appendingPathComponent("auth.json") }
+    static func removeAuth(home: URL) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = homeKey(home)
+        try storage(at: home).delete()
+        generations[key] = UUID()
+        renewals[key] = nil
+    }
 
-    private static func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
-
-    private static func remove(_ url: URL) { try? FileManager.default.removeItem(at: url) }
-
-    /// Отсутствующий источник = «нет входа»: цель удаляем.
-    private static func move(_ source: URL, to target: URL) throws {
-        if exists(source) {
-            try copy(source, to: target)
-            remove(source)
-        } else {
-            remove(target)
+    private static func storage(at home: URL) throws -> CodexAuthStorage {
+        if home.standardizedFileURL == stashHome.standardizedFileURL {
+            let saved = UserDefaults.standard.string(forKey: stashStoreKey) ?? "file"
+            guard let mode = CodexAuthStorage.Mode(rawValue: saved) else { throw CodexAuthStorage.Failure.settings }
+            return try CodexAuthStorage(home: home, mode: mode)
         }
+        return try CodexAuthStorage(home: home)
     }
 
-    /// Атомарно и с правами 0600: в файле токены.
-    private static func copy(_ source: URL, to target: URL) throws {
-        let data = try Data(contentsOf: source)
-        try data.write(to: target, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
-    }
-
-    private static func accountID(_ url: URL) -> String? {
-        guard let data = try? Data(contentsOf: url),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let tokens = root["tokens"] as? [String: Any]
-        else { return nil }
+    private static func accountID(_ data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tokens = root["tokens"] as? [String: Any] else { return nil }
         return tokens["account_id"] as? String
     }
 }

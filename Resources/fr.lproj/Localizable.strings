@@ -68,6 +68,8 @@
 "menu.hotKey.standard" = "Par défaut (⌘P)";
 "menu.hotKey.disable" = "Désactiver";
 "menu.loginItem" = "Lancer à l’ouverture de session";
+"menu.switchCLI" = "Changer la CLI";
+"menu.switchCLI.help" = "Changer aussi Claude Code. Ouvrez un nouveau terminal après le premier changement. Les sessions CLI actives gardent leur compte.";
 "menu.about" = "À propos de Notchlimits";
 "menu.quit" = "Quitter Notchlimits";
 "menu.telemetry" = "Afficher la télémétrie";
@@ -78,6 +80,7 @@
 "remove.body" = "Les identifiants du compte seront supprimés définitivement. Reconnecte-toi avec claude ou codex pour le récupérer.";
 "remove.delete" = "Supprimer";
 "remove.failed.title" = "Impossible de supprimer le compte";
+"remove.busy" = "Ce compte est en cours de mise à jour. Attendez la fin, puis réessayez.";
 "remove.incomplete" = "%@ — non connecté";
 
 // Обновления
@@ -154,12 +157,17 @@
 
 // Ошибки в колонке
 "error.network" = "erreur réseau";
+"error.codexStorage" = "Impossible de lire les paramètres de stockage de Codex, ou ce type de stockage n’est pas pris en charge.";
+"error.codexEphemeral" = "Codex conserve cette connexion uniquement dans son processus. Choisissez file, keyring ou auto dans Codex pour des comptes persistants.";
 "error.keychainWrite" = "pas d'accès en écriture au trousseau";
+"error.pendingCredentials" = "Les identifiants sont en cours d’enregistrement. Déverrouillez le trousseau et réessayez de quitter.";
 "error.timeout" = "délai dépassé";
 "error.noHTTP" = "pas de réponse HTTP";
 "error.http" = "HTTP %d";
 "error.parse" = "réponse illisible";
 "error.unknownSource" = "source inconnue";
+"error.cliProfile" = "Le dossier du profil CLI est introuvable.";
+"error.cliShell" = "Le changement de CLI prend en charge zsh et bash. Ouvrez un nouveau terminal après le premier changement.";
 "error.noProvider" = "aucun fournisseur";
 "error.unreachable" = "réseau indisponible";
 
@@ -172,4 +180,5 @@
 "appswitch.error.title" = "Impossible de changer de compte";
 "appswitch.error.notInstalled" = "%@ n’est pas installé.";
 "appswitch.error.didNotQuit" = "%@ ne s’est pas fermé — fermez-le et réessayez.";
-"appswitch.error.noAuth" = "Ce compte n’a pas de connexion Codex (auth.json). Reconnectez-vous.";
+"appswitch.error.noAuth" = "Ce compte n’a pas de connexion Codex. Reconnectez-vous.";
+"appswitch.error.inProgress" = "Un changement de compte est déjà en cours.";

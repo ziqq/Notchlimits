@@ -71,7 +71,15 @@ On a notch-less screen the panel sits top-center; collapsed, it's a small pill w
 
 ![Collapsed panel](docs/collapsed.png)
 
-The context menu is separated into groups: **About Notchlimits** (native panel with the running version); **Refresh** (force-poll, bypassing timers and backoff), **Settings**, **Check for updates…** (signed updates through Sparkle); **Claude account**, **Codex account** (switch the app's account or **Add account…**), **Remove account** (with a confirmation — deletes the account's login and profile); **Hide column**, **Rename column**, **Show hidden columns**; **Quit Notchlimits**. **Settings** contains **Show telemetry**, **Keep Mac awake**, **Keep display on**, **Launch at login** (`SMAppService`), and **Hotkey**.
+The context menu is separated into groups: **About Notchlimits** (native panel with the running version); **Refresh** (force-poll, bypassing timers and backoff), **Settings**, **Check for updates…** (signed updates through Sparkle); **Claude account**, **Codex account** (switch the app's account or **Add account…**), **Remove account** (with a confirmation — deletes the account's login and profile); **Hide column**, **Rename column**, **Show hidden columns**; **Quit Notchlimits**. **Settings** contains **Show telemetry**, **Keep Mac awake**, **Keep display on**, **Launch at login** (`SMAppService`), **Switch CLI**, and **Hotkey**.
+
+### Claude account switching and renewal
+
+**Settings → Switch CLI** is on by default: switching a Claude Desktop account also selects its existing Claude Code profile. Turn it off to switch Desktop alone; the CLI keeps its previous selection. This does not change Codex switching. The exact config-path spelling is preserved, including trailing slashes and symlink variants, so the CLI selects the same Keychain service. The prepared CLI selection is published only after Desktop opens successfully; a failed launch leaves CLI routing unchanged. Before publication, the account must still exist and its exact CLI profile path must still match; removal during launch preserves the previous CLI selection and reports the CLI failure while retaining the successful Desktop marker. The CLI setting is checked again when launch completes, including when enabled during launch. Simultaneous switches of the same application are rejected. Successful account removal retires and removes its managed Desktop data directory. Re-adding the same CLI profile uses a fresh Desktop directory, even if an old Desktop process recreates the retired path; an already-prepared launch keeps its actual Desktop marker and cannot select the replacement CLI account.
+
+On the first CLI switch, Notchlimits appends a source line to `.zshrc` (for bash, `.bashrc` and its existing login startup file) without replacing existing contents. Open a new terminal once to load it. The shell function reads the selected profile on each new `claude` invocation, including when Notchlimits is closed. Running CLI sessions keep their account, and an explicitly set `CLAUDE_CONFIG_DIR` or `CLAUDE_SECURESTORAGE_CONFIG_DIR` takes precedence. A missing selected profile fails instead of silently using another account. Other shells are not supported for CLI switching; Desktop-only switching remains available.
+
+Sleeping Claude profiles renew directly over HTTP using their existing credentials, without another Notchlimits login or a background Claude process. With Claude Code 2.1.278 or later, renewal holds both native OAuth locks from the credential reread through persistence, maintains their heartbeats and takes the storage lock for each write. A busy or lost lock defers renewal. If saving rotated credentials fails, renewal keeps the OAuth locks and retries only persistence. Normal quit waits for active renewal to finish; if credentials cannot be saved within 25 seconds, quit is cancelled and the write retries continue. A stable sidecar OS file lock proves a live Notchlimits owner. An immutable extended-attribute marker is set on a private empty directory before publishing the native lock path atomically without replacement. A crash during preparation cannot leave an unmarked native lock; the marker needs no heartbeat rewrites and keeps native rmdir recovery compatible. Previous JSON owner records remain readable. Recovery reads the marker through a pinned directory descriptor and checks that the native path still names that inode before removal. Unmarked CLI locks and replacement owners are preserved. Explicit account removal takes both OAuth locks and the storage lock before deleting credentials. A native writer makes removal fail with a retryable busy message; a renewal lease already held by Notchlimits can be borrowed for the synchronous deletion. If the CLI directory cannot be identified, removal fails instead of deleting outside the lock protocol. Successful explicit account removal discards its pending credentials and invalidates late refresh responses; failed deletion retains the grant and its save retries. A replacement login waits for the removed generation to finish, then resolves its own credentials; concurrent callers share only that generation's result. OAuth and storage lock acquisition cannot recreate a removed extra profile; only the main config directory may be bootstrapped. Usage results belong to the column generation that started the request, so a late reply cannot overwrite a replacement account's column, cache, history or schedule. Keychain operations inside the critical section cannot request user interaction. Network errors and regional/proxy 403 responses preserve the login. This coordinates cooperating clients through the CLI's lease protocol; it does not provide an atomic Keychain compare-and-swap against arbitrary external writers or a process suspended beyond the leases.
 
 ## Column names
 
@@ -119,12 +127,7 @@ Below the windows, whatever extra numbers the endpoint returns are listed: credi
 
 ## Switching the active account
 
-Beyond monitoring several accounts as columns, the panel can switch which account the plain `codex` / `claude` command uses — like [codex-account-switcher](https://github.com/liuzhao1225/codex-account-switcher), for both providers, from the notch. Right-click → **Active Codex account →** / **Active Claude account →**:
-
-- **Save current** snapshots the active account into a local library.
-- Picking a saved account (checkmark marks the active one) confirms, then makes it active. The current account is always saved first, so nothing is lost.
-
-**Codex** swaps `~/.codex/auth.json` (file-based, reversible). **Claude** copies between Keychain entries (keychain→keychain, no tokens on disk) and updates the email in `~/.claude.json`; switching there prompts for Keychain access once. Heads-up: the active Claude credential is read by any running Claude Code session, so don't switch the account you're using in a live session — if any `claude` process is running, the confirmation flags the count and defaults to Cancel.
+Right-click → **Claude account** or **Codex account** to choose a Desktop account. Claude Desktop keeps a separate Electron data directory per account. **Switch CLI** controls whether the same action selects an existing Claude Code profile, as described above. Codex swaps only credentials in the base home’s configured backend, preserving its projects and threads. Its Desktop and CLI selection remains independent of the Claude **Switch CLI** setting.
 
 ## Multiple accounts
 
@@ -141,7 +144,7 @@ Binaries are found not via `PATH` (nearly empty for a GUI app) but at known inst
 
 ## Data sources
 
-**Claude Code.** Token read from Keychain (generic password, service `Claude Code-credentials`; extra profiles as `Claude Code-credentials-<hash>` where the hash is the sha256 of `CLAUDE_CONFIG_DIR`).
+**Claude Code.** Credentials are read from Keychain (generic password, service `Claude Code-credentials`; extra profiles as `Claude Code-credentials-<hash>` where the hash is the sha256 of `CLAUDE_CONFIG_DIR`), with the native macOS `.credentials.json` fallback under the CLI config directory. File-backed profiles participate in discovery, renewal, Desktop/CLI selection and explicit removal. Renewal stays on the backend that supplied the grant, preserves unknown fields and keeps file permissions at 0600. Removing the primary account deletes both credential stores while preserving its other CLI configuration.
 
 ```
 GET https://api.anthropic.com/api/oauth/usage
@@ -152,11 +155,11 @@ User-Agent: claude-code/<CLI version from the install path>
 
 The native `User-Agent` matters — without it the endpoint returns 429 far more often. Any field-object with a numeric `utilization` counts as a window, so new windows appear on their own, including internal model code-names. Windows that are inert — `0 %` **and** no reset date, like the `nimbus_quill` placeholder the endpoint returns in reserve — are hidden until they come alive, so they don't clutter the column with a row you can't act on. Titles: `five_hour`/`seven_day` get friendly labels, known prefixes expand (`seven_day_opus` → "Weekly window · Opus", shown to Max/Opus accounts), the rest are shown as words rather than raw snake_case. `extra_usage` (pay-as-you-go beyond the plan) is not a window — it's spend, not a share of a quota — so it goes to the stats line, but **only while `is_enabled` is true**: `used_credits` is then a live spend meter (shown as money, since the amount is minor units — `10308` at `decimal_places: 2` is `$103.08`, plus the `monthly_limit` cap when set). When extra usage is off (`out_of_credits`), the same number is just historical depleted credits and would read as an active charge, so it's hidden.
 
-The subtitle is `plan · email`, matching Codex. The plan (`Pro`, `Max`) comes from the Keychain entry; the email isn't in either endpoint, so it's read straight from the CLI's config file — `~/.claude.json` (or `<CLAUDE_CONFIG_DIR>/.claude.json` for extra profiles), field `oauthAccount.emailAddress`. That's a plain file read, no Keychain and no subprocess, so it never triggers a password prompt.
+The subtitle is `plan · email`, matching Codex. The plan (`Pro`, `Max`) comes from the credential record; the email isn't in either endpoint, so it's read straight from the CLI's config file — `~/.claude.json` (or `<CLAUDE_CONFIG_DIR>/.claude.json` for extra profiles), field `oauthAccount.emailAddress`. That's a plain file read, no Keychain and no subprocess, so it never triggers a password prompt.
 
 ### Token refresh
 
-A Claude access token lives a few hours. If the CLI isn't run, it expires and the column freezes — so when the token is expired and the Keychain entry holds a live `refreshToken`, the panel renews it itself, exactly as the CLI does:
+A Claude access token lives a few hours. If the CLI isn't run, it expires and the column freezes — so when the token is expired and the credential record holds a live `refreshToken`, the panel renews it itself, exactly as the CLI does:
 
 ```
 POST https://platform.claude.com/v1/oauth/token
@@ -170,19 +173,13 @@ Content-Type: application/json
 
 Three details that matter:
 
-- **The refresh token rotates.** When the response carries a new one, the old one stops working, so the result is written back to the Keychain entry — not writing it back would break the CLI's own login. The write merges into a *freshly read* entry, preserving `subscriptionType`, `rateLimitTier` and every field the panel doesn't know about.
-- **The Keychain is written only when the refresh token actually rotated.** If the server didn't issue a new refresh token, the old one is still valid and nothing is written — the new access token just lives in memory until the next refresh. This matters because every Keychain write pops a macOS authorization prompt; skipping the needless ones keeps them rare (grant it once with **Always Allow**).
+- **The refresh token rotates.** When the response carries a new one, the old one stops working, so the result is written back to the original credential backend — not writing it back would break the CLI's own login. The write merges into a *freshly read* entry, preserving `subscriptionType`, `rateLimitTier` and every field the panel doesn't know about.
+- **Renewed credentials are saved when the server returns a refresh token.** Otherwise the new access token stays in memory. A write preflight runs before the HTTP refresh; if a quiet Keychain update is not allowed, renewal is deferred before spending the refresh token.
 - **A 401 marks that exact token as rejected**, so the next cycle renews instead of re-reading the same dead token from the Keychain. If the entry meanwhile holds a different token, the CLI refreshed first and that one is used.
 
-Renewal happens only on expiry, never preemptively. Automatic Claude renewal
-requires Claude Code 2.1.278 or newer: Keychain writes share its per-profile
-`.storage-write.lock` protocol, including a heartbeat during macOS authorization
-dialogs. A busy or lost lock defers the write. Older or unidentified CLI versions
-retain usage polling with valid tokens and require CLI login after expiry.
-Extra profiles have independent locks, so a busy main profile does not block
-renewal of another profile.
+Renewal happens on expiry or after a usage 401. Automatic Claude renewal requires Claude Code 2.1.278 or newer and the native OAuth and storage locks described above. Profiles have independent locks. Older or unidentified CLI versions retain usage polling with valid tokens and require CLI login after expiry.
 
-**Codex.** Auth from `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`); `apikey` mode can't reach the usage endpoint — ChatGPT login is required. Token lifetime from the JWT `exp` claim, email for the column subtitle from `id_token`.
+**Codex.** The root `cli_auth_credentials_store` setting selects `file`, `keyring` or `auto` for each `CODEX_HOME`. The default is `file`. On macOS, direct Keychain storage uses the native `Codex Auth` service and `cli|` plus the first 16 SHA-256 hex characters of the canonical home path. `auto` reads Keychain first and falls back to `auth.json` when absent or unreadable. Renewal writes back to the backend that supplied the grant; a denied Keychain update keeps rotated credentials pending and never issues another refresh POST. A renewal reserves its profile from the initial read until persistence succeeds or the response is discarded. Desktop/CLI switching reports a retryable busy error while either affected profile has an in-flight refresh or unsaved rotation. Successful removal retires the reservation, so a late response cannot overwrite pending credentials of a re-added profile; denied removal preserves them. Discovery checks metadata without reading Keychain secrets. Configuration uses a full TOML decoder, including multiline strings, quoted/dotted keys and inline tables. System config, legacy managed config, local requirements and forced macOS preferences are respected; per-invocation CLI overrides are outside this process. The opt-in encrypted secrets backend is rejected rather than confused with direct Keychain storage. `ephemeral` is process-local: Notchlimits cannot read another process’s memory, ignores leftover persistent credentials and refuses persistent switching in this mode. No extra Notchlimits login is introduced. Auth from the selected backend; `apikey` mode can't reach the usage endpoint — ChatGPT login is required. Token lifetime from the JWT `exp` claim, email for the column subtitle from `id_token`.
 
 ```
 GET https://chatgpt.com/backend-api/wham/usage
@@ -197,21 +194,21 @@ User-Agent: codex_cli_rs/<version>
 
 - Each account polls independently every 3 minutes, staggered 4 s apart — not in a burst.
 - Expanding the panel refreshes only columns older than two minutes.
-- 10 s request timeout, one retry on 5xx and network errors.
+- 10 s request timeout; usage requests retry once on 5xx and network errors. Refresh POSTs do not retry automatically.
 - **HTTP 429 isn't an error.** Backoff comes from `Retry-After`, else grows 2 → 4 → 8 → 15 min; last data stays with an age note.
 - Last successful values are cached in `UserDefaults` and shown right after a restart.
 - A threshold notification fires once per window and re-arms when `resets_at` changes (a new window began). When a window that reached ≥ 50 % rolls over, a "limit reset" notification fires — you were throttled, now you're free.
 
 ## Permissions
 
-- **Keychain.** On the first Claude refresh macOS asks for access to `Claude Code-credentials` — click **Always Allow**. The token is cached in memory until `expiresAt` or a 401, so Keychain isn't hit each cycle.
+- **Keychain.** On the first Claude refresh macOS asks for access to `Claude Code-credentials` — click **Always Allow**. The Keychain is reread each cycle to detect a new CLI login; valid tokens avoid unnecessary refresh requests. Writes inside renewal never display a dialog.
 - **Signing.** Release builds use the pinned Apple Development certificate for `a.a.ustinoff@gmail.com`. `build.sh` selects that identity, including for Sparkle helpers. Local builds without it use ad-hoc signing. Moving from ad-hoc or another identity may require a fresh Keychain grant; subsequent releases keep the same certificate requirement.
 - **Notifications.** Requested on first launch.
 - **No Accessibility needed** — the hotkey uses Carbon `RegisterEventHotKey`, and login runs via a `.command` file, not AppleScript.
 
 ## Privacy
 
-The app makes no automatic request beyond the usage endpoints and token renewal described above. Update checks are manual: Sparkle fetches the signed `appcast.xml` from GitHub on click, and downloads the update archive only after you choose **Install Update**. Automatic checks and system profiling are disabled by default. Archive signatures are verified before extraction. Tokens are never logged and never written to a plain file; the only thing written back is the refreshed Claude token, into the same Keychain entry the CLI already owns. The `claude` binary is never run (running it makes the CLI read its credentials via `/usr/bin/security`, popping a Keychain prompt) — its version for the User-Agent comes from the install path, and the account email from the CLI's `~/.claude.json`. Only `codex --version` is executed, and Codex keeps its auth in a file, not the Keychain. Only settings and last percentages (with reset times) go to `UserDefaults`, without a single token. Usage requests use an ephemeral `URLSession`, with no cookies or disk cache.
+The app makes no automatic request beyond the usage endpoints and token renewal described above. Update checks are manual: Sparkle fetches the signed `appcast.xml` from GitHub on click, and downloads the update archive only after you choose **Install Update**. Automatic checks and system profiling are disabled by default. Archive signatures are verified before extraction. Tokens are never logged. Refreshed Claude tokens are written into the same Keychain entry or native fallback file the CLI already owns; Codex writes follow its configured storage mode. The `claude` binary is never run (running it makes the CLI read its credentials via `/usr/bin/security`, popping a Keychain prompt) — its version for the User-Agent comes from the install path, and the account email from the CLI's `~/.claude.json`. Only `codex --version` is executed automatically. Codex credentials remain in the configured file or direct Keychain backend; file credentials keep mode 0600. Switching can transfer credentials between the explicitly configured source and destination backends. Primary-account backups retain their original backend. Only settings and last percentages (with reset times) go to `UserDefaults`, without a single token. Usage requests use an ephemeral `URLSession`, with no cookies or disk cache.
 
 ## CI & releases
 
@@ -264,7 +261,7 @@ Sources/Notchlimits/
   Notch/      notch geometry, NSPanel, hover logic and animations
   UI/         SwiftUI panel layout
   Model/      column and limit-window types
-  Providers/  Claude (Keychain + api.anthropic.com), Codex (auth.json + chatgpt.com)
+  Providers/  Claude (Keychain + api.anthropic.com), Codex (file/Keychain + chatgpt.com)
   Core/       poll scheduler, cache, history + burn-rate, notifications, hotkeys, account setup
 Tools/
   make-strings.py   translations for every language

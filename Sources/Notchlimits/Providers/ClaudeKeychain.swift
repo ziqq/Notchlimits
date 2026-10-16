@@ -10,8 +10,10 @@ import Security
 enum ClaudeKeychain {
 
     static let baseService = "Claude Code-credentials"
+    enum Backend { case keychain, file }
 
     struct Credentials {
+        var backend: Backend = .keychain
         let accessToken: String
         let expiresAt: Date?
         /// План подписки из записи Keychain («pro», «max»…). Почты Anthropic
@@ -32,7 +34,7 @@ enum ClaudeKeychain {
         }
 
         func hasSameTokens(as other: Credentials) -> Bool {
-            accessToken == other.accessToken && refreshToken == other.refreshToken
+            backend == other.backend && accessToken == other.accessToken && refreshToken == other.refreshToken
         }
     }
 
@@ -49,6 +51,18 @@ enum ClaudeKeychain {
     /// Имена всех generic password с нашим префиксом.
     static func services() -> [String] { items().map(\.service) }
 
+    /// Check existence without reading the secret or requesting authorization.
+    static func contains(service: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecReturnAttributes as String: true
+        ]
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+            || credentialFile(service: service).map { FileManager.default.fileExists(atPath: $0.path) } == true
+    }
+
     /// Записи с датой последнего изменения. Только атрибуты — секрет не
     /// читается, диалога пароля не будет.
     static func items() -> [(service: String, modified: Date?)] {
@@ -58,14 +72,25 @@ enum ClaudeKeychain {
             kSecReturnAttributes as String: true
         ]
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let items = result as? [[String: Any]] else { return [] }
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let items = status == errSecSuccess ? (result as? [[String: Any]] ?? []) : []
 
         var found: [String: Date?] = [:]
         for item in items {
             guard let service = item[kSecAttrService as String] as? String,
                   service == baseService || service.hasPrefix(baseService + "-") else { continue }
             found[service] = item[kSecAttrModificationDate as String] as? Date
+        }
+        // Native macOS login falls back to this file when Keychain rejects a write.
+        // Discovery inspects metadata only, just like Keychain enumeration.
+        let directories = [ProfileDirectories.home.appendingPathComponent(".claude")] + ProfileDirectories.claudeProfiles()
+        for directory in directories {
+            let file = directory.appendingPathComponent(".credentials.json")
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path) else { continue }
+            let service = directory == directories[0] ? baseService
+                : found.keys.first(where: { configDirectory(for: $0) == directory })
+                    ?? baseService + "-" + String(sha256Hex(directory.path).prefix(8))
+            if found[service] == nil { found[service] = attributes[.modificationDate] as? Date }
         }
         return found
             .map { (service: $0.key, modified: $0.value) }
@@ -111,9 +136,11 @@ enum ClaudeKeychain {
     }
 
     /// Чтение секрета. Блокирующий вызов — только вне главного потока.
-    static func credentials(service: String) -> Credentials? {
-        guard let json = rawItem(service: service) else { return nil }
-        return parse(json)
+    static func credentials(service: String, interactive: Bool = true) -> Credentials? {
+        let item = readItem(service: service, interactive: interactive)
+        guard let json = item.json, var credentials = parse(json) else { return nil }
+        credentials.backend = item.backend
+        return credentials
     }
 
     /// Код ответа Keychain на чтение секрета — для диагностики (NOTCHLIMITS_PROBE).
@@ -125,12 +152,18 @@ enum ClaudeKeychain {
             kSecReturnData as String: true
         ]
         var result: CFTypeRef?
-        return SecItemCopyMatching(query as CFDictionary, &result)
+        return access { SecItemCopyMatching(query as CFDictionary, &result) }
     }
 
     /// Сырой JSON записи. Нужен отдельно, чтобы при записи сохранить поля,
     /// про которые мы не знаем: их пишет CLI, и терять их нельзя.
-    private static func rawItem(service: String) -> [String: Any]? {
+    private static func rawItem(service: String, interactive: Bool = true) -> [String: Any]? {
+        readItem(service: service, interactive: interactive).json
+    }
+
+    private static func readItem(service: String, interactive: Bool,
+                                 backend: Backend? = nil) -> (json: [String: Any]?, status: OSStatus, backend: Backend) {
+        if backend == .file { return readFile(service: service) }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -138,11 +171,46 @@ enum ClaudeKeychain {
             kSecReturnData as String: true
         ]
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        return json
+        let status = access(interactive: interactive) { SecItemCopyMatching(query as CFDictionary, &result) }
+        let json = (result as? Data).flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
+        if backend == nil, status != errSecSuccess || json == nil {
+            let file = readFile(service: service)
+            if file.json != nil { return file }
+        }
+        return (status == errSecSuccess ? json : nil, status, .keychain)
+    }
+
+    static func credentialFile(service: String) -> URL? {
+        storageDirectory(service: service)?.appendingPathComponent(".credentials.json")
+    }
+
+    private static func readFile(service: String) -> (json: [String: Any]?, status: OSStatus, backend: Backend) {
+        guard let file = credentialFile(service: service), FileManager.default.fileExists(atPath: file.path) else {
+            return (nil, errSecItemNotFound, .file)
+        }
+        guard let data = try? Data(contentsOf: file),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return (nil, errSecAuthFailed, .file)
+        }
+        return (json, errSecSuccess, .file)
+    }
+
+    private static let interactionLock = NSLock()
+
+    /// Claude uses classic login Keychain items. LAContext's interaction flag
+    /// does not govern their legacy ACL dialogs. Serialize the process-wide
+    /// legacy interaction setting with all secret reads and restore it afterward.
+    static func access(interactive: Bool = true, _ operation: () -> OSStatus) -> OSStatus {
+        interactionLock.lock()
+        defer { interactionLock.unlock() }
+        guard !interactive else { return operation() }
+        var allowed: DarwinBoolean = false
+        guard SecKeychainGetUserInteractionAllowed(&allowed) == errSecSuccess,
+              SecKeychainSetUserInteractionAllowed(false) == errSecSuccess else {
+            return errSecInteractionNotAllowed
+        }
+        defer { _ = SecKeychainSetUserInteractionAllowed(allowed.boolValue) }
+        return operation()
     }
 
     /// Разбор записи. Вынесен отдельно — так его покрывает самопроверка,
@@ -175,11 +243,14 @@ enum ClaudeKeychain {
     /// unknown fields. This blocking operation must run off the main thread.
     @discardableResult
     static func save(service: String, tokens: ClaudeOAuth.Tokens,
-                     expected: Credentials) -> SaveResult {
-        guard let storageLock = storageLock(service: service) else { return .failed }
+                     expected: Credentials, renewalLock: ClaudeRefreshLock? = nil) -> SaveResult {
+        guard let storageLock = storageLock(service: service, createParent: renewalLock == nil) else { return .failed }
         defer { storageLock.release() }
-        guard var json = rawItem(service: service) else { return .failed }
-        guard let current = parse(json), current.hasSameTokens(as: expected),
+        let item = readItem(service: service, interactive: renewalLock == nil, backend: expected.backend)
+        guard var json = item.json else { return item.status == errSecItemNotFound ? .changed : .failed }
+        guard var current = parse(json) else { return .changed }
+        current.backend = item.backend
+        guard current.hasSameTokens(as: expected),
               var oauth = json["claudeAiOauth"] as? [String: Any] else { return .changed }
 
         oauth["accessToken"] = tokens.accessToken
@@ -195,45 +266,75 @@ enum ClaudeKeychain {
         json["claudeAiOauth"] = oauth
         guard let data = try? JSONSerialization.data(withJSONObject: json) else { return .failed }
 
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service
-        ]
-        guard storageLock.isHeld else { return .failed }
-        return SecItemUpdate(query as CFDictionary,
-                             [kSecValueData as String: data] as CFDictionary) == errSecSuccess
-            ? .saved : .failed
+        return write(data, service: service, backend: item.backend, storageLock: storageLock,
+                     renewalLock: renewalLock) ? .saved : .failed
     }
 
     /// Можно ли писать в запись: перезаписываем её же содержимым. Проверяем
     /// ДО продления — сервер отзывает прежний refresh-токен, и если новый
     /// потом не записать, в Keychain останется мёртвый, а CLI, наткнувшись
     /// на него, обнулит вход. Блокирующий вызов — только вне главного потока.
-    static func canWrite(service: String) -> Bool {
-        guard let storageLock = storageLock(service: service) else { return false }
+    static func canWrite(service: String, renewalLock: ClaudeRefreshLock? = nil) -> Bool {
+        guard let storageLock = storageLock(service: service, createParent: renewalLock == nil) else { return false }
         defer { storageLock.release() }
-        guard let data = rawData(service: service) else { return false }
+        let item = readItem(service: service, interactive: renewalLock == nil)
+        guard let json = item.json,
+              let data = try? JSONSerialization.data(withJSONObject: json) else { return false }
+        return write(data, service: service, backend: item.backend, storageLock: storageLock, renewalLock: renewalLock)
+    }
+
+    private static func write(_ data: Data, service: String, backend: Backend,
+                              storageLock: ClaudeStorageLock, renewalLock: ClaudeRefreshLock?) -> Bool {
+        if backend == .file {
+            guard storageLock.isHeld, renewalLock?.isHeld != false,
+                  let file = credentialFile(service: service) else { return false }
+            do {
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+                try data.write(to: file, options: .atomic)
+                return true
+            } catch { return false }
+        }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service
         ]
-        guard storageLock.isHeld else { return false }
-        return SecItemUpdate(query as CFDictionary,
-                             [kSecValueData as String: data] as CFDictionary) == errSecSuccess
+        return access(interactive: false) {
+            guard storageLock.isHeld, renewalLock?.isHeld != false else { return errSecInteractionNotAllowed }
+            return SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        } == errSecSuccess
     }
 
-    private static func storageLock(service: String) -> ClaudeStorageLock? {
-        guard supportsStorageLock else { return nil }
-        let directory: URL
-        if service == baseService {
-            directory = ProfileDirectories.home.appendingPathComponent(".claude")
-        } else if let profile = configDirectory(for: service) {
-            directory = profile
-        } else {
-            // The CLI's secureStorage directory for this record is unknown.
-            return nil
+    static func refreshLock(service: String) -> ClaudeRefreshLock? {
+        guard supportsStorageLock, let directory = storageDirectory(service: service) else { return nil }
+        return try? ClaudeRefreshLock(directory: directory, createParent: service == baseService)
+    }
+
+    static func withRemovalLock(service: String, configDir: URL?, operation: () throws -> Void) throws {
+        // Never delete outside the native protocol when the directory is unknown.
+        guard let directory = configDir ?? storageDirectory(service: service) else {
+            throw UnknownRemovalDirectory()
         }
-        return try? ClaudeStorageLock(directory: directory)
+        try ClaudeRefreshLock.withRemovalLock(directory: directory, createParent: service == baseService) { lease in
+            let storage = try ClaudeStorageLock(directory: directory, createParent: false)
+            defer { storage.release() }
+            guard lease.isHeld, storage.isHeld else { throw ClaudeStorageLock.Failure.lost }
+            try operation()
+        }
+    }
+
+    private struct UnknownRemovalDirectory: LocalizedError {
+        var errorDescription: String? { L.t("error.cliProfile") }
+    }
+
+    private static func storageLock(service: String, createParent: Bool) -> ClaudeStorageLock? {
+        guard supportsStorageLock, let directory = storageDirectory(service: service) else { return nil }
+        // Renewal already owns this directory. Do not recreate it after removal.
+        return try? ClaudeStorageLock(directory: directory, createParent: createParent && service == baseService)
+    }
+
+    private static func storageDirectory(service: String) -> URL? {
+        service == baseService ? ProfileDirectories.home.appendingPathComponent(".claude")
+                               : configDirectory(for: service)
     }
 
     /// Сырой blob записи Keychain — для копий keychain→keychain (свитчер
@@ -246,7 +347,7 @@ enum ClaudeKeychain {
             kSecReturnData as String: true
         ]
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+        guard access({ SecItemCopyMatching(query as CFDictionary, &result) }) == errSecSuccess,
               let data = result as? Data else { return nil }
         return data
     }
@@ -258,13 +359,13 @@ enum ClaudeKeychain {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service
         ]
-        let updated = SecItemUpdate(base as CFDictionary,
-                                    [kSecValueData as String: data] as CFDictionary)
+        let updated = access { SecItemUpdate(base as CFDictionary,
+                                             [kSecValueData as String: data] as CFDictionary) }
         if updated == errSecSuccess { return true }
         if updated == errSecItemNotFound {
             var add = base
             add[kSecValueData as String] = data
-            return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+            return access { SecItemAdd(add as CFDictionary, nil) } == errSecSuccess
         }
         return false
     }
@@ -282,13 +383,26 @@ enum ClaudeKeychain {
 
     /// Папка профиля, соответствующая записи (нужна для подписи и меню).
     static func configDirectory(for service: String) -> URL? {
-        guard service != baseService else { return nil }
+        profileLocation(for: service)?.directory
+    }
+
+    /// Preserve the exact config string: the CLI hashes it before resolving paths.
+    static func configPath(for service: String) -> String? {
+        guard let path = profileLocation(for: service)?.path,
+              service == baseService + "-" + String(sha256Hex(path).prefix(8)) else { return nil }
+        return path
+    }
+
+    private static func profileLocation(for service: String) -> (directory: URL, path: String)? {
+        guard service.hasPrefix(baseService + "-") else { return nil }
         let suffix = String(service.dropFirst(baseService.count + 1))
         guard !suffix.isEmpty else { return nil }
         for directory in ProfileDirectories.claudeProfiles() {
             for variant in pathVariants(directory) {
                 let hex = sha256Hex(variant)
-                if hex.hasPrefix(suffix) || suffix.hasPrefix(hex) { return directory }
+                if hex.hasPrefix(suffix) || suffix.hasPrefix(hex) {
+                    return (directory, variant.precomposedStringWithCanonicalMapping)
+                }
             }
         }
         return nil
@@ -302,7 +416,7 @@ enum ClaudeKeychain {
     }
 
     private static func sha256Hex(_ string: String) -> String {
-        SHA256.hash(data: Data(string.utf8)).map { String(format: "%02x", $0) }.joined()
+        SHA256.hash(data: Data(string.precomposedStringWithCanonicalMapping.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
 
@@ -316,7 +430,13 @@ enum ProfileDirectories {
     static var claudeRoot: URL { home.appendingPathComponent(".claude-profiles") }
     static var codexRoot: URL { home.appendingPathComponent(".codex-profiles") }
 
-    static func claudeProfiles() -> [URL] { subdirectories(of: claudeRoot) }
+    static func claudeProfiles() -> [URL] {
+        // Foundation enumeration can reject a symlink as its root. Enumerate
+        // the physical directory but retain the original CLI config spelling.
+        subdirectories(of: claudeRoot.resolvingSymlinksInPath()).map {
+            claudeRoot.appendingPathComponent($0.lastPathComponent, isDirectory: true)
+        }
+    }
     static func codexProfiles() -> [URL] { subdirectories(of: codexRoot) }
 
     static func subdirectories(of root: URL) -> [URL] {

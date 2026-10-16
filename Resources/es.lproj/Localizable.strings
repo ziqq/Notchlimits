@@ -68,6 +68,8 @@
 "menu.hotKey.standard" = "Predeterminado (⌘P)";
 "menu.hotKey.disable" = "Desactivar";
 "menu.loginItem" = "Abrir al iniciar sesión";
+"menu.switchCLI" = "Cambiar CLI";
+"menu.switchCLI.help" = "Cambiar también Claude Code. Abre una nueva terminal tras el primer cambio. Las sesiones CLI abiertas conservan su cuenta.";
 "menu.about" = "Acerca de Notchlimits";
 "menu.quit" = "Salir de Notchlimits";
 "menu.telemetry" = "Mostrar telemetría";
@@ -78,6 +80,7 @@
 "remove.body" = "Las credenciales de la cuenta se eliminarán de forma permanente. Vuelve a iniciar sesión con claude o codex para recuperarla.";
 "remove.delete" = "Eliminar";
 "remove.failed.title" = "No se pudo eliminar la cuenta";
+"remove.busy" = "Esta cuenta se está actualizando. Espera a que termine y vuelve a intentarlo.";
 "remove.incomplete" = "%@ — sin iniciar sesión";
 
 // Обновления
@@ -154,12 +157,17 @@
 
 // Ошибки в колонке
 "error.network" = "error de red";
+"error.codexStorage" = "No se puede leer la configuración de almacenamiento de Codex o este tipo de almacenamiento no es compatible.";
+"error.codexEphemeral" = "Codex conserva esta sesión solo en su proceso. Elige file, keyring o auto en Codex para usar cuentas persistentes.";
 "error.keychainWrite" = "sin escritura en el llavero";
+"error.pendingCredentials" = "Las credenciales aún se están guardando. Desbloquea el llavero e intenta salir de nuevo.";
 "error.timeout" = "tiempo agotado";
 "error.noHTTP" = "sin respuesta HTTP";
 "error.http" = "HTTP %d";
 "error.parse" = "respuesta ilegible";
 "error.unknownSource" = "origen desconocido";
+"error.cliProfile" = "No se pudo identificar la carpeta del perfil CLI.";
+"error.cliShell" = "El cambio de CLI admite zsh y bash. Abre una nueva terminal tras el primer cambio.";
 "error.noProvider" = "sin proveedor";
 "error.unreachable" = "red no disponible";
 
@@ -172,4 +180,5 @@
 "appswitch.error.title" = "No se pudo cambiar la cuenta";
 "appswitch.error.notInstalled" = "%@ no está instalado.";
 "appswitch.error.didNotQuit" = "%@ no se cerró: ciérralo e inténtalo de nuevo.";
-"appswitch.error.noAuth" = "Esta cuenta no tiene sesión de Codex (auth.json). Vuelve a iniciar sesión.";
+"appswitch.error.noAuth" = "Esta cuenta no tiene sesión de Codex. Vuelve a iniciar sesión.";
+"appswitch.error.inProgress" = "Ya hay un cambio de cuenta en curso.";

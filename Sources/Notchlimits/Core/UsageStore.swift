@@ -39,6 +39,7 @@ final class UsageStore: ObservableObject {
     }
 
     private struct Runtime {
+        let generation = UUID()
         var nextDue: Date
         var backoffStep: Int = 0
         var inFlight: Bool = false
@@ -47,6 +48,7 @@ final class UsageStore: ObservableObject {
     init(providers: [Provider: UsageProvider], discovery: AccountDiscovery) {
         self.providers = providers
         self.discovery = discovery
+        DefaultsMigration.migrateCodexProfileSettingsIfNeeded()
         hidden = Set(UserDefaults.standard.stringArray(forKey: "hiddenColumns") ?? [])
         customNames = UserDefaults.standard.dictionary(forKey: "columnNames") as? [String: String] ?? [:]
     }
@@ -116,7 +118,7 @@ final class UsageStore: ObservableObject {
             guard var state = runtime[account.id], !state.inFlight, state.nextDue <= now else { continue }
             state.inFlight = true
             runtime[account.id] = state
-            Task { await self.fetch(account) }
+            Task { await self.fetch(account, generation: state.generation) }
         }
     }
 
@@ -186,6 +188,10 @@ final class UsageStore: ObservableObject {
     func removeAccount(id: String) throws {
         guard let account = accounts.first(where: { $0.id == id }) else { return }
         try AccountRemoval.remove(account)
+        if let claude = providers[.claude] as? ClaudeProvider,
+           case .claudeKeychain = account.source {
+            Task { await claude.accountRemoved(account) }
+        }
 
         cache.remove(id: id)
         history.purge(columnID: id)
@@ -204,17 +210,18 @@ final class UsageStore: ObservableObject {
 
     // MARK: - Опрос
 
-    private func fetch(_ account: DiscoveredAccount) async {
+    private func fetch(_ account: DiscoveredAccount, generation: UUID) async {
+        guard runtime[account.id]?.generation == generation else { return }
         guard let provider = providers[account.provider] else {
-            finish(account.id, outcome: .failure(L.t("error.noProvider")))
+            finish(account.id, generation: generation, outcome: .failure(L.t("error.noProvider")))
             return
         }
         let outcome = await provider.fetch(account)
-        finish(account.id, outcome: outcome)
+        finish(account.id, generation: generation, outcome: outcome)
     }
 
-    private func finish(_ id: String, outcome: FetchOutcome) {
-        guard var state = runtime[id] else { return }
+    private func finish(_ id: String, generation: UUID, outcome: FetchOutcome) {
+        guard var state = runtime[id], state.generation == generation else { return }
         state.inFlight = false
         guard let index = columns.firstIndex(where: { $0.id == id }) else {
             runtime[id] = state
