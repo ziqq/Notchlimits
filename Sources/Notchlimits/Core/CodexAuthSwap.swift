@@ -7,9 +7,11 @@ import Foundation
 enum CodexAuthSwap {
 
     enum Failure: LocalizedError {
-        case missingAuth
+        case missingAuth, busy
 
-        var errorDescription: String? { L.t("appswitch.error.noAuth") }
+        var errorDescription: String? {
+            L.t(self == .busy ? "appswitch.error.inProgress" : "appswitch.error.noAuth")
+        }
     }
 
     static let defaultColumnID = "codex:default"
@@ -28,6 +30,16 @@ enum CodexAuthSwap {
     /// Перестановка входов и запись продлённых токенов не должны пересечься:
     /// иначе в `~/.codex` уедет уже потраченный refresh-токен.
     private static let lock = NSLock()
+    struct Renewal {
+        let id = UUID()
+        let columnID: String
+        let key: String
+        let generation: UUID?
+        let storage: CodexAuthStorage
+        let record: CodexAuthStorage.Record
+    }
+    private static var generations: [String: UUID] = [:]
+    private static var renewals: [String: Renewal] = [:]
 
     /// Базовый CODEX_HOME: его берут голая `codex` и приложение.
     static var baseHome: URL {
@@ -64,8 +76,10 @@ enum CodexAuthSwap {
     }
 
     static func isBaseHome(_ url: URL) -> Bool {
-        url.standardizedFileURL.path == baseHome.standardizedFileURL.path
+        homeKey(url) == homeKey(baseHome)
     }
+
+    private static func homeKey(_ home: URL) -> String { home.resolvingSymlinksInPath().path }
 
     /// Положить в `~/.codex` вход колонки. Приложение должно быть закрыто.
     static func activate(columnID: String, home: URL) throws {
@@ -74,6 +88,10 @@ enum CodexAuthSwap {
         let base = try storage(at: baseHome)
         guard base.mode != .ephemeral else { throw CodexAuthStorage.Failure.ephemeral }
         guard columnID != activeColumnID else { return }
+        guard renewals[homeKey(home)] == nil,
+              !renewals.values.contains(where: { $0.columnID == columnID || $0.columnID == activeColumnID }) else {
+            throw Failure.busy
+        }
         let incoming = columnID == defaultColumnID ? stashHome : home
         let payload = try storage(at: incoming).load()?.data
         guard columnID == defaultColumnID || payload != nil else { throw Failure.missingAuth }
@@ -97,16 +115,47 @@ enum CodexAuthSwap {
         try activate(columnID: defaultColumnID, home: baseHome)
     }
 
-    /// Записать продлённые токены туда, где вход колонки лежит сейчас.
-    /// Пишем, только если в файле всё ещё тот refresh-токен, которым мы
-    /// продлевали: иначе его уже обновил кто-то другой, и наш ответ устарел.
+    /// Reserve the source before any refresh POST. Switching cannot publish its
+    /// old grant until persistence finishes; successful removal retires the owner.
+    static func beginRenewal(columnID: String, home: URL) throws -> Renewal? {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = homeKey(home)
+        guard renewals[key] == nil else { throw Failure.busy }
+        let live = liveHome(columnID: columnID, home: home)
+        guard !isBaseHome(live) else { return nil }
+        let source = try storage(at: live)
+        guard let record = try source.load() else { return nil }
+        let renewal = Renewal(columnID: columnID, key: key, generation: generations[key],
+                              storage: source, record: record)
+        renewals[key] = renewal
+        return renewal
+    }
+
+    static func isCurrent(_ renewal: Renewal) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return renewals[renewal.key]?.id == renewal.id
+    }
+
+    static func finishRenewal(_ renewal: Renewal) {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = renewal.key
+        if renewals[key]?.id == renewal.id { renewals[key] = nil }
+    }
+
+    /// Retry only the backend that supplied the submitted refresh grant. In auto
+    /// mode a temporary Keychain error must not turn a file fallback into a re-login.
     @discardableResult
-    static func storeRenewed(columnID: String, home: URL, usedRefreshToken: String,
+    static func storeRenewed(_ renewal: Renewal, usedRefreshToken: String,
                              tokens: CodexOAuth.Tokens) throws -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        let destination = try storage(at: liveHome(columnID: columnID, home: home))
-        guard let record = try destination.load() else { return false }
+        let key = renewal.key
+        guard generations[key] == renewal.generation, renewals[key]?.id == renewal.id else { return false }
+        let destination = renewal.storage
+        guard let record = try destination.load(backend: renewal.record.backend) else { return false }
         guard let updated = renewedAuth(record.data, usedRefreshToken: usedRefreshToken,
                                        tokens: tokens, now: Date()) else { return false }
         try destination.save(updated, backend: record.backend)
@@ -171,7 +220,10 @@ enum CodexAuthSwap {
     static func removeAuth(home: URL) throws {
         lock.lock()
         defer { lock.unlock() }
+        let key = homeKey(home)
         try storage(at: home).delete()
+        generations[key] = UUID()
+        renewals[key] = nil
     }
 
     private static func storage(at home: URL) throws -> CodexAuthStorage {

@@ -487,3 +487,66 @@ class AuthenticationRegressions(unittest.TestCase):
 
     def test_codex_store_encrypted(self):
         self.check_scenario("codex-store-encrypted")
+
+    def test_codex_auto_source_loss(self):
+        self.check_scenario("codex-auto-source-loss")
+
+    def test_codex_readd_pending_loss(self):
+        self.check_scenario("codex-readd-pending-loss")
+
+    def test_codex_switch_inflight(self):
+        self.check_scenario("codex-switch-inflight")
+
+    def test_claude_file_discovery(self):
+        self.check_scenario("claude-file-discovery")
+
+    def test_claude_file_removal(self):
+        self.check_scenario("claude-file-removal")
+
+    def test_codex_toml_mode(self):
+        self.check_scenario("codex-toml-mode")
+
+    def test_codex_toml_backend(self):
+        self.check_scenario("codex-toml-backend")
+
+    def test_codex_auto_source_no_fallback(self):
+        self.check_scenario("codex-auto-source-no-fallback")
+
+    def test_codex_auto_file_source(self):
+        self.check_scenario("codex-auto-file-source")
+
+    def test_codex_switch_inflight_file(self):
+        self.check_scenario("codex-switch-inflight-file")
+
+    def test_codex_switch_pending(self):
+        self.check_scenario("codex-switch-pending")
+
+    def test_codex_remove_denied_pending(self):
+        self.check_scenario("codex-remove-denied-pending")
+
+    def test_claude_file_lifecycle_main(self):
+        self.check_scenario("claude-file-lifecycle-main")
+
+    def test_claude_file_lifecycle_profile(self):
+        self.check_scenario("claude-file-lifecycle-profile")
+
+    def test_claude_file_lifecycle_off(self):
+        self.check_scenario("claude-file-lifecycle-off")
+
+    def test_claude_file_save_recovery(self):
+        self.check_scenario("claude-file-save-recovery")
+
+    def test_claude_file_lock_busy(self):
+        self.check_scenario("claude-file-lock-busy")
+
+    def test_claude_file_relogin(self):
+        self.check_scenario("claude-file-relogin")
+
+    def test_codex_toml_forms(self):
+        self.check_scenario("codex-toml-forms")
+
+    def test_codex_switch_inflight_alias(self):
+        self.check_scenario("codex-switch-inflight-alias")
+
+    def test_codex_renewal_base_alias(self):
+        self.check_scenario("codex-renewal-base-alias")
