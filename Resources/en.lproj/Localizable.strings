@@ -80,6 +80,7 @@
 "remove.body" = "The account's credentials will be deleted permanently. Sign in again with claude or codex to bring it back.";
 "remove.delete" = "Delete";
 "remove.failed.title" = "Couldn't remove the account";
+"remove.busy" = "This account is being updated. Wait for it to finish, then try again.";
 "remove.incomplete" = "%@ — not signed in";
 
 // Обновления

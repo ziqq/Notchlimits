@@ -170,10 +170,10 @@ final class ClaudeStorageLock: @unchecked Sendable {
         }
     }
 
-    private static func hasOwnerMarker(_ path: String) -> Bool {
+    private static func hasOwnerMarker(_ directory: Int32) -> Bool {
         var bytes = [UInt8](repeating: 0, count: 64)
         let count = bytes.withUnsafeMutableBytes {
-            getxattr(path, ownerAttribute, $0.baseAddress, $0.count, 0, XATTR_NOFOLLOW)
+            fgetxattr(directory, ownerAttribute, $0.baseAddress, $0.count, 0, 0)
         }
         guard count > 0, let value = String(bytes: bytes.prefix(count), encoding: .utf8) else { return false }
         return UUID(uuidString: value) != nil
@@ -190,9 +190,15 @@ final class ClaudeStorageLock: @unchecked Sendable {
         // Extended attributes keep the native lock directory empty for rmdir.
         // The marker is set atomically before publishing the directory and is
         // never rewritten by heartbeats. Also accept the previous JSON format.
-        let marked = hasOwnerMarker(path)
-        let legacy = readIdentity(ownerFD).map { Identity.at(path) == $0 } ?? false
-        guard Identity.at(path) != nil, marked || legacy else { return false }
+        let directory = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard directory >= 0 else { return false }
+        defer { _ = close(directory) }
+        var info = stat()
+        guard fstat(directory, &info) == 0 else { return false }
+        let identity = Identity(info)
+        let marked = hasOwnerMarker(directory)
+        let legacy = readIdentity(ownerFD) == identity
+        guard marked || legacy, Identity.at(path) == identity else { return false }
         // Only our abandoned inode can be removed. An unmarked CLI lock or a
         // replacement owner is left intact, regardless of its mtime.
         return rmdir(path) == 0
@@ -202,10 +208,19 @@ final class ClaudeStorageLock: @unchecked Sendable {
 /// Claude Code holds both locks across read, refresh and persistence. The legacy
 /// lock uses the real config path, including for symlinked profile directories.
 final class ClaudeRefreshLock: @unchecked Sendable {
+    private final class Active {
+        weak var lease: ClaudeRefreshLock?
+        init(_ lease: ClaudeRefreshLock) { self.lease = lease }
+    }
+    private static let registryLock = NSLock()
+    private static var active: [String: Active] = [:]
     private let current: ClaudeStorageLock
     private let legacy: ClaudeStorageLock
+    private let directoryKey: String
+    private let releaseLock = NSLock()
 
     init(directory: URL, createParent: Bool) throws {
+        directoryKey = directory.resolvingSymlinksInPath().path
         if createParent {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
@@ -218,6 +233,25 @@ final class ClaudeRefreshLock: @unchecked Sendable {
             current.release()
             throw error
         }
+        Self.registryLock.lock()
+        Self.active[directoryKey] = Active(self)
+        Self.registryLock.unlock()
+    }
+
+    /// Removal may borrow our renewal lease, but must never bypass a native owner.
+    /// Keep that lease from being released until the synchronous mutation ends.
+    static func withRemovalLock(directory: URL, createParent: Bool,
+                                operation: (ClaudeRefreshLock) throws -> Void) throws {
+        let key = directory.resolvingSymlinksInPath().path
+        registryLock.lock()
+        let existing = active[key]?.lease
+        registryLock.unlock()
+        let lease = try existing ?? ClaudeRefreshLock(directory: directory, createParent: createParent)
+        defer { if existing == nil { lease.release() } }
+        lease.releaseLock.lock()
+        defer { lease.releaseLock.unlock() }
+        guard lease.isHeld else { throw ClaudeStorageLock.Failure.lost }
+        try operation(lease)
     }
 
     var isHeld: Bool { current.isHeld && legacy.isHeld }
@@ -228,7 +262,12 @@ final class ClaudeRefreshLock: @unchecked Sendable {
     }
 
     func release() {
+        releaseLock.lock()
+        defer { releaseLock.unlock() }
         legacy.release()
         current.release()
+        Self.registryLock.lock()
+        if Self.active[directoryKey]?.lease === self { Self.active[directoryKey] = nil }
+        Self.registryLock.unlock()
     }
 }

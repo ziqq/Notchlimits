@@ -80,6 +80,7 @@
 "remove.body" = "Die Zugangsdaten des Kontos werden endgültig gelöscht. Melde dich mit claude oder codex erneut an, um es zurückzuholen.";
 "remove.delete" = "Löschen";
 "remove.failed.title" = "Konto konnte nicht entfernt werden";
+"remove.busy" = "Dieses Konto wird gerade aktualisiert. Warte, bis der Vorgang abgeschlossen ist, und versuche es erneut.";
 "remove.incomplete" = "%@ — nicht angemeldet";
 
 // Обновления

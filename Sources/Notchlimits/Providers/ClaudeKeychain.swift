@@ -262,6 +262,23 @@ enum ClaudeKeychain {
         return try? ClaudeRefreshLock(directory: directory, createParent: service == baseService)
     }
 
+    static func withRemovalLock(service: String, configDir: URL?, operation: () throws -> Void) throws {
+        // Never delete outside the native protocol when the directory is unknown.
+        guard let directory = configDir ?? storageDirectory(service: service) else {
+            throw UnknownRemovalDirectory()
+        }
+        try ClaudeRefreshLock.withRemovalLock(directory: directory, createParent: service == baseService) { lease in
+            let storage = try ClaudeStorageLock(directory: directory, createParent: false)
+            defer { storage.release() }
+            guard lease.isHeld, storage.isHeld else { throw ClaudeStorageLock.Failure.lost }
+            try operation()
+        }
+    }
+
+    private struct UnknownRemovalDirectory: LocalizedError {
+        var errorDescription: String? { L.t("error.cliProfile") }
+    }
+
     private static func storageLock(service: String, createParent: Bool) -> ClaudeStorageLock? {
         guard supportsStorageLock, let directory = storageDirectory(service: service) else { return nil }
         // Renewal already owns this directory. Do not recreate it after removal.

@@ -10,7 +10,16 @@ import Security
 /// (запись Keychain / `auth.json`), не задевая остальной конфиг CLI.
 enum AccountRemoval {
 
-    enum Failure: Error { case keychain(OSStatus) }
+    enum Failure: LocalizedError {
+        case keychain(OSStatus), busy
+
+        var errorDescription: String? {
+            switch self {
+            case .keychain(let status): return SecCopyErrorMessageString(status, nil) as String?
+            case .busy: return L.t("remove.busy")
+            }
+        }
+    }
 
     /// Доп. профиль (папку создавали мы) или основной аккаунт CLI.
     static func isExtraProfile(_ account: DiscoveredAccount) -> Bool {
@@ -28,12 +37,18 @@ enum AccountRemoval {
         let fileManager = FileManager.default
         switch account.source {
         case .claudeKeychain(let service, let configDir):
-            try deleteKeychainEntry(service: service)
-            // Папку доп. профиля сносим целиком; основной (configDir == nil)
-            // не трогаем — там живёт сам CLI пользователя.
-            if let configDir,
-               configDir.path.hasPrefix(ProfileDirectories.claudeRoot.path + "/") {
-                try? fileManager.removeItem(at: configDir)
+            do {
+                try ClaudeKeychain.withRemovalLock(service: service, configDir: configDir) {
+                    try deleteKeychainEntry(service: service)
+                    // Only managed extra profiles belong to us; preserve the main CLI config.
+                    if let configDir,
+                       configDir.path.hasPrefix(ProfileDirectories.claudeRoot.path + "/") {
+                        try? fileManager.removeItem(at: configDir)
+                    }
+                    ClaudeAppSwitcher.accountRemoved(columnID: account.id)
+                }
+            } catch is ClaudeStorageLock.Failure {
+                throw Failure.busy
             }
 
         case .codexHome(let url):
