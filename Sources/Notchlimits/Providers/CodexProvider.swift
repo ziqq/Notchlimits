@@ -91,7 +91,7 @@ struct CodexProvider: UsageProvider {
         return parseAuth(data)
     }
 
-    private static func parseAuth(_ data: Data) -> Auth? {
+    static func parseAuth(_ data: Data) -> Auth? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
 

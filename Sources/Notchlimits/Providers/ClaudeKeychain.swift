@@ -10,8 +10,10 @@ import Security
 enum ClaudeKeychain {
 
     static let baseService = "Claude Code-credentials"
+    enum Backend { case keychain, file }
 
     struct Credentials {
+        var backend: Backend = .keychain
         let accessToken: String
         let expiresAt: Date?
         /// План подписки из записи Keychain («pro», «max»…). Почты Anthropic
@@ -32,7 +34,7 @@ enum ClaudeKeychain {
         }
 
         func hasSameTokens(as other: Credentials) -> Bool {
-            accessToken == other.accessToken && refreshToken == other.refreshToken
+            backend == other.backend && accessToken == other.accessToken && refreshToken == other.refreshToken
         }
     }
 
@@ -58,6 +60,7 @@ enum ClaudeKeychain {
             kSecReturnAttributes as String: true
         ]
         return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+            || credentialFile(service: service).map { FileManager.default.fileExists(atPath: $0.path) } == true
     }
 
     /// Записи с датой последнего изменения. Только атрибуты — секрет не
@@ -69,14 +72,25 @@ enum ClaudeKeychain {
             kSecReturnAttributes as String: true
         ]
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let items = result as? [[String: Any]] else { return [] }
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let items = status == errSecSuccess ? (result as? [[String: Any]] ?? []) : []
 
         var found: [String: Date?] = [:]
         for item in items {
             guard let service = item[kSecAttrService as String] as? String,
                   service == baseService || service.hasPrefix(baseService + "-") else { continue }
             found[service] = item[kSecAttrModificationDate as String] as? Date
+        }
+        // Native macOS login falls back to this file when Keychain rejects a write.
+        // Discovery inspects metadata only, just like Keychain enumeration.
+        let directories = [ProfileDirectories.home.appendingPathComponent(".claude")] + ProfileDirectories.claudeProfiles()
+        for directory in directories {
+            let file = directory.appendingPathComponent(".credentials.json")
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path) else { continue }
+            let service = directory == directories[0] ? baseService
+                : found.keys.first(where: { configDirectory(for: $0) == directory })
+                    ?? baseService + "-" + String(sha256Hex(directory.path).prefix(8))
+            if found[service] == nil { found[service] = attributes[.modificationDate] as? Date }
         }
         return found
             .map { (service: $0.key, modified: $0.value) }
@@ -123,8 +137,10 @@ enum ClaudeKeychain {
 
     /// Чтение секрета. Блокирующий вызов — только вне главного потока.
     static func credentials(service: String, interactive: Bool = true) -> Credentials? {
-        guard let json = rawItem(service: service, interactive: interactive) else { return nil }
-        return parse(json)
+        let item = readItem(service: service, interactive: interactive)
+        guard let json = item.json, var credentials = parse(json) else { return nil }
+        credentials.backend = item.backend
+        return credentials
     }
 
     /// Код ответа Keychain на чтение секрета — для диагностики (NOTCHLIMITS_PROBE).
@@ -145,7 +161,9 @@ enum ClaudeKeychain {
         readItem(service: service, interactive: interactive).json
     }
 
-    private static func readItem(service: String, interactive: Bool) -> (json: [String: Any]?, status: OSStatus) {
+    private static func readItem(service: String, interactive: Bool,
+                                 backend: Backend? = nil) -> (json: [String: Any]?, status: OSStatus, backend: Backend) {
+        if backend == .file { return readFile(service: service) }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -155,7 +173,26 @@ enum ClaudeKeychain {
         var result: CFTypeRef?
         let status = access(interactive: interactive) { SecItemCopyMatching(query as CFDictionary, &result) }
         let json = (result as? Data).flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
-        return (status == errSecSuccess ? json : nil, status)
+        if backend == nil, status != errSecSuccess || json == nil {
+            let file = readFile(service: service)
+            if file.json != nil { return file }
+        }
+        return (status == errSecSuccess ? json : nil, status, .keychain)
+    }
+
+    static func credentialFile(service: String) -> URL? {
+        storageDirectory(service: service)?.appendingPathComponent(".credentials.json")
+    }
+
+    private static func readFile(service: String) -> (json: [String: Any]?, status: OSStatus, backend: Backend) {
+        guard let file = credentialFile(service: service), FileManager.default.fileExists(atPath: file.path) else {
+            return (nil, errSecItemNotFound, .file)
+        }
+        guard let data = try? Data(contentsOf: file),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return (nil, errSecAuthFailed, .file)
+        }
+        return (json, errSecSuccess, .file)
     }
 
     private static let interactionLock = NSLock()
@@ -209,9 +246,11 @@ enum ClaudeKeychain {
                      expected: Credentials, renewalLock: ClaudeRefreshLock? = nil) -> SaveResult {
         guard let storageLock = storageLock(service: service, createParent: renewalLock == nil) else { return .failed }
         defer { storageLock.release() }
-        let item = readItem(service: service, interactive: renewalLock == nil)
+        let item = readItem(service: service, interactive: renewalLock == nil, backend: expected.backend)
         guard var json = item.json else { return item.status == errSecItemNotFound ? .changed : .failed }
-        guard let current = parse(json), current.hasSameTokens(as: expected),
+        guard var current = parse(json) else { return .changed }
+        current.backend = item.backend
+        guard current.hasSameTokens(as: expected),
               var oauth = json["claudeAiOauth"] as? [String: Any] else { return .changed }
 
         oauth["accessToken"] = tokens.accessToken
@@ -227,15 +266,8 @@ enum ClaudeKeychain {
         json["claudeAiOauth"] = oauth
         guard let data = try? JSONSerialization.data(withJSONObject: json) else { return .failed }
 
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service
-        ]
-        let status = access(interactive: false) {
-            guard storageLock.isHeld, renewalLock?.isHeld != false else { return errSecInteractionNotAllowed }
-            return SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        }
-        return status == errSecSuccess ? .saved : .failed
+        return write(data, service: service, backend: item.backend, storageLock: storageLock,
+                     renewalLock: renewalLock) ? .saved : .failed
     }
 
     /// Можно ли писать в запись: перезаписываем её же содержимым. Проверяем
@@ -245,8 +277,23 @@ enum ClaudeKeychain {
     static func canWrite(service: String, renewalLock: ClaudeRefreshLock? = nil) -> Bool {
         guard let storageLock = storageLock(service: service, createParent: renewalLock == nil) else { return false }
         defer { storageLock.release() }
-        guard let json = rawItem(service: service, interactive: renewalLock == nil),
+        let item = readItem(service: service, interactive: renewalLock == nil)
+        guard let json = item.json,
               let data = try? JSONSerialization.data(withJSONObject: json) else { return false }
+        return write(data, service: service, backend: item.backend, storageLock: storageLock, renewalLock: renewalLock)
+    }
+
+    private static func write(_ data: Data, service: String, backend: Backend,
+                              storageLock: ClaudeStorageLock, renewalLock: ClaudeRefreshLock?) -> Bool {
+        if backend == .file {
+            guard storageLock.isHeld, renewalLock?.isHeld != false,
+                  let file = credentialFile(service: service) else { return false }
+            do {
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+                try data.write(to: file, options: .atomic)
+                return true
+            } catch { return false }
+        }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service

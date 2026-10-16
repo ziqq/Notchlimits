@@ -40,6 +40,10 @@ enum AccountRemoval {
             do {
                 try ClaudeKeychain.withRemovalLock(service: service, configDir: configDir) {
                     try deleteKeychainEntry(service: service)
+                    if let directory = configDir ?? ClaudeKeychain.credentialFile(service: service)?.deletingLastPathComponent() {
+                        let file = directory.appendingPathComponent(".credentials.json")
+                        if fileManager.fileExists(atPath: file.path) { try fileManager.removeItem(at: file) }
+                    }
                     // Only managed extra profiles belong to us; preserve the main CLI config.
                     if let configDir,
                        configDir.path.hasPrefix(ProfileDirectories.claudeRoot.path + "/") {

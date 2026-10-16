@@ -117,6 +117,7 @@ actor CodexRenewal {
     }
 
     private struct Pending {
+        let renewal: CodexAuthSwap.Renewal
         let usedRefreshToken: String
         let tokens: CodexOAuth.Tokens
     }
@@ -129,23 +130,31 @@ actor CodexRenewal {
     /// `force` — продлить, даже если срок ещё не подошёл (usage ответил 401).
     func renew(columnID: String, home: URL, force: Bool) async -> Result {
         if let saved = pending[columnID] {
-            if let result = persist(saved, columnID: columnID, home: home) { return result }
+            if let result = persist(saved, columnID: columnID) { return result }
         }
-        let live = CodexAuthSwap.liveHome(columnID: columnID, home: home)
-        let file = live.appendingPathComponent("auth.json")
-        guard let refreshToken = Self.refreshToken(file),
-              Self.shouldRenew(isBaseHome: CodexAuthSwap.isBaseHome(live),
-                               expiresAt: CodexProvider.readAuth(codexHome: live)?.expiresAt,
+        let renewal: CodexAuthSwap.Renewal
+        do {
+            guard let source = try CodexAuthSwap.beginRenewal(columnID: columnID, home: home) else { return .skipped }
+            renewal = source
+        } catch { return .unavailable }
+        defer {
+            if pending[columnID]?.renewal.id != renewal.id { CodexAuthSwap.finishRenewal(renewal) }
+        }
+        guard let refreshToken = Self.refreshToken(in: renewal.record.data),
+              Self.shouldRenew(isBaseHome: false,
+                               expiresAt: CodexProvider.parseAuth(renewal.record.data)?.expiresAt,
                                force: force, now: Date())
         else { return .skipped }
         if let result = attempts[refreshToken] { return result }
         attempts[refreshToken] = .unavailable
 
-        switch await CodexOAuth.refresh(refreshToken: refreshToken) {
+        let response = await CodexOAuth.refresh(refreshToken: refreshToken)
+        guard CodexAuthSwap.isCurrent(renewal) else { return .skipped }
+        switch response {
         case .success(let tokens):
-            let saved = Pending(usedRefreshToken: refreshToken, tokens: tokens)
+            let saved = Pending(renewal: renewal, usedRefreshToken: refreshToken, tokens: tokens)
             pending[columnID] = saved
-            return persist(saved, columnID: columnID, home: home) ?? .renewed
+            return persist(saved, columnID: columnID) ?? .renewed
         case .rejected:
             attempts[refreshToken] = .rejected
             // Пока мы ходили, файл мог обновить CLI в этом профиле.
@@ -164,13 +173,14 @@ actor CodexRenewal {
         }
     }
 
-    /// false из storeRenewed означает новый вход в файле: старый ответ забываем.
-    private func persist(_ saved: Pending, columnID: String, home: URL) -> Result? {
+    /// A changed login or retired generation discards only its own pending response.
+    private func persist(_ saved: Pending, columnID: String) -> Result? {
         do {
-            let stored = try CodexAuthSwap.storeRenewed(columnID: columnID, home: home,
+            let stored = try CodexAuthSwap.storeRenewed(saved.renewal,
                                                        usedRefreshToken: saved.usedRefreshToken,
                                                        tokens: saved.tokens)
-            pending[columnID] = nil
+            if pending[columnID]?.renewal.id == saved.renewal.id { pending[columnID] = nil }
+            CodexAuthSwap.finishRenewal(saved.renewal)
             if stored {
                 attempts[saved.usedRefreshToken] = saved.tokens.refreshToken.map {
                     $0 != saved.usedRefreshToken ? .uncertain : nil
@@ -197,8 +207,12 @@ actor CodexRenewal {
     }
 
     static func refreshToken(_ file: URL) -> String? {
-        guard let data = try? CodexAuthSwap.authData(home: file.deletingLastPathComponent()),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let data = try? CodexAuthSwap.authData(home: file.deletingLastPathComponent()) else { return nil }
+        return refreshToken(in: data)
+    }
+
+    private static func refreshToken(in data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               (root["auth_mode"] as? String).map({ $0 == "chatgpt" }) ?? true,
               let tokens = root["tokens"] as? [String: Any],
               let token = tokens["refresh_token"] as? String, !token.isEmpty

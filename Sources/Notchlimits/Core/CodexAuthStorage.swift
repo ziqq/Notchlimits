@@ -1,6 +1,7 @@
 import Foundation
 import Security
 import CryptoKit
+import TOMLDecoder
 
 /// The native Codex auth payload, stored under the selected CODEX_HOME.
 struct CodexAuthStorage {
@@ -34,7 +35,10 @@ struct CodexAuthStorage {
         self.mode = try mode ?? Self.configuredMode(home: home)
     }
 
-    func load() throws -> Record? {
+    func load(backend: Backend? = nil) throws -> Record? {
+        if let backend {
+            return try backend == .keyring ? loadKeyring() : loadFile()
+        }
         switch mode {
         case .ephemeral: return nil // Another process's memory is not an auth cache.
         case .file: return try loadFile()
@@ -158,68 +162,22 @@ struct CodexAuthStorage {
         return text
     }
 
-    /// Read only auth bootstrap scalars, preserving TOML string/comment boundaries.
-    /// Other tables (including model profiles) cannot override root auth settings.
+    /// Decode native TOML syntax, including quoted/dotted keys and inline tables.
+    /// Only root auth settings participate; model profiles cannot override them.
     private static func settings(_ text: String) throws -> [String: String] {
-        let chars = Array(text)
-        var statements: [String] = [], current = "", quote: Character?, triple = false
-        var depth = 0, index = 0
-        while index < chars.count {
-            let ch = chars[index]
-            if let delimiter = quote {
-                current.append(ch)
-                if delimiter == "\"", ch == "\\", index + 1 < chars.count {
-                    index += 1; current.append(chars[index])
-                } else if ch == delimiter {
-                    if !triple { quote = nil }
-                    else if index + 2 < chars.count, chars[index + 1] == delimiter, chars[index + 2] == delimiter {
-                        current.append(delimiter); current.append(delimiter); index += 2; quote = nil; triple = false
-                    }
-                }
-            } else if ch == "#" {
-                while index < chars.count && chars[index] != "\n" { index += 1 }
-                continue
-            } else if ch == "\"" || ch == "'" {
-                quote = ch; current.append(ch)
-                if index + 2 < chars.count, chars[index + 1] == ch, chars[index + 2] == ch {
-                    triple = true; current.append(ch); current.append(ch); index += 2
-                }
-            } else if ch == "\n" && depth == 0 {
-                statements.append(current); current = ""
-            } else {
-                current.append(ch)
-                if ch == "[" || ch == "{" { depth += 1 }
-                if ch == "]" || ch == "}" { depth -= 1 }
-            }
-            index += 1
+        struct Settings: Decodable {
+            struct Features: Decodable { let secret_auth_storage: Bool? }
+            let cli_auth_credentials_store: String?
+            let features: Features?
         }
-        guard quote == nil, depth == 0 else { throw Failure.settings }
-        statements.append(current)
-        var section = "", values: [String: String] = [:]
-        for statement in statements {
-            let line = statement.trimmingCharacters(in: .whitespacesAndNewlines)
-            if line.hasPrefix("[") { section = line; continue }
-            guard let equal = line.firstIndex(of: "=") else { continue }
-            var key = String(line[..<equal]).trimmingCharacters(in: .whitespaces)
-            if key.hasPrefix("\"") || key.hasPrefix("'") { key = String(key.dropFirst().dropLast()) }
-            if section == "[features]" { key = "features." + key }
-            else if !section.isEmpty { continue }
-            guard key == "cli_auth_credentials_store" || key == "features.secret_auth_storage" else { continue }
-            guard values[key] == nil else { throw Failure.settings }
-            let raw = String(line[line.index(after: equal)...]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if key == "features.secret_auth_storage" {
-                guard raw == "true" || raw == "false" else { throw Failure.settings }
-                values[key] = raw
-            } else if raw.hasPrefix("'") && raw.hasSuffix("'") && raw.count >= 2 {
-                values[key] = String(raw.dropFirst().dropLast())
-            } else {
-                guard let data = raw.data(using: .utf8),
-                      let value = try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed) as? String else {
-                    throw Failure.settings
-                }
-                values[key] = value
-            }
+        do {
+            let settings = try TOMLDecoder(isLenient: false).decode(Settings.self, from: text)
+            var values: [String: String] = [:]
+            values["cli_auth_credentials_store"] = settings.cli_auth_credentials_store
+            values["features.secret_auth_storage"] = settings.features?.secret_auth_storage.map(String.init)
+            return values
+        } catch {
+            throw Failure.settings
         }
-        return values
     }
 }
