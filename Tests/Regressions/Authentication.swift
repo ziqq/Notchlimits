@@ -17,6 +17,7 @@ private enum Fixture {
     static var denyCodexRead = false
     static var denyCodexWrite = false
     static var denyCodexDelete = false
+    static var denyCredentialFileRemoval = false
     static var codexSecretReads = 0
     static var distinctRefreshGrants = false
     static var failClaudeFileWrite = false
@@ -281,6 +282,14 @@ func renameatx_np(_ fromFD: Int32, _ from: UnsafePointer<CChar>, _ toFD: Int32,
 
 private final class FixtureFileManager: Foundation.FileManager, @unchecked Sendable {
     override var homeDirectoryForCurrentUser: URL { Fixture.root }
+
+    override func removeItem(at url: URL) throws {
+        if Fixture.denyCredentialFileRemoval && ["auth.json", ".credentials.json"].contains(url.lastPathComponent) {
+            throw CocoaError(.fileWriteNoPermission)
+        }
+        try super.removeItem(at: url)
+    }
+
 
     override func setAttributes(_ attributes: [FileAttributeKey: Any], ofItemAtPath path: String) throws {
         if path.hasSuffix("/.credentials.json"), Fixture.failClaudeFileWrite, Fixture.refreshCalls > 0 {
@@ -640,6 +649,10 @@ enum Authentication {
             case "codex-toml-forms": try codexTOMLForms()
             case "codex-switch-inflight-alias": try await codexSwitchInFlight(alias: true)
             case "codex-renewal-base-alias": try await codexBaseAlias()
+            case "claude-remove-fallback-denied-keychain": try fallbackRemovalDenied(codex: false, keychainDenied: true)
+            case "claude-remove-fallback-denied-file": try fallbackRemovalDenied(codex: false, keychainDenied: false)
+            case "codex-remove-fallback-denied-keychain": try fallbackRemovalDenied(codex: true, keychainDenied: true)
+            case "codex-remove-fallback-denied-file": try fallbackRemovalDenied(codex: true, keychainDenied: false)
             case "profile-identity": try profileIdentity()
             case "profile-collision": try profileCollision()
             case "profile-active-migration": try profileActiveMigration()
@@ -964,6 +977,13 @@ enum Authentication {
             }
             try expect(Fixture.claudeFileWriteFailures > 0 && Fixture.holdsOAuthLocks,
                        "Failed file save did not retain OAuth locks")
+            Fixture.denyKeychainDelete = true
+            var removalFailed = false
+            do { try store.removeAccount(id: account.id) } catch { removalFailed = true }
+            try expect(removalFailed && store.account(for: account.id) != nil
+                       && Foundation.FileManager.default.fileExists(atPath: file.path),
+                       "Denied removal discarded a pending file grant")
+            Fixture.denyKeychainDelete = false
             Fixture.failClaudeFileWrite = false
         }
         let result = await renewal.value
@@ -1047,6 +1067,41 @@ enum Authentication {
         let account = DiscoveredAccount(id: "codex:base-alias", provider: .codex, profileName: "base-alias", source: .codexHome(home))
         _ = await CodexProvider().fetch(account)
         try expect(Fixture.refreshCalls == 0, "Symlink alias renewed a grant owned by the native Desktop/CLI")
+    }
+
+
+    @MainActor
+    private static func fallbackRemovalDenied(codex: Bool, keychainDenied: Bool) throws {
+        let account: DiscoveredAccount
+        let file: URL
+        let keychainData: Data?
+        if codex {
+            let home = ProfileDirectories.codexRoot.appendingPathComponent("denied-fallback")
+            try Fixture.codexLogin(home, account: "keychain-owner", mode: "auto")
+            try Fixture.writeAuth(home, account: "file-owner", refresh: "file-grant", expired: false)
+            account = DiscoveredAccount(id: "codex:denied-fallback", provider: .codex, profileName: "denied-fallback", source: .codexHome(home))
+            file = home.appendingPathComponent("auth.json")
+            keychainData = Fixture.codexKeychain[Fixture.codexKey(home)]
+            Fixture.denyCodexDelete = keychainDenied
+        } else {
+            (account, file) = try claudeFileAccount()
+            Fixture.keychainExists = true
+            Fixture.keychain = Fixture.claudeLogin("keychain-owner", expired: false)
+            Fixture.denyKeychainDelete = keychainDenied
+            keychainData = nil
+        }
+        let original = try Data(contentsOf: file)
+        Fixture.denyCredentialFileRemoval = !keychainDenied
+        var failed = false
+        do { try AccountRemoval.remove(account) } catch { failed = true }
+        try expect(failed, "Partial credential-store deletion reported success")
+        try expect(try Data(contentsOf: file) == original, "Failed removal did not retain/restore the fallback credentials")
+        if codex {
+            try expect(Fixture.codexKeychain[Fixture.codexKey(file.deletingLastPathComponent())] == keychainData,
+                       "Failed file unlink discarded the Keychain credentials")
+        } else {
+            try expect(Fixture.keychainExists, "Failed file unlink discarded Claude's Keychain credentials")
+        }
     }
 
     private static func codexStoreRead(_ mode: String, missing: Bool = false, denied: Bool = false) throws {

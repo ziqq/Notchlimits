@@ -86,11 +86,19 @@ struct CodexAuthStorage {
 
     func delete() throws {
         guard mode != .ephemeral else { throw Failure.ephemeral }
-        if mode != .file {
+        if mode == .file { try removeFile(); return }
+        let backup = FileManager.default.fileExists(atPath: file.path) ? try Data(contentsOf: file) : nil
+        try removeFile()
+        do {
             let status = ClaudeKeychain.access(interactive: false) { SecItemDelete(query as CFDictionary) }
             guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.keychain(status) }
+        } catch {
+            if let backup,
+               !FileManager.default.createFile(atPath: file.path, contents: backup, attributes: [.posixPermissions: 0o600]) {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            throw error
         }
-        try removeFile()
     }
 
     private func loadFile() throws -> Record? {

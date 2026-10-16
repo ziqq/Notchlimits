@@ -550,3 +550,15 @@ class AuthenticationRegressions(unittest.TestCase):
 
     def test_codex_renewal_base_alias(self):
         self.check_scenario("codex-renewal-base-alias")
+
+    def test_claude_remove_fallback_denied_keychain(self):
+        self.check_scenario("claude-remove-fallback-denied-keychain")
+
+    def test_claude_remove_fallback_denied_file(self):
+        self.check_scenario("claude-remove-fallback-denied-file")
+
+    def test_codex_remove_fallback_denied_keychain(self):
+        self.check_scenario("codex-remove-fallback-denied-keychain")
+
+    def test_codex_remove_fallback_denied_file(self):
+        self.check_scenario("codex-remove-fallback-denied-file")
