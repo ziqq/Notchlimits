@@ -39,11 +39,7 @@ enum AccountRemoval {
         case .claudeKeychain(let service, let configDir):
             do {
                 try ClaudeKeychain.withRemovalLock(service: service, configDir: configDir) {
-                    try deleteKeychainEntry(service: service)
-                    if let directory = configDir ?? ClaudeKeychain.credentialFile(service: service)?.deletingLastPathComponent() {
-                        let file = directory.appendingPathComponent(".credentials.json")
-                        if fileManager.fileExists(atPath: file.path) { try fileManager.removeItem(at: file) }
-                    }
+                    try deleteClaudeCredentials(service: service, configDir: configDir)
                     // Only managed extra profiles belong to us; preserve the main CLI config.
                     if let configDir,
                        configDir.path.hasPrefix(ProfileDirectories.claudeRoot.path + "/") {
@@ -69,6 +65,22 @@ enum AccountRemoval {
 
         case .mock:
             break
+        }
+    }
+
+    private static func deleteClaudeCredentials(service: String, configDir: URL?) throws {
+        let file = configDir?.appendingPathComponent(".credentials.json") ?? ClaudeKeychain.credentialFile(service: service)
+        let backup = try file.flatMap { FileManager.default.fileExists(atPath: $0.path) ? try Data(contentsOf: $0) : nil }
+        // An unlink failure must leave Keychain and pending grants untouched.
+        if let file, backup != nil { try FileManager.default.removeItem(at: file) }
+        do {
+            try deleteKeychainEntry(service: service)
+        } catch {
+            if let file, let backup,
+               !FileManager.default.createFile(atPath: file.path, contents: backup, attributes: [.posixPermissions: 0o600]) {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            throw error
         }
     }
 
