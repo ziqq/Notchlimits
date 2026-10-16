@@ -20,12 +20,15 @@ final class ClaudeStorageLock: @unchecked Sendable {
     private var lossHandler: (() -> Void)?
     private let stateLock = NSLock()
 
-    convenience init(directory: URL) throws {
-        try self.init(path: directory.appendingPathComponent(".storage-write.lock"), lifetime: 15)
+    convenience init(directory: URL, createParent: Bool = true) throws {
+        try self.init(path: directory.appendingPathComponent(".storage-write.lock"), lifetime: 15,
+                      createParent: createParent)
     }
 
-    init(path url: URL, lifetime: TimeInterval) throws {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    init(path url: URL, lifetime: TimeInterval, createParent: Bool = true) throws {
+        if createParent {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
         path = url.path
         self.lifetime = lifetime
         // Keep flock on a stable inode. The directory's owner marker and this

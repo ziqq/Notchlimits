@@ -23,7 +23,12 @@ actor ClaudeProvider: UsageProvider {
     private var terminating = false
     private var renewing: Set<String> = []
     private var removalGenerations: [String: UUID] = [:]
-    private var inFlight: [String: Task<CachedToken?, Never>] = [:]
+    private struct Resolution {
+        let id = UUID()
+        let generation: UUID?
+        let task: Task<CachedToken?, Never>
+    }
+    private var inFlight: [String: Resolution] = [:]
     /// Токены, отвергнутые сервером: брать их из Keychain повторно бессмысленно.
     private var rejected: [String: String] = [:]
     /// Почта из CLI, по одной на профиль. Пустое значение — «уже пробовали,
@@ -105,12 +110,22 @@ actor ClaudeProvider: UsageProvider {
     // MARK: - Токен
 
     private func token(for service: String) async -> CachedToken? {
-        if let running = inFlight[service] { return await running.value }
-        let running = Task { await resolveToken(for: service) }
-        inFlight[service] = running
-        let token = await running.value
-        inFlight[service] = nil
-        return token
+        let generation = removalGenerations[service]
+        while removalGenerations[service] == generation {
+            let running: Resolution
+            if let current = inFlight[service] {
+                running = current
+            } else {
+                running = Resolution(generation: generation, task: Task { await resolveToken(for: service) })
+                inFlight[service] = running
+            }
+            let token = await running.task.value
+            if inFlight[service]?.id == running.id { inFlight[service] = nil }
+            guard removalGenerations[service] == generation else { return nil }
+            // Drain the removed generation before resolving the replacement login.
+            if running.generation == generation { return token }
+        }
+        return nil
     }
 
     private func resolveToken(for service: String) async -> CachedToken? {
