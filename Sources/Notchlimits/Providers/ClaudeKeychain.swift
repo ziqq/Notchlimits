@@ -49,6 +49,17 @@ enum ClaudeKeychain {
     /// Имена всех generic password с нашим префиксом.
     static func services() -> [String] { items().map(\.service) }
 
+    /// Check existence without reading the secret or requesting authorization.
+    static func contains(service: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecReturnAttributes as String: true
+        ]
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+    }
+
     /// Записи с датой последнего изменения. Только атрибуты — секрет не
     /// читается, диалога пароля не будет.
     static func items() -> [(service: String, modified: Date?)] {
@@ -248,13 +259,13 @@ enum ClaudeKeychain {
 
     static func refreshLock(service: String) -> ClaudeRefreshLock? {
         guard supportsStorageLock, let directory = storageDirectory(service: service) else { return nil }
-        return try? ClaudeRefreshLock(directory: directory)
+        return try? ClaudeRefreshLock(directory: directory, createParent: service == baseService)
     }
 
     private static func storageLock(service: String, createParent: Bool) -> ClaudeStorageLock? {
         guard supportsStorageLock, let directory = storageDirectory(service: service) else { return nil }
         // Renewal already owns this directory. Do not recreate it after removal.
-        return try? ClaudeStorageLock(directory: directory, createParent: createParent)
+        return try? ClaudeStorageLock(directory: directory, createParent: createParent && service == baseService)
     }
 
     private static func storageDirectory(service: String) -> URL? {

@@ -101,20 +101,28 @@ enum ClaudeCLISelection {
             try? FileManager.default.removeItem(at: staged)
             throw error
         }
-        return Prepared(staged: staged, pointer: pointer)
+        return Prepared(staged: staged, pointer: pointer, service: service, selection: selection)
     }
 
     final class Prepared {
         private let staged: URL
         private let pointer: URL
+        private let service: String
+        private let selection: String
         private var committed = false
 
-        fileprivate init(staged: URL, pointer: URL) {
+        fileprivate init(staged: URL, pointer: URL, service: String, selection: String) {
             self.staged = staged
             self.pointer = pointer
+            self.service = service
+            self.selection = selection
         }
 
         func commit() throws {
+            guard ClaudeKeychain.contains(service: service),
+                  service == ClaudeKeychain.baseService || ClaudeKeychain.configPath(for: service) == selection else {
+                throw Failure(errorDescription: L.t("error.cliProfile"))
+            }
             guard rename(staged.path, pointer.path) == 0 else {
                 throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
             }
