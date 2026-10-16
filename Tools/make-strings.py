@@ -48,7 +48,7 @@ ORDER = [
         "menu.loginItem", "menu.switchCLI", "menu.switchCLI.help", "menu.about", "menu.quit", "menu.telemetry", "menu.settings",
     ]),
     ("Удаление аккаунта", [
-        "remove.title", "remove.body", "remove.delete", "remove.failed.title",
+        "remove.title", "remove.body", "remove.delete", "remove.failed.title", "remove.busy",
         "remove.incomplete",
     ]),
     ("Обновления", [
@@ -989,6 +989,24 @@ for _lang, (_menu, _title, _body, _delete, _failed) in _REMOVE.items():
     T[_lang]["remove.body"] = _body
     T[_lang]["remove.delete"] = _delete
     T[_lang]["remove.failed.title"] = _failed
+
+for _lang, _busy in {
+    "en": "This account is being updated. Wait for it to finish, then try again.",
+    "ru": "Аккаунт сейчас обновляется. Дождитесь завершения и попробуйте ещё раз.",
+    "de": "Dieses Konto wird gerade aktualisiert. Warte, bis der Vorgang abgeschlossen ist, und versuche es erneut.",
+    "es": "Esta cuenta se está actualizando. Espera a que termine y vuelve a intentarlo.",
+    "fr": "Ce compte est en cours de mise à jour. Attendez la fin, puis réessayez.",
+    "it": "Questo account è in aggiornamento. Attendi il completamento, poi riprova.",
+    "pl": "To konto jest aktualizowane. Poczekaj na zakończenie i spróbuj ponownie.",
+    "pt-BR": "Esta conta está sendo atualizada. Aguarde a conclusão e tente novamente.",
+    "tr": "Bu hesap güncelleniyor. İşlemin bitmesini bekleyip tekrar dene.",
+    "ja": "このアカウントは更新中です。完了してからもう一度お試しください。",
+    "ko": "이 계정을 업데이트하는 중입니다. 완료된 후 다시 시도하세요.",
+    "zh-Hans": "此账号正在更新。请等待完成后重试。",
+    "zh-Hant": "此帳號正在更新。請等待完成後重試。",
+    "uk": "Обліковий запис зараз оновлюється. Дочекайтеся завершення та спробуйте ще раз.",
+}.items():
+    T[_lang]["remove.busy"] = _busy
 
 
 # Проверка обновлений. update.available и update.upToDate несут один «%@»

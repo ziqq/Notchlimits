@@ -58,6 +58,8 @@ private enum Fixture {
     static var lockCrashPhase = ""
     static var nativeAcquisitionAtPublish = false
     static var nativeAcquisitionObserved = false
+    static var replaceMarkedOwnerAfterRead = false
+    static var markedOwnerReplacementObserved = false
     @MainActor static var desktopCompletion: ((Result<Void, Error>) -> Void)?
 
     static func writes() -> Int {
@@ -200,6 +202,34 @@ func pwrite(_ fd: Int32, _ bytes: UnsafeRawPointer?, _ count: Int, _ offset: off
         crashAtLockBoundary("record")
     }
     return Darwin.pwrite(fd, bytes, count, offset)
+}
+
+private func replaceMarkedOwnerAfterRead(_ path: String) {
+    guard Fixture.replaceMarkedOwnerAfterRead, path == Fixture.oauthLock.path else { return }
+    Fixture.replaceMarkedOwnerAfterRead = false
+    // A native contender reaps the abandoned directories and owns fresh unmarked ones.
+    let current = path.withCString { Darwin.rmdir($0) == 0 && Darwin.mkdir($0, 0o700) == 0 }
+    let legacy = Fixture.legacyLock.path.withCString { Darwin.rmdir($0) == 0 && Darwin.mkdir($0, 0o700) == 0 }
+    Fixture.markedOwnerReplacementObserved = current && legacy
+}
+
+func getxattr(_ path: UnsafePointer<CChar>, _ name: UnsafePointer<CChar>, _ value: UnsafeMutableRawPointer?,
+              _ count: Int, _ position: UInt32, _ options: Int32) -> Int {
+    let result = Darwin.getxattr(path, name, value, count, position, options)
+    if result > 0 { replaceMarkedOwnerAfterRead(String(cString: path)) }
+    return result
+}
+
+func fgetxattr(_ fd: Int32, _ name: UnsafePointer<CChar>, _ value: UnsafeMutableRawPointer?,
+               _ count: Int, _ position: UInt32, _ options: Int32) -> Int {
+    let result = Darwin.fgetxattr(fd, name, value, count, position, options)
+    var opened = stat(), named = stat()
+    if result > 0, fstat(fd, &opened) == 0,
+       Fixture.oauthLock.path.withCString({ Darwin.lstat($0, &named) }) == 0,
+       opened.st_dev == named.st_dev, opened.st_ino == named.st_ino {
+        replaceMarkedOwnerAfterRead(Fixture.oauthLock.path)
+    }
+    return result
 }
 
 func fsetxattr(_ fd: Int32, _ name: UnsafePointer<CChar>, _ value: UnsafeRawPointer?,
@@ -542,6 +572,18 @@ enum Authentication {
             case "claude-remove-staged-cli-off": try claudeRemoveStagedCLI(enabled: false)
             case "claude-remove-staged-cli-denied": try claudeRemoveStagedCLI(denied: true)
             case "claude-stale-usage-result": try await claudeStaleUsageResult()
+            case "claude-remove-native-writer": try claudeRemoveNativeWriter()
+            case "claude-remove-native-profile-writer": try claudeRemoveNativeWriter(primary: false)
+            case "claude-remove-native-legacy-writer": try claudeRemoveNativeWriter(lockKind: "legacy")
+            case "claude-remove-native-storage-writer": try claudeRemoveNativeWriter(lockKind: "storage")
+            case "claude-remove-unmapped": try claudeRemoveUnmapped()
+            case "claude-recovery-replacement": try await claudeRecoveryReplacement()
+            case "claude-readded-desktop": try claudeReaddedDesktop()
+            case "claude-readded-desktop-off": try claudeReaddedDesktop(enabled: false)
+            case "claude-readded-desktop-main": try claudeReaddedDesktop(primary: true)
+            case "claude-remove-desktop-denied": try claudeReaddedDesktop(denied: true)
+            case "claude-readd-staged-cli": try claudeRemoveStagedCLI(readded: true)
+            case "claude-readd-staged-cli-off": try claudeRemoveStagedCLI(enabled: false, readded: true)
             case "claude-native-publish": try await claudeNativePublish()
             case "claude-crash-mkdir":
                 Fixture.lockCrashPhase = "mkdir"
@@ -1493,7 +1535,7 @@ enum Authentication {
     }
 
     @MainActor
-    private static func claudeRemoveStagedCLI(primary: Bool = false, enabled: Bool = true, denied: Bool = false) throws {
+    private static func claudeRemoveStagedCLI(primary: Bool = false, enabled: Bool = true, denied: Bool = false, readded: Bool = false) throws {
         let profile: URL?
         let account: DiscoveredAccount
         if primary {
@@ -1520,12 +1562,19 @@ enum Authentication {
         ClaudeAppSwitcher().switchTo(account) { result = $0 }
         try expect(Fixture.desktopCompletion != nil, "Desktop launch was not held")
         try expect(try String(contentsOf: pointer) == original, "Staging changed CLI selection before launch")
+        let launchedDirectory = try desktopDirectory(Fixture.desktopArguments)
         var removalFailed = false
         do { try store.removeAccount(id: account.id) } catch { removalFailed = true }
         try expect(removalFailed == denied && Fixture.keychainExists == denied, "Removal did not honor the deletion result")
         if let profile {
             try expect(Foundation.FileManager.default.fileExists(atPath: profile.path) == denied,
                        "Removal did not preserve only the undeleted profile")
+        }
+        if readded {
+            if let profile { try Foundation.FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true) }
+            Fixture.keychain = Fixture.claudeLogin("replacement-login", expired: false)
+            Fixture.keychainExists = true
+            store.rediscover(force: true)
         }
         let secretReads = Fixture.keychainReads
         Fixture.desktopCompletion?(.success(()))
@@ -1538,8 +1587,12 @@ enum Authentication {
             if case .success? = result {} else { throw Failure(description: "Desktop-only or undeleted target could not complete its switch") }
         }
         try expect(Fixture.keychainReads == secretReads, "CLI validation read the secret instead of checking attributes")
-        try expect(UserDefaults.standard.string(forKey: "currentClaudeAppAccount") == ClaudeAppSwitcher.key(for: account.id),
-                   "Successful Desktop launch lost its marker after CLI validation")
+        try expect(UserDefaults.standard.string(forKey: "currentClaudeAppAccount") == launchedDirectory.lastPathComponent,
+                   "Successful Desktop launch lost the marker for its actual data directory")
+        if readded {
+            try expect(ClaudeAppSwitcher().isOpenInApp(columnID: account.id) == false,
+                       "A launch prepared for the removed account marked its replacement as open")
+        }
     }
 
     @MainActor
@@ -1592,6 +1645,139 @@ enum Authentication {
         try expect(!staleObserved, "Old usage reply overwrote the replacement account's fresh column")
         try expect(UsageCache().load(id: account.id)?.windows.first?.utilization == 84,
                    "Old usage reply overwrote the replacement account's persistent cache")
+    }
+
+    @MainActor
+    private static func claudeRemoveUnmapped() throws {
+        let service = Fixture.service + "-unmapped"
+        Fixture.discoveredClaudeService = service
+        Fixture.keychain = Fixture.claudeLogin("unmapped-login", expired: false)
+        let store = UsageStore(providers: [.claude: ClaudeProvider()], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        var failed = false
+        do { try store.removeAccount(id: "claude:" + service) } catch { failed = true }
+        try expect(failed && Fixture.keychainExists && store.account(for: "claude:" + service) != nil,
+                   "Unmapped profile deletion bypassed the native mutation locks")
+    }
+
+    @MainActor
+    private static func claudeRemoveNativeWriter(primary: Bool = true, lockKind: String = "all") throws {
+        let profile: URL?
+        let account: DiscoveredAccount
+        if primary {
+            profile = nil
+            Fixture.discoveredClaudeService = Fixture.service
+            account = DiscoveredAccount(id: "claude:" + Fixture.service, provider: .claude, profileName: "main",
+                                        source: .claudeKeychain(service: Fixture.service, configDir: nil))
+        } else {
+            (profile, account) = try claudeRemovableProfile()
+        }
+        Fixture.keychain = Fixture.claudeLogin("native-original", expired: true)
+        try Foundation.FileManager.default.createDirectory(at: Fixture.oauthDirectory, withIntermediateDirectories: true)
+        let storage = Fixture.oauthDirectory.appendingPathComponent(".storage-write.lock").path
+        let locks = lockKind == "legacy" ? [Fixture.legacyLock.path]
+            : lockKind == "storage" ? [storage] : [Fixture.oauthLock.path, Fixture.legacyLock.path, storage]
+        for path in locks { try expect(path.withCString { Darwin.mkdir($0, 0o700) } == 0, "Could not acquire native writer lease") }
+        defer { for path in locks.reversed() { _ = path.withCString { Darwin.rmdir($0) } } }
+        // Native secureStorage.mutate has passed its token comparison. Its backend
+        // will complete the already-prepared security add-generic-password -U.
+        let prepared = Fixture.claudeLogin("native-renewed", expired: false)
+        let store = UsageStore(providers: [.claude: ClaudeProvider()], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        var removed = false
+        do { try store.removeAccount(id: account.id); removed = true } catch {}
+        let preserved = Fixture.keychainExists && store.account(for: account.id) != nil
+        let leaseIntact = locks.allSatisfy { Foundation.FileManager.default.fileExists(atPath: $0) }
+        Fixture.keychain = prepared
+        Fixture.keychainExists = true
+        store.rediscover(force: true)
+        try expect(!removed && preserved && leaseIntact,
+                   "Removal reported success inside a native mutation that can recreate the deleted account")
+        try expect(store.account(for: account.id) != nil, "Busy deletion hid the account instead of allowing retry")
+        for path in locks.reversed() { try expect(path.withCString { Darwin.rmdir($0) } == 0, "Native writer lost its lease") }
+        try store.removeAccount(id: account.id)
+        store.rediscover(force: true)
+        try expect(!Fixture.keychainExists && store.account(for: account.id) == nil,
+                   "Deletion did not succeed after the native writer completed")
+        if let profile {
+            try expect(!Foundation.FileManager.default.fileExists(atPath: profile.path), "Retry retained the removed extra profile")
+        } else {
+            try expect(Foundation.FileManager.default.fileExists(atPath: Fixture.storageDirectory.path), "Deletion removed main CLI config")
+        }
+    }
+
+    private static func claudeRecoveryReplacement() async throws {
+        Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
+        Fixture.replaceMarkedOwnerAfterRead = true
+        _ = await ClaudeProvider().fetch(Fixture.claudeAccount)
+        try expect(Fixture.markedOwnerReplacementObserved, "Native contender did not replace both marked directories")
+        try expect(Foundation.FileManager.default.fileExists(atPath: Fixture.oauthLock.path)
+                   && Foundation.FileManager.default.fileExists(atPath: Fixture.legacyLock.path),
+                   "Recovery removed a new native owner using the abandoned directory's cached marker")
+        try expect(Fixture.refreshCalls == 0, "Recovery refreshed after losing the native lock paths")
+    }
+
+    private static func desktopDirectory(_ arguments: [String]) throws -> URL {
+        let prefix = "--user-data-dir="
+        guard let argument = arguments.first(where: { $0.hasPrefix(prefix) }) else {
+            throw Failure(description: "Desktop launch did not specify its data directory")
+        }
+        return URL(fileURLWithPath: String(argument.dropFirst(prefix.count)), isDirectory: true)
+    }
+
+    @MainActor
+    private static func claudeReaddedDesktop(enabled: Bool = true, primary: Bool = false, denied: Bool = false) throws {
+        let profile: URL?
+        let account: DiscoveredAccount
+        if primary {
+            profile = nil
+            Fixture.discoveredClaudeService = Fixture.service
+            account = DiscoveredAccount(id: "claude:" + Fixture.service, provider: .claude, profileName: "main",
+                                        source: .claudeKeychain(service: Fixture.service, configDir: nil))
+        } else {
+            (profile, account) = try claudeRemovableProfile()
+        }
+        if !enabled { ClaudeCLISelection.isEnabled = false }
+        let pointer = DesktopApp.supportDirectory.appendingPathComponent("claude-cli/selected-profile")
+        try Foundation.FileManager.default.createDirectory(at: pointer.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let original = Fixture.root.appendingPathComponent("previous-cli").path + "\n"
+        try Data(original.utf8).write(to: pointer)
+        Fixture.keychain = Fixture.claudeLogin("account-a", expired: false)
+        let first = try switchSuccessfully(account)
+        let directory = try desktopDirectory(first.arguments)
+        let session = directory.appendingPathComponent("synthetic-session-marker")
+        try Data("account-a".utf8).write(to: session)
+        let unrelated = directory.deletingLastPathComponent().appendingPathComponent("another-account")
+        try Data("other".utf8).write(to: unrelated)
+        let store = UsageStore(providers: [.claude: ClaudeProvider()], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        Fixture.denyKeychainDelete = denied
+        var failed = false
+        do { try store.removeAccount(id: account.id) } catch { failed = true }
+        try expect(failed == denied && Fixture.keychainExists == denied, "Deletion did not honor its Keychain result")
+        if denied {
+            let second = try switchSuccessfully(account)
+            try expect(second.arguments == first.arguments && (try String(contentsOf: session)) == "account-a",
+                       "Failed deletion retired a live Desktop session")
+            return
+        }
+        try expect(!Foundation.FileManager.default.fileExists(atPath: session.path), "Successful deletion retained Desktop session data")
+        // An old Desktop process may recreate its former data directory after removal.
+        try Foundation.FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("account-a".utf8).write(to: session)
+        if let profile { try Foundation.FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true) }
+        Fixture.keychain = Fixture.claudeLogin("account-b", expired: false)
+        Fixture.keychainExists = true
+        try expect(ClaudeAppSwitcher().isOpenInApp(columnID: account.id) == false,
+                   "The retired Desktop session was shown as the re-added account")
+        let second = try switchSuccessfully(account)
+        let replacement = try desktopDirectory(second.arguments)
+        try expect(replacement != directory && !Foundation.FileManager.default.fileExists(atPath: replacement.appendingPathComponent(session.lastPathComponent).path),
+                   "Re-added account reused the removed Desktop session, including writes from an old process")
+        try expect(try String(contentsOf: pointer) == (enabled ? (profile?.path ?? "") + "\n" : original),
+                   "Re-added Desktop switch did not respect Switch CLI")
+        try expect(try String(contentsOf: unrelated) == "other", "Deletion changed another Desktop account")
+        try expect(ClaudeAppSwitcher().isOpenInApp(columnID: account.id) == true, "Replacement Desktop was not marked open")
     }
 
     private static func claudeNativePublish() async throws {

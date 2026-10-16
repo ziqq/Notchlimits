@@ -362,3 +362,46 @@ class AuthenticationRegressions(unittest.TestCase):
                 path.rmdir()
             recovered = run_fixture(self.executable, "claude-recover-owner", root)
             self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
+
+    def test_removal_waits_for_native_mutation_then_allows_retry(self):
+        self.check_scenario("claude-remove-native-writer")
+
+    def test_extra_profile_removal_waits_for_native_mutation(self):
+        self.check_scenario("claude-remove-native-profile-writer")
+
+    def test_removal_respects_independent_legacy_oauth_owner(self):
+        self.check_scenario("claude-remove-native-legacy-writer")
+
+    def test_removal_respects_independent_storage_owner(self):
+        self.check_scenario("claude-remove-native-storage-writer")
+
+    def test_unmapped_profile_cannot_bypass_removal_locks(self):
+        self.check_scenario("claude-remove-unmapped")
+
+    def test_recovery_preserves_native_replacement_after_marker_read(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-recovery-replacement-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            crashed = run_fixture(self.executable, "claude-crash-owner", root)
+            self.assertEqual(crashed.returncode, 0, crashed.stdout + crashed.stderr)
+            for path in (root / ".claude/.oauth_refresh.lock", root / ".claude.lock"):
+                os.utime(path, (1, 1))
+            result = run_fixture(self.executable, "claude-recovery-replacement", root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_readded_profile_gets_fresh_desktop_session_and_selects_cli(self):
+        self.check_scenario("claude-readded-desktop")
+
+    def test_readded_desktop_only_profile_preserves_cli(self):
+        self.check_scenario("claude-readded-desktop-off")
+
+    def test_readded_main_profile_gets_fresh_desktop_session(self):
+        self.check_scenario("claude-readded-desktop-main")
+
+    def test_failed_deletion_preserves_desktop_session(self):
+        self.check_scenario("claude-remove-desktop-denied")
+
+    def test_pending_desktop_launch_cannot_publish_readded_cli_target(self):
+        self.check_scenario("claude-readd-staged-cli")
+
+    def test_pending_desktop_only_launch_does_not_mark_replacement_open(self):
+        self.check_scenario("claude-readd-staged-cli-off")

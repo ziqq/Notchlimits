@@ -80,6 +80,7 @@
 "remove.body" = "アカウントの認証情報は完全に削除されます。元に戻すには claude か codex で再度サインインしてください。";
 "remove.delete" = "削除";
 "remove.failed.title" = "アカウントを削除できませんでした";
+"remove.busy" = "このアカウントは更新中です。完了してからもう一度お試しください。";
 "remove.incomplete" = "%@ — 未ログイン";
 
 // Обновления

@@ -84,11 +84,16 @@ func appAccountSwitcher(for provider: Provider) -> any AppAccountSwitcher {
 /// свич на аккаунт открывает приложение в пустой папке — там нужно войти.
 final class ClaudeAppSwitcher: AppAccountSwitcher {
     private var cliChange: ClaudeCLISelection.Prepared?
+    private var preparedKey: String?
     let bundleID = "com.anthropic.claudefordesktop"
     let appName = "Claude"
 
     /// Ключ папки активного аккаунта; "" — ещё не переключались.
     private static let currentKey = "currentClaudeAppAccount"
+    private static let generationsKey = "claudeAppAccountGenerations"
+    private struct RetiredAccount: LocalizedError {
+        var errorDescription: String? { L.t("error.cliProfile") }
+    }
 
     private static var root: URL {
         DesktopApp.supportDirectory.appendingPathComponent("claude-app", isDirectory: true)
@@ -97,7 +102,20 @@ final class ClaudeAppSwitcher: AppAccountSwitcher {
     /// Стабильный ключ папки: из id колонки, не из имени (переименование
     /// колонки не должно осиротить папку данных).
     static func key(for columnID: String) -> String {
-        AccountSwitcher.slug(columnID)
+        let base = AccountSwitcher.slug(columnID)
+        guard let generation = (UserDefaults.standard.dictionary(forKey: generationsKey) as? [String: String])?[columnID] else {
+            return base
+        }
+        return base + "-" + generation
+    }
+
+    static func accountRemoved(columnID: String) {
+        let previous = root.appendingPathComponent(key(for: columnID), isDirectory: true)
+        var generations = UserDefaults.standard.dictionary(forKey: generationsKey) as? [String: String] ?? [:]
+        generations[columnID] = UUID().uuidString
+        UserDefaults.standard.set(generations, forKey: generationsKey)
+        // A running Desktop may recreate its old path. Future switches use a new generation.
+        try? FileManager.default.removeItem(at: previous)
     }
 
     func isOpenInApp(columnID: String) -> Bool? {
@@ -106,8 +124,10 @@ final class ClaudeAppSwitcher: AppAccountSwitcher {
     }
 
     func prepare(_ account: DiscoveredAccount) throws -> NSWorkspace.OpenConfiguration {
-        let dir = Self.root.appendingPathComponent(Self.key(for: account.id), isDirectory: true)
+        let key = Self.key(for: account.id)
+        let dir = Self.root.appendingPathComponent(key, isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        preparedKey = key
         if ClaudeCLISelection.isEnabled { cliChange = try ClaudeCLISelection.stage(account) }
         let config = NSWorkspace.OpenConfiguration()
         config.arguments = ["--user-data-dir=\(dir.path)"]
@@ -117,15 +137,20 @@ final class ClaudeAppSwitcher: AppAccountSwitcher {
     func commit(_ account: DiscoveredAccount) throws {
         // Desktop has opened: keep its marker truthful even if an external
         // filesystem change prevents publishing the prepared CLI selection.
-        defer { UserDefaults.standard.set(Self.key(for: account.id), forKey: Self.currentKey) }
+        let launchedKey = preparedKey ?? Self.key(for: account.id)
+        defer { UserDefaults.standard.set(launchedKey, forKey: Self.currentKey) }
         if ClaudeCLISelection.isEnabled {
+            guard launchedKey == Self.key(for: account.id) else {
+                throw RetiredAccount()
+            }
             let change = try cliChange ?? ClaudeCLISelection.stage(account)
             try change.commit()
         }
         cliChange = nil
+        preparedKey = nil
     }
 
-    func cancel() { cliChange = nil }
+    func cancel() { cliChange = nil; preparedKey = nil }
 }
 
 // MARK: - Codex
