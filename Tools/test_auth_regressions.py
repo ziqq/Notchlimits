@@ -20,6 +20,37 @@ class AuthenticationRegressions(unittest.TestCase):
         provider = (SOURCES / "Providers/ClaudeProvider.swift").read_text()
         if "func prepareForTermination(" in provider:
             flags += ("-DCLAUDE_TERMINATION_DRAIN",)
+        codex = (SOURCES / "Providers/CodexOAuth.swift").read_text()
+        if "func prepareForTermination(" in codex:
+            flags += ("-DCODEX_TERMINATION_DRAIN",)
+        if "completion:" in (SOURCES / "Core/AccountRemoval.swift").read_text():
+            flags += ("-DCOORDINATED_CODEX_REMOVAL",)
+        # Execute the exact production quit callback with synthetic AppKit only.
+        # This also exercises the old callback when proving the regression.
+        delegate = (SOURCES / "App/AppDelegate.swift").read_text()
+        start = delegate.index("    func applicationShouldTerminate(")
+        end = delegate.index("{", start) + 1
+        depth = 1
+        while depth:
+            depth += (delegate[end] == "{") - (delegate[end] == "}")
+            end += 1
+        termination = pathlib.Path(cls.build.name) / "TerminationDelegate.swift"
+        termination.write_text('''
+import Foundation
+@MainActor final class NSApplication {
+    enum TerminateReply { case terminateNow, terminateLater }
+    var approved: Bool?
+    func reply(toApplicationShouldTerminate value: Bool) { approved = value }
+}
+final class NSAlert {
+    var messageText = "", informativeText = ""
+    func addButton(withTitle: String) {}
+}
+@MainActor final class RegressionTerminationDelegate {
+    var claudeProvider: ClaudeProvider? = ClaudeProvider()
+    var terminationPending = false
+    func runModalAbovePanel(_ alert: NSAlert) {}
+''' + delegate[start:end] + "\n}\n")
         cls.executable = compile_fixture(cls.build.name, "Authentication", [
             "Model/Models.swift", "Model/Account.swift", "Core/JWT.swift",
             *(["Core/ClaudeStorageLock.swift"] if (SOURCES / "Core/ClaudeStorageLock.swift").exists() else []),
@@ -31,7 +62,7 @@ class AuthenticationRegressions(unittest.TestCase):
             "Providers/ClaudeKeychain.swift", "Providers/ClaudeOAuth.swift",
             "Providers/ClaudeProvider.swift", "Providers/CodexOAuth.swift",
             "Providers/CodexProvider.swift", "Providers/RealDiscovery.swift",
-        ], flags)
+        ], flags, extra_sources=[termination])
 
     def check_scenario(self, scenario):
         # Match the canonical home URLs returned by macOS directory discovery.
@@ -562,3 +593,54 @@ class AuthenticationRegressions(unittest.TestCase):
 
     def test_codex_remove_fallback_denied_file(self):
         self.check_scenario("codex-remove-fallback-denied-file")
+
+    def test_codex_quit_inflight(self):
+        self.check_scenario("codex-quit-inflight")
+
+    def test_codex_quit_pending(self):
+        self.check_scenario("codex-quit-pending")
+
+    def test_codex_quit_without_claude(self):
+        self.check_scenario("codex-quit-without-claude")
+
+    def test_codex_quit_timeout(self):
+        self.check_scenario("codex-quit-timeout")
+
+    def test_codex_auto_copyback(self):
+        self.check_scenario("codex-auto-copyback")
+
+    def test_codex_auto_copyback_fallback(self):
+        self.check_scenario("codex-auto-copyback-fallback")
+
+    def test_claude_profile_cleanup_denied(self):
+        self.check_scenario("claude-profile-cleanup-denied")
+
+    def test_codex_profile_cleanup_denied(self):
+        self.check_scenario("codex-profile-cleanup-denied")
+
+    def test_claude_profile_move_denied(self):
+        self.check_scenario("claude-profile-move-denied")
+
+    def test_claude_profile_rollback_maintains_native_lock_heartbeat(self):
+        self.check_scenario("claude-profile-rollback-heartbeat")
+
+    def test_codex_profile_move_denied(self):
+        self.check_scenario("codex-profile-move-denied")
+
+    def test_codex_active_removal(self):
+        self.check_scenario("codex-active-removal")
+
+    def test_codex_primary_removal(self):
+        self.check_scenario("codex-primary-removal")
+
+    def test_codex_primary_direct_removal(self):
+        self.check_scenario("codex-primary-direct-removal")
+
+    def test_codex_removal_quit_refused(self):
+        self.check_scenario("codex-removal-quit-refused")
+
+    def test_codex_removal_sync_guard(self):
+        self.check_scenario("codex-removal-sync-guard")
+
+    def test_codex_removal_switch_barrier(self):
+        self.check_scenario("codex-removal-switch-barrier")

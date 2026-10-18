@@ -64,7 +64,7 @@ extension AppAccountSwitcher {
 }
 
 @MainActor
-private enum AppSwitchState {
+enum AppSwitchState {
     static var inProgress: Set<Provider> = []
     struct Busy: LocalizedError {
         var errorDescription: String? { L.t("appswitch.error.inProgress") }

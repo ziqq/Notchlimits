@@ -310,6 +310,8 @@ actor ClaudeProvider: UsageProvider {
         return true
     }
 
+    func cancelTermination() { terminating = false }
+
     private func write(_ pending: Pending, to service: String, lease: ClaudeRefreshLock) async -> ClaudeKeychain.SaveResult {
         await Task.detached(priority: .utility) {
             ClaudeKeychain.save(service: service, tokens: pending.tokens,

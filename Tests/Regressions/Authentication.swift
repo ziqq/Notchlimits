@@ -18,6 +18,8 @@ private enum Fixture {
     static var denyCodexWrite = false
     static var denyCodexDelete = false
     static var denyCredentialFileRemoval = false
+    static var denyProfileRemoval: String?
+    static var denyProfileMove = false
     static var codexSecretReads = 0
     static var distinctRefreshGrants = false
     static var failClaudeFileWrite = false
@@ -53,9 +55,14 @@ private enum Fixture {
     static var desktopFails = false
     static var holdDesktopCompletion = false
     static var desktopCalls = 0
+    static var desktopStops = 0
+    static var desktopRunning = false
+    static var desktopRefusesQuit = false
+    static var holdDesktopStop = false
     static var desktopArguments: [String] = []
     static var keychainExists = true
     static var denyKeychainDelete = false
+    static var slowKeychainDelete = false
     static var discoveredClaudeService: String?
     static var releaseRefreshReply = false
     static var holdFirstUsage = false
@@ -71,6 +78,7 @@ private enum Fixture {
     static var replaceMarkedOwnerAfterRead = false
     static var markedOwnerReplacementObserved = false
     @MainActor static var desktopCompletion: ((Result<Void, Error>) -> Void)?
+    @MainActor static var desktopStopCompletion: ((Result<Void, Error>) -> Void)?
 
     static func writes() -> Int {
         lock.lock()
@@ -284,10 +292,21 @@ private final class FixtureFileManager: Foundation.FileManager, @unchecked Senda
     override var homeDirectoryForCurrentUser: URL { Fixture.root }
 
     override func removeItem(at url: URL) throws {
+        if let denied = Fixture.denyProfileRemoval,
+           url.path == denied || url.lastPathComponent.hasPrefix(".removed-") {
+            throw CocoaError(.fileWriteNoPermission)
+        }
         if Fixture.denyCredentialFileRemoval && ["auth.json", ".credentials.json"].contains(url.lastPathComponent) {
             throw CocoaError(.fileWriteNoPermission)
         }
         try super.removeItem(at: url)
+    }
+
+    override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+        if Fixture.denyProfileMove && srcURL.path == Fixture.denyProfileRemoval {
+            throw CocoaError(.fileWriteNoPermission)
+        }
+        try super.moveItem(at: srcURL, to: dstURL)
     }
 
 
@@ -377,6 +396,18 @@ struct ThresholdNotifier {
 enum DesktopApp {
     static var supportDirectory: URL { Fixture.root.appendingPathComponent("support") }
     static func url(bundleID: String) -> URL? { nil }
+    static func isRunning(bundleID: String) -> Bool { Fixture.desktopRunning }
+    @MainActor static func stop(bundleID: String, appName: String,
+                               completion: @escaping (Result<Void, Error>) -> Void) {
+        Fixture.desktopStops += 1
+        if Fixture.holdDesktopStop { Fixture.desktopStopCompletion = completion; return }
+        if Fixture.desktopRefusesQuit {
+            completion(.failure(Failure(description: "Synthetic Desktop refused quit")))
+        } else {
+            Fixture.desktopRunning = false
+            completion(.success(()))
+        }
+    }
     @MainActor static func restart(bundleID: String, appName: String,
                                  prepare: () throws -> NSWorkspace.OpenConfiguration,
                                  completion: @escaping (Result<Void, Error>) -> Void) {
@@ -495,6 +526,7 @@ func SecKeychainSetUserInteractionAllowed(_ state: Bool) -> OSStatus {
 func SecItemDelete(_ query: CFDictionary) -> OSStatus {
     Fixture.lock.lock()
     defer { Fixture.lock.unlock() }
+    if Fixture.slowKeychainDelete { Thread.sleep(forTimeInterval: 6) }
     if (query as NSDictionary)[kSecAttrService as String] as? String == "Codex Auth" {
         guard !Fixture.denyCodexDelete else { return errSecAuthFailed }
         let key = (query as NSDictionary)[kSecAttrAccount as String] as! String
@@ -653,6 +685,23 @@ enum Authentication {
             case "claude-remove-fallback-denied-file": try fallbackRemovalDenied(codex: false, keychainDenied: false)
             case "codex-remove-fallback-denied-keychain": try fallbackRemovalDenied(codex: true, keychainDenied: true)
             case "codex-remove-fallback-denied-file": try fallbackRemovalDenied(codex: true, keychainDenied: false)
+            case "codex-quit-inflight": try await codexQuit(inFlight: true)
+            case "codex-quit-pending": try await codexQuit(inFlight: false)
+            case "codex-quit-without-claude": try await codexQuit(inFlight: false, withoutClaude: true)
+            case "codex-quit-timeout": try await codexQuitTimeout()
+            case "codex-auto-copyback": try codexAutoCopyback(fallback: false)
+            case "codex-auto-copyback-fallback": try codexAutoCopyback(fallback: true)
+            case "claude-profile-cleanup-denied": try await profileRemovalDenied(codex: false, moveDenied: false)
+            case "codex-profile-cleanup-denied": try await profileRemovalDenied(codex: true, moveDenied: false)
+            case "claude-profile-move-denied": try await profileRemovalDenied(codex: false, moveDenied: true)
+            case "claude-profile-rollback-heartbeat": try await profileRemovalDenied(codex: false, moveDenied: false, credentialDenied: true)
+            case "codex-profile-move-denied": try await profileRemovalDenied(codex: true, moveDenied: true)
+            case "codex-active-removal": try await codexActiveRemoval()
+            case "codex-primary-removal": try await codexActiveRemoval(primary: true)
+            case "codex-primary-direct-removal": try await codexActiveRemoval(primary: true, unswapped: true)
+            case "codex-removal-quit-refused": try await codexActiveRemoval(refusesQuit: true)
+            case "codex-removal-sync-guard": try await codexActiveRemoval(synchronous: true)
+            case "codex-removal-switch-barrier": try await codexRemovalSwitchBarrier()
             case "profile-identity": try profileIdentity()
             case "profile-collision": try profileCollision()
             case "profile-active-migration": try profileActiveMigration()
@@ -1102,6 +1151,256 @@ enum Authentication {
         } else {
             try expect(Fixture.keychainExists, "Failed file unlink discarded Claude's Keychain credentials")
         }
+    }
+
+
+    @MainActor
+    private static func codexQuit(inFlight: Bool, withoutClaude: Bool = false) async throws {
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("quit-profile")
+        try Fixture.codexLogin(home, account: "quit-profile", mode: "keyring", expired: true)
+        let account = DiscoveredAccount(id: "codex:quit-profile", provider: .codex, profileName: "quit-profile", source: .codexHome(home))
+        let provider = CodexProvider()
+        var task: Task<FetchOutcome, Never>?
+        if inFlight {
+            Fixture.response = .heldRenewed
+            task = Task { await provider.fetch(account) }
+            try await waitForRefresh(1)
+        } else {
+            Fixture.denyCodexWrite = true
+            _ = await provider.fetch(account)
+        }
+        let application = NSApplication()
+        let delegate = RegressionTerminationDelegate()
+        if withoutClaude { delegate.claudeProvider = nil }
+        let reply = delegate.applicationShouldTerminate(application)
+        // A .terminateNow reply also approves quitting without a later callback.
+        let immediate = reply == .terminateNow
+        for _ in 0..<100 {
+            if application.approved != nil { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        let approvedBeforeDurable = immediate || application.approved == true
+        Fixture.denyCodexWrite = false
+        Fixture.releaseRefresh()
+        if let task { _ = await task.value }
+        for _ in 0..<500 {
+            if application.approved != nil { break }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        try expect(!approvedBeforeDurable, "Normal quit abandoned the only rotated Codex credentials or an accepted refresh POST")
+        try expect(application.approved == true, "Quit did not complete after Codex credentials became durable")
+        try expect(CodexRenewal.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated", "Quit lost the rotated grant")
+        try expect(Fixture.refreshCalls == 1, "Termination retried the refresh POST")
+    }
+
+    private static func codexQuitTimeout() async throws {
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("quit-timeout")
+        try Fixture.codexLogin(home, account: "quit-timeout", mode: "keyring", expired: true)
+        let account = DiscoveredAccount(id: "codex:quit-timeout", provider: .codex, profileName: "quit-timeout", source: .codexHome(home))
+        let provider = CodexProvider()
+        Fixture.denyCodexWrite = true
+        _ = await provider.fetch(account)
+        #if CODEX_TERMINATION_DRAIN
+        let ready = await CodexRenewal.shared.prepareForTermination(timeout: 0.05)
+        #else
+        let ready = true
+        #endif
+        try expect(!ready, "Quit was approved despite a denied write of rotated Codex credentials")
+        Fixture.denyCodexWrite = false
+        _ = await provider.fetch(account)
+        try expect(CodexRenewal.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated", "Cancelled quit lost its pending grant")
+        let other = try Fixture.codexAccount("after-cancelled-quit")
+        _ = await provider.fetch(other)
+        try expect(Fixture.refreshCalls == 2, "A cancelled quit permanently disabled automatic renewal")
+    }
+
+    @MainActor
+    private static func profileRemovalDenied(codex: Bool, moveDenied: Bool, credentialDenied: Bool = false) async throws {
+        let account: DiscoveredAccount
+        let directory: URL
+        var original: Data
+        let claude = ClaudeProvider()
+        let provider = CodexProvider()
+        var claudeRenewal: Task<FetchOutcome, Never>?
+        if codex {
+            directory = ProfileDirectories.codexRoot.appendingPathComponent("deny-directory")
+            try Fixture.codexLogin(directory, account: "keep-login", mode: "keyring", expired: true)
+            account = DiscoveredAccount(id: "codex:deny-directory", provider: .codex, profileName: "deny-directory", source: .codexHome(directory))
+            original = Fixture.codexKeychain[Fixture.codexKey(directory)]!
+            if moveDenied { Fixture.denyCodexWrite = true; _ = await provider.fetch(account) }
+        } else {
+            let (found, file) = try claudeFileAccount(primary: false, expired: true)
+            account = found; directory = file.deletingLastPathComponent()
+            original = try Data(contentsOf: file)
+            if moveDenied || credentialDenied {
+                Fixture.failClaudeFileWrite = true
+                claudeRenewal = Task { await claude.fetch(account) }
+                for _ in 0..<300 {
+                    if Fixture.claudeFileWriteFailures > 0 { break }
+                    try await Task.sleep(nanoseconds: 5_000_000)
+                }
+                try expect(Fixture.claudeFileWriteFailures > 0, "Claude did not reach pending persistence")
+                // The preflight may reserialize unchanged JSON before the POST.
+                original = try Data(contentsOf: file)
+            }
+        }
+        let store = UsageStore(providers: [.claude: claude, .codex: provider], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        try expect(store.account(for: account.id) != nil, "Removal profile was not discovered")
+        let desktopKey = ClaudeAppSwitcher.key(for: account.id)
+        Fixture.denyProfileRemoval = directory.path
+        Fixture.denyProfileMove = moveDenied
+        Fixture.denyKeychainDelete = credentialDenied
+        Fixture.slowKeychainDelete = credentialDenied
+        var failed = false
+        do { try store.removeAccount(id: account.id) } catch { failed = true }
+        let retained: Bool
+        if codex { retained = Fixture.codexKeychain[Fixture.codexKey(directory)] == original }
+        else { retained = (try? Data(contentsOf: directory.appendingPathComponent(".credentials.json"))) == original }
+        let remains = Foundation.FileManager.default.fileExists(atPath: directory.path)
+        Fixture.denyProfileRemoval = nil
+        Fixture.denyProfileMove = false
+        Fixture.denyKeychainDelete = false
+        Fixture.slowKeychainDelete = false
+        if moveDenied || credentialDenied {
+            try expect(failed && retained && remains, "Failed profile removal lost credentials or reported success")
+            try expect(ClaudeAppSwitcher.key(for: account.id) == desktopKey, "Failed removal retired the Desktop session")
+            Fixture.denyCodexWrite = false
+            Fixture.failClaudeFileWrite = false
+            if let claudeRenewal { _ = await claudeRenewal.value }
+            if codex {
+                _ = await provider.fetch(account)
+                try expect(CodexRenewal.refreshToken(directory.appendingPathComponent("auth.json")) == "synthetic-rotated", "Failed directory removal discarded a pending rotation")
+            } else {
+                _ = await claude.fetch(account)
+                try expect(ClaudeKeychain.credentials(service: account.id.replacingOccurrences(of: "claude:", with: ""))?.refreshToken == "synthetic-rotated", "Failed directory removal discarded a pending Claude rotation")
+            }
+            try expect(Fixture.refreshCalls == 1, "Failed directory removal repeated the refresh POST")
+        } else {
+            try expect(!failed && !retained && !remains, "Directory cleanup failure left a half-removed account and blocked same-name re-addition")
+            try expect(store.account(for: account.id) == nil, "Logged-out hidden directory remained discoverable")
+            // Recreate the exact name and verify discovery sees the new generation.
+            if codex { try Fixture.codexLogin(directory, account: "replacement", mode: "keyring") }
+            else {
+                try Foundation.FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("replacement", expired: false))
+                    .write(to: directory.appendingPathComponent(".credentials.json"))
+            }
+            store.rediscover(force: true)
+            try expect(store.account(for: account.id) != nil, "Same-name profile could not be re-added after cleanup failure")
+        }
+    }
+
+    @MainActor
+    private static func codexActiveRemoval(refusesQuit: Bool = false, synchronous: Bool = false,
+                                           primary: Bool = false, unswapped: Bool = false) async throws {
+        let main = CodexAuthSwap.baseHome
+        let profile = ProfileDirectories.codexRoot.appendingPathComponent("active-removed")
+        try Fixture.codexLogin(main, account: "main", mode: "file")
+        try Fixture.codexLogin(profile, account: "removed", mode: "file")
+        let originalMain = CodexProvider.readAuth(codexHome: main)!
+        if !unswapped { try CodexAuthSwap.activate(columnID: "codex:active-removed", home: profile) }
+        // Desktop's refresh POST is accepted for B. It must exit before A is restored.
+        Fixture.desktopRunning = true
+        Fixture.desktopRefusesQuit = refusesQuit
+        ClaudeCLISelection.isEnabled = false
+        let account = DiscoveredAccount(id: primary ? CodexAuthSwap.defaultColumnID : "codex:active-removed", provider: .codex,
+                                        profileName: primary ? "main" : "active-removed", source: .codexHome(primary ? main : profile))
+        let store = UsageStore(providers: [.codex: CodexProvider()], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        var failed = false
+        #if COORDINATED_CODEX_REMOVAL
+        if !synchronous {
+            let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+                store.removeAccount(id: account.id) { continuation.resume(returning: $0) }
+            }
+            if case .failure = result { failed = true }
+        } else {
+            do { try store.removeAccount(id: account.id) } catch { failed = true }
+        }
+        #else
+        do { try store.removeAccount(id: account.id) } catch { failed = true }
+        #endif
+        if refusesQuit || synchronous {
+            try expect(failed && CodexAuthSwap.isSwapped && CodexProvider.readAuth(codexHome: main)?.accountID == "removed", "Desktop exit refusal changed the active login or deleted credentials")
+            try expect(Foundation.FileManager.default.fileExists(atPath: profile.path), "Refused removal deleted the profile")
+            return
+        }
+        // Model native persist_tokens: reload current storage, replace response
+        // tokens and save. A terminated process cannot perform this late write.
+        if Fixture.desktopRunning, let record = try CodexAuthStorage(home: main).load() {
+            var root = try JSONSerialization.jsonObject(with: record.data) as! [String: Any]
+            var tokens = root["tokens"] as! [String: Any]
+            tokens["access_token"] = "synthetic-native-removed-access"
+            tokens["refresh_token"] = "synthetic-native-removed-refresh"
+            root["tokens"] = tokens
+            try CodexAuthStorage(home: main).save(JSONSerialization.data(withJSONObject: root))
+        }
+        try expect(!failed && !Fixture.desktopRunning && Fixture.desktopStops == 1, "Removal did not wait for Desktop exit")
+        if primary {
+            try expect(CodexProvider.readAuth(codexHome: main) == nil, "Primary account was not removed")
+            try expect(CodexProvider.readAuth(codexHome: profile)?.accountID == "removed", "Primary deletion lost the selected profile's login")
+        } else {
+            try expect(CodexProvider.readAuth(codexHome: main)?.accessToken == originalMain.accessToken, "Late native refresh overwrote the restored primary login")
+            try expect(!Foundation.FileManager.default.fileExists(atPath: profile.path), "Selected profile was not removed")
+        }
+        try expect(Fixture.desktopCalls == 0 && !ClaudeCLISelection.isEnabled, "Removal launched Desktop or changed the Claude CLI setting")
+    }
+
+    @MainActor
+    private static func codexRemovalSwitchBarrier() async throws {
+        let main = CodexAuthSwap.baseHome
+        let profile = ProfileDirectories.codexRoot.appendingPathComponent("removal-barrier")
+        try Fixture.codexLogin(main, account: "main", mode: "file")
+        try Fixture.codexLogin(profile, account: "removed", mode: "file")
+        let account = DiscoveredAccount(id: "codex:removal-barrier", provider: .codex, profileName: "removal-barrier", source: .codexHome(profile))
+        try CodexAuthSwap.activate(columnID: account.id, home: profile)
+        Fixture.desktopRunning = true
+        Fixture.holdDesktopStop = true
+        let store = UsageStore(providers: [.codex: CodexProvider()], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        var removed: Result<Void, Error>?
+        #if COORDINATED_CODEX_REMOVAL
+        store.removeAccount(id: account.id) { removed = $0 }
+        #else
+        removed = Result { try store.removeAccount(id: account.id) }
+        #endif
+        try expect(removed == nil && CodexAuthSwap.isSwapped, "Removal changed credentials before Desktop exited")
+        let other = try Fixture.codexAccount("other")
+        var switched = false
+        CodexAppSwitcher().switchTo(other) { if case .success = $0 { switched = true } }
+        try expect(!switched && Fixture.desktopCalls == 0, "A concurrent switch bypassed the removal exit barrier")
+        var secondFailed = false
+        #if COORDINATED_CODEX_REMOVAL
+        store.removeAccount(id: account.id) { if case .failure = $0 { secondFailed = true } }
+        #endif
+        try expect(secondFailed, "Duplicate removal entered the same Desktop exit barrier")
+        Fixture.desktopRunning = false
+        Fixture.desktopStopCompletion?(.success(()))
+        Fixture.desktopStopCompletion = nil
+        if case .success? = removed {} else { throw Failure(description: "Removal did not complete after Desktop exit") }
+        try expect(CodexProvider.readAuth(codexHome: main)?.accountID == "main", "Removal barrier lost the primary login")
+    }
+
+    private static func codexAutoCopyback(fallback: Bool) throws {
+        let main = CodexAuthSwap.baseHome
+        let profile = ProfileDirectories.codexRoot.appendingPathComponent("auto-copyback")
+        try Fixture.codexLogin(main, account: "main", mode: "file")
+        try Fixture.codexLogin(profile, account: "profile", mode: "auto", expired: true)
+        if fallback { try Fixture.writeAuth(profile, account: "stale-other", refresh: "stale-other", expired: false) }
+        try CodexAuthSwap.activate(columnID: "codex:auto-copyback", home: profile)
+        // Native Desktop refreshed its current login while it owned the base home.
+        try Fixture.writeAuth(main, account: "profile", refresh: "native-rotated-profile", expired: false)
+        Fixture.denyCodexRead = true
+        var switched = false
+        do { try CodexAuthSwap.restoreDefault(); switched = true } catch {}
+        Fixture.denyCodexRead = false
+        let grant = CodexRenewal.refreshToken(profile.appendingPathComponent("auth.json"))
+        let orphanRoot = CodexAuthSwap.stashHome.deletingLastPathComponent()
+        let orphanCount = (try? Foundation.FileManager.default.contentsOfDirectory(at: orphanRoot, includingPropertiesForKeys: nil))?
+            .filter { $0.lastPathComponent.hasPrefix("orphaned-") }.count ?? 0
+        print("AUDIT switch accepted: \(switched), native grant returned to profile: \(grant == "native-rotated-profile"), orphan copies: \(orphanCount)")
+        try expect(!switched || grant == "native-rotated-profile", "Auto copyback mistook denied Keychain access for a replaced login and orphaned the native rotation")
     }
 
     private static func codexStoreRead(_ mode: String, missing: Bool = false, denied: Bool = false) throws {

@@ -188,6 +188,19 @@ final class UsageStore: ObservableObject {
     func removeAccount(id: String) throws {
         guard let account = accounts.first(where: { $0.id == id }) else { return }
         try AccountRemoval.remove(account)
+        finishRemoval(account)
+    }
+
+    func removeAccount(id: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard let account = accounts.first(where: { $0.id == id }) else { completion(.success(())); return }
+        AccountRemoval.remove(account) { result in
+            if case .success = result { self.finishRemoval(account) }
+            completion(result)
+        }
+    }
+
+    private func finishRemoval(_ account: DiscoveredAccount) {
+        let id = account.id
         if let claude = providers[.claude] as? ClaudeProvider,
            case .claudeKeychain = account.source {
             Task { await claude.accountRemoved(account) }
