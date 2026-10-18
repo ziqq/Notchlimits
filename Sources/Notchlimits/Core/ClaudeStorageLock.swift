@@ -6,7 +6,7 @@ import Foundation
 final class ClaudeStorageLock: @unchecked Sendable {
     enum Failure: Error { case busy, lost }
 
-    private let path: String
+    private var path: String
     private let identity: Identity
     private static let ownerAttribute = "dev.ustinoff.notchlimits.lock-owner"
     private let queue = DispatchQueue(label: "dev.ustinoff.notchlimits.claude-storage-lock")
@@ -86,6 +86,20 @@ final class ClaudeStorageLock: @unchecked Sendable {
         stateLock.lock()
         defer { stateLock.unlock() }
         return !released && !heartbeatFailed && withinLease && ownsDirectory
+    }
+
+    /// Rename a managed profile without making its pinned native locks appear
+    /// lost to heartbeat or concurrent renewal checks during removal/rollback.
+    static func moveDirectory(from: URL, to: URL, locks: [ClaudeStorageLock]) throws {
+        locks.forEach { $0.stateLock.lock() }
+        defer { locks.reversed().forEach { $0.stateLock.unlock() } }
+        guard locks.allSatisfy({ !$0.released && !$0.heartbeatFailed && $0.withinLease && $0.ownsDirectory }) else {
+            throw Failure.lost
+        }
+        try FileManager.default.moveItem(at: from, to: to)
+        for lock in locks {
+            lock.path = to.appendingPathComponent(URL(fileURLWithPath: lock.path).lastPathComponent).path
+        }
     }
 
     private var ownsDirectory: Bool {
@@ -255,6 +269,11 @@ final class ClaudeRefreshLock: @unchecked Sendable {
     }
 
     var isHeld: Bool { current.isHeld && legacy.isHeld }
+
+    func moveDirectory(from: URL, to: URL, storage: ClaudeStorageLock) throws {
+        // The legacy OAuth lock is adjacent to the profile and stays in place.
+        try ClaudeStorageLock.moveDirectory(from: from, to: to, locks: [current, storage])
+    }
 
     func onLost(_ handler: @escaping () -> Void) {
         current.onLost(handler)

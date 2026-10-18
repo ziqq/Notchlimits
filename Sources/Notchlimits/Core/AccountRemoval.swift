@@ -1,13 +1,7 @@
 import Foundation
 import Security
 
-/// Полное удаление аккаунта: стираем учётные данные, по которым он вообще
-/// обнаруживается. Claude находится по записи в Keychain, Codex — по папке с
-/// `auth.json`, поэтому и удаляем именно их.
-///
-/// Основной аккаунт и доп. профиль трогаем по-разному: у доп. профиля сносим
-/// всю папку (её целиком создавали мы), у основного — только вход
-/// (запись Keychain / `auth.json`), не задевая остальной конфиг CLI.
+/// Remove credentials and managed profile directories; preserve the main CLI config.
 enum AccountRemoval {
 
     enum Failure: LocalizedError {
@@ -21,7 +15,7 @@ enum AccountRemoval {
         }
     }
 
-    /// Доп. профиль (папку создавали мы) или основной аккаунт CLI.
+    /// An extra profile directory belongs to Notchlimits.
     static func isExtraProfile(_ account: DiscoveredAccount) -> Bool {
         switch account.source {
         case .claudeKeychain(_, let configDir):
@@ -33,17 +27,47 @@ enum AccountRemoval {
         }
     }
 
+    /// Serialize Codex removal with Desktop switching, including its exit barrier.
+    @MainActor
+    static func remove(_ account: DiscoveredAccount,
+                       completion: @escaping (Result<Void, Error>) -> Void) {
+        guard account.provider == .codex else {
+            completion(Result { try remove(account) })
+            return
+        }
+        guard !AppSwitchState.inProgress.contains(.codex) else {
+            completion(.failure(Failure.busy))
+            return
+        }
+        AppSwitchState.inProgress.insert(.codex)
+        let finish: (Result<Void, Error>) -> Void = { result in
+            defer { AppSwitchState.inProgress.remove(.codex) }
+            completion(result.flatMap { Result { try remove(account) } })
+        }
+        if touchesCodexDesktop(account) {
+            let app = CodexAppSwitcher()
+            DesktopApp.stop(bundleID: app.bundleID, appName: app.appName, completion: finish)
+        } else {
+            finish(.success(()))
+        }
+    }
+
+    private static func needsCodexRestore(_ account: DiscoveredAccount) -> Bool {
+        CodexAuthSwap.isSwapped &&
+            [CodexAuthSwap.defaultColumnID, CodexAuthSwap.activeColumnID].contains(account.id)
+    }
+
+    private static func touchesCodexDesktop(_ account: DiscoveredAccount) -> Bool {
+        [CodexAuthSwap.defaultColumnID, CodexAuthSwap.activeColumnID].contains(account.id)
+    }
+
     static func remove(_ account: DiscoveredAccount) throws {
-        let fileManager = FileManager.default
         switch account.source {
         case .claudeKeychain(let service, let configDir):
             do {
-                try ClaudeKeychain.withRemovalLock(service: service, configDir: configDir) {
-                    try deleteClaudeCredentials(service: service, configDir: configDir)
-                    // Only managed extra profiles belong to us; preserve the main CLI config.
-                    if let configDir,
-                       configDir.path.hasPrefix(ProfileDirectories.claudeRoot.path + "/") {
-                        try? fileManager.removeItem(at: configDir)
+                try ClaudeKeychain.withRemovalLock(service: service, configDir: configDir) { move in
+                    try withProfileDirectory(configDir, root: ProfileDirectories.claudeRoot, move: move) { directory in
+                        try deleteClaudeCredentials(service: service, configDir: directory)
                     }
                     ClaudeAppSwitcher.accountRemoved(columnID: account.id)
                 }
@@ -52,20 +76,41 @@ enum AccountRemoval {
             }
 
         case .codexHome(let url):
-            // Вход удаляемого аккаунта может быть подменён в ~/.codex —
-            // сперва раскладываем всё по местам.
-            if CodexAuthSwap.isSwapped,
-               [CodexAuthSwap.defaultColumnID, CodexAuthSwap.activeColumnID].contains(account.id) {
+            // Synchronous callers must also fail safely under a running Desktop.
+            if touchesCodexDesktop(account) {
+                guard !DesktopApp.isRunning(bundleID: CodexAppSwitcher().bundleID) else { throw Failure.busy }
+            }
+            if needsCodexRestore(account) {
                 try CodexAuthSwap.restoreDefault()
             }
-            try CodexAuthSwap.removeAuth(home: url)
-            if url.path.hasPrefix(ProfileDirectories.codexRoot.path + "/") {
-                try fileManager.removeItem(at: url)           // доп. профиль — вся папка
+            try CodexAuthSwap.removeAuth(home: url) { storage in
+                try withProfileDirectory(url, root: ProfileDirectories.codexRoot) { directory in
+                    try storage.delete(fileHome: directory)
+                }
             }
 
         case .mock:
             break
         }
+    }
+
+    /// Free the profile name before deleting credentials. A refused move leaves
+    /// the login intact; a refused credential deletion restores the directory.
+    /// Cleanup of a hidden, logged-out directory cannot block same-name re-addition.
+    private static func withProfileDirectory(_ directory: URL?, root: URL,
+                                             move: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) },
+                                             operation: (URL?) throws -> Void) throws {
+        let manager = FileManager.default
+        guard let directory, directory.path.hasPrefix(root.path + "/"),
+              manager.fileExists(atPath: directory.path) else { try operation(directory); return }
+        let removed = directory.deletingLastPathComponent()
+            .appendingPathComponent(".removed-" + UUID().uuidString, isDirectory: true)
+        try move(directory, removed)
+        do { try operation(removed) } catch {
+            try move(removed, directory)
+            throw error
+        }
+        try? manager.removeItem(at: removed)
     }
 
     private static func deleteClaudeCredentials(service: String, configDir: URL?) throws {

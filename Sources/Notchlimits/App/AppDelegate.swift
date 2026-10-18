@@ -74,12 +74,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let claudeProvider else { return .terminateNow }
         guard !terminationPending else { return .terminateLater }
         terminationPending = true
         Task {
-            let ready = await claudeProvider.prepareForTermination()
+            async let claudeReady = claudeProvider?.prepareForTermination() ?? true
+            async let codexReady = CodexRenewal.shared.prepareForTermination()
+            let results = await (claudeReady, codexReady)
+            let ready = results.0 && results.1
             if !ready {
+                await claudeProvider?.cancelTermination()
+                await CodexRenewal.shared.cancelTermination()
                 let alert = NSAlert()
                 alert.messageText = L.t("error.pendingCredentials")
                 alert.informativeText = L.t("error.keychainWrite")
@@ -377,17 +381,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cancelButton.keyEquivalent = "\r"
         guard runModalAbovePanel(alert) == .alertFirstButtonReturn else { return }
 
-        do {
-            if url.path.hasPrefix(ProfileDirectories.codexRoot.path + "/") {
-                try AccountRemoval.remove(DiscoveredAccount(
-                    id: CodexAuthSwap.profileColumnID(url.lastPathComponent), provider: .codex,
-                    profileName: url.lastPathComponent, source: .codexHome(url)))
-            } else {
-                try FileManager.default.removeItem(at: url)
+        if url.path.hasPrefix(ProfileDirectories.codexRoot.path + "/") {
+            AccountRemoval.remove(DiscoveredAccount(
+                id: CodexAuthSwap.profileColumnID(url.lastPathComponent), provider: .codex,
+                profileName: url.lastPathComponent, source: .codexHome(url))) { result in
+                switch result {
+                case .success: self.store.rediscover(force: true)
+                case .failure(let error): self.errorAlert(L.t("remove.failed.title"), error)
+                }
             }
-            store.rediscover(force: true)
-        } catch {
-            errorAlert(L.t("remove.failed.title"), error)
+        } else {
+            do {
+                try FileManager.default.removeItem(at: url)
+                store.rediscover(force: true)
+            } catch {
+                errorAlert(L.t("remove.failed.title"), error)
+            }
         }
     }
 
@@ -408,10 +417,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard runModalAbovePanel(alert) == .alertFirstButtonReturn else { return }
 
-        do {
-            try store.removeAccount(id: id)
-        } catch {
-            errorAlert(L.t("remove.failed.title"), error)
+        store.removeAccount(id: id) { result in
+            if case .failure(let error) = result { self.errorAlert(L.t("remove.failed.title"), error) }
         }
     }
 

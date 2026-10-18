@@ -126,12 +126,15 @@ actor CodexRenewal {
     private var attempts: [String: Result] = [:]
     /// Живая копия после ротации, если запись auth.json не удалась.
     private var pending: [String: Pending] = [:]
+    private var inFlight: Set<UUID> = []
+    private var terminating = false
 
     /// `force` — продлить, даже если срок ещё не подошёл (usage ответил 401).
     func renew(columnID: String, home: URL, force: Bool) async -> Result {
         if let saved = pending[columnID] {
             if let result = persist(saved, columnID: columnID) { return result }
         }
+        guard !terminating else { return .skipped }
         let renewal: CodexAuthSwap.Renewal
         do {
             guard let source = try CodexAuthSwap.beginRenewal(columnID: columnID, home: home) else { return .skipped }
@@ -147,6 +150,8 @@ actor CodexRenewal {
         else { return .skipped }
         if let result = attempts[refreshToken] { return result }
         attempts[refreshToken] = .unavailable
+        inFlight.insert(renewal.id)
+        defer { inFlight.remove(renewal.id) }
 
         let response = await CodexOAuth.refresh(refreshToken: refreshToken)
         guard CodexAuthSwap.isCurrent(renewal) else { return .skipped }
@@ -172,6 +177,22 @@ actor CodexRenewal {
             return .uncertain
         }
     }
+
+    /// Drain accepted refresh requests and retry persistence without another POST.
+    /// Keep the process alive if the only rotated grant is still in memory.
+    func prepareForTermination(timeout: TimeInterval = 25) async -> Bool {
+        terminating = true
+        let deadline = Date().addingTimeInterval(timeout)
+        while !inFlight.isEmpty || !pending.isEmpty {
+            for (columnID, saved) in pending { _ = persist(saved, columnID: columnID) }
+            if inFlight.isEmpty && pending.isEmpty { break }
+            guard Date() < deadline else { terminating = false; return false }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return true
+    }
+
+    func cancelTermination() { terminating = false }
 
     /// A changed login or retired generation discards only its own pending response.
     private func persist(_ saved: Pending, columnID: String) -> Result? {

@@ -22,20 +22,22 @@ struct CodexAuthStorage {
     let home: URL
     let mode: Mode
     private var file: URL { home.appendingPathComponent("auth.json") }
+    private let account: String
     private var query: [String: Any] {
-        let path = home.resolvingSymlinksInPath().path
-        let hash = SHA256.hash(data: Data(path.utf8)).map { String(format: "%02x", $0) }.joined()
         return [kSecClass as String: kSecClassGenericPassword,
                 kSecAttrService as String: "Codex Auth",
-                kSecAttrAccount as String: "cli|" + hash.prefix(16)]
+                kSecAttrAccount as String: account]
     }
 
     init(home: URL, mode: Mode? = nil) throws {
         self.home = home
         self.mode = try mode ?? Self.configuredMode(home: home)
+        let hash = SHA256.hash(data: Data(home.resolvingSymlinksInPath().path.utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        account = "cli|" + hash.prefix(16)
     }
 
-    func load(backend: Backend? = nil) throws -> Record? {
+    func load(backend: Backend? = nil, verifyingOwner: Bool = false) throws -> Record? {
         if let backend {
             return try backend == .keyring ? loadKeyring() : loadFile()
         }
@@ -44,6 +46,9 @@ struct CodexAuthStorage {
         case .file: return try loadFile()
         case .keyring: return try loadKeyring()
         case .auto:
+            // Native reads may fall back on errors. A switch must distinguish
+            // an unavailable owner from a confirmed missing or different login.
+            if verifyingOwner { return try loadKeyring() ?? loadFile() }
             if let record = try? loadKeyring() { return record }
             return try loadFile()
         }
@@ -84,11 +89,12 @@ struct CodexAuthStorage {
         }
     }
 
-    func delete() throws {
+    func delete(fileHome: URL? = nil) throws {
         guard mode != .ephemeral else { throw Failure.ephemeral }
-        if mode == .file { try removeFile(); return }
+        let file = (fileHome ?? home).appendingPathComponent("auth.json")
+        if mode == .file { try removeFile(at: file); return }
         let backup = FileManager.default.fileExists(atPath: file.path) ? try Data(contentsOf: file) : nil
-        try removeFile()
+        try removeFile(at: file)
         do {
             let status = ClaudeKeychain.access(interactive: false) { SecItemDelete(query as CFDictionary) }
             guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.keychain(status) }
@@ -131,7 +137,8 @@ struct CodexAuthStorage {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
     }
 
-    private func removeFile() throws {
+    private func removeFile(at destination: URL? = nil) throws {
+        let file = destination ?? self.file
         if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
     }
 

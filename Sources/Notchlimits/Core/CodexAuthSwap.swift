@@ -93,7 +93,7 @@ enum CodexAuthSwap {
             throw Failure.busy
         }
         let incoming = columnID == defaultColumnID ? stashHome : home
-        let payload = try storage(at: incoming).load()?.data
+        let payload = try storage(at: incoming).load(verifyingOwner: true)?.data
         guard columnID == defaultColumnID || payload != nil else { throw Failure.missingAuth }
         try FileManager.default.createDirectory(at: baseHome, withIntermediateDirectories: true)
         try giveBackCurrent()
@@ -191,7 +191,7 @@ enum CodexAuthSwap {
     /// Вход, что сейчас в `~/.codex`, — обратно владельцу.
     private static func giveBackCurrent() throws {
         let live = try storage(at: baseHome)
-        let payload = try live.load()?.data
+        let payload = try live.load(verifyingOwner: true)?.data
         if !isSwapped {
             try FileManager.default.createDirectory(at: stashHome, withIntermediateDirectories: true)
             let stash = try CodexAuthStorage(home: stashHome, mode: live.mode)
@@ -204,7 +204,7 @@ enum CodexAuthSwap {
         }
         guard let payload, let path = UserDefaults.standard.string(forKey: activeHomeKey) else { return }
         let profile = try storage(at: URL(fileURLWithPath: path))
-        if let previous = try profile.load()?.data, accountID(payload) == accountID(previous) {
+        if let previous = try profile.load(verifyingOwner: true)?.data, accountID(payload) == accountID(previous) {
             try profile.save(payload)
         } else {
             // Retain an unexpected native login without exporting a Keychain login to plaintext.
@@ -217,11 +217,11 @@ enum CodexAuthSwap {
     static func authData(home: URL) throws -> Data? { try storage(at: home).load()?.data }
     static func hasAuth(home: URL) -> Bool { (try? storage(at: home))?.contains() ?? false }
 
-    static func removeAuth(home: URL) throws {
+    static func removeAuth(home: URL, operation: (CodexAuthStorage) throws -> Void = { try $0.delete() }) throws {
         lock.lock()
         defer { lock.unlock() }
         let key = homeKey(home)
-        try storage(at: home).delete()
+        try operation(storage(at: home))
         generations[key] = UUID()
         renewals[key] = nil
     }

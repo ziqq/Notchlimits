@@ -9,7 +9,7 @@ SOURCES = ROOT / "Sources" / "Notchlimits"
 FIXTURES = ROOT / "Tests" / "Regressions"
 
 
-def compile_fixture(directory, name, sources, flags=()):
+def compile_fixture(directory, name, sources, flags=(), extra_sources=()):
     executable = Path(directory) / name
     dependencies = []
     if any("import TOMLDecoder" in (SOURCES / source).read_text() for source in sources):
@@ -32,6 +32,7 @@ def compile_fixture(directory, name, sources, flags=()):
         *flags,
         *dependencies,
         *(str(SOURCES / source) for source in sources),
+        *map(str, extra_sources),
         str(FIXTURES / f"{name}.swift"), "-o", str(executable),
     ]
     result = subprocess.run(command, capture_output=True, text=True, timeout=120)
