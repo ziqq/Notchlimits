@@ -51,6 +51,21 @@ final class NSAlert {
     var terminationPending = false
     func runModalAbovePanel(_ alert: NSAlert) {}
 ''' + delegate[start:end] + "\n}\n")
+        # The unfinished-profile menu must never offer the physical native home.
+        start = delegate.index("    private func orphanProfiles(")
+        end = delegate.index("{", start) + 1
+        depth = 1
+        while depth:
+            depth += (delegate[end] == "{") - (delegate[end] == "}")
+            end += 1
+        menu = pathlib.Path(cls.build.name) / "ProfileMenu.swift"
+        menu.write_text('''
+import Foundation
+@MainActor final class RegressionProfileMenu {
+    let store: UsageStore
+    init(store: UsageStore) { self.store = store }
+    func profiles() -> [(label: String, url: URL)] { orphanProfiles() }
+''' + delegate[start:end] + "\n}\n")
         cls.executable = compile_fixture(cls.build.name, "Authentication", [
             "Model/Models.swift", "Model/Account.swift", "Core/JWT.swift",
             *(["Core/ClaudeStorageLock.swift"] if (SOURCES / "Core/ClaudeStorageLock.swift").exists() else []),
@@ -62,7 +77,7 @@ final class NSAlert {
             "Providers/ClaudeKeychain.swift", "Providers/ClaudeOAuth.swift",
             "Providers/ClaudeProvider.swift", "Providers/CodexOAuth.swift",
             "Providers/CodexProvider.swift", "Providers/RealDiscovery.swift",
-        ], flags, extra_sources=[termination])
+        ], flags, extra_sources=[termination, menu])
 
     def check_scenario(self, scenario):
         # Match the canonical home URLs returned by macOS directory discovery.
@@ -668,6 +683,12 @@ final class NSAlert {
 
     def test_codex_legacy_canonical_base_alias_keeps_current_native_grant(self):
         self.check_scenario("codex-canonical-base-legacy")
+
+    def test_codex_native_base_without_auth_is_not_an_unfinished_profile(self):
+        self.check_scenario("codex-canonical-base-menu")
+
+    def test_codex_usage_and_switch_share_a_consistent_credential_snapshot(self):
+        self.check_scenario("codex-usage-switch-snapshot")
 
     def test_codex_save_prepare_file(self):
         self.check_scenario("codex-save-prepare-file")

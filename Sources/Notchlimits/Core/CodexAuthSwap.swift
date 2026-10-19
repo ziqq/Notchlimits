@@ -221,6 +221,15 @@ enum CodexAuthSwap {
     }
 
     static func authData(home: URL) throws -> Data? { try storage(at: home).load()?.data }
+
+    /// Resolve the column and read its credentials in one snapshot. A switch
+    /// must not replace base credentials between routing and the file/Keychain read.
+    static func authData(columnID: String, home: URL) throws -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        return try storage(at: liveHome(columnID: columnID, home: home)).load()?.data
+    }
+
     static func hasAuth(home: URL) -> Bool { (try? storage(at: home))?.contains() ?? false }
 
     static func removeAuth(home: URL, operation: (CodexAuthStorage) throws -> Void = { try $0.delete() }) throws {
