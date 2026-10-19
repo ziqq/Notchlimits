@@ -57,6 +57,9 @@ enum CodexAuthSwap {
         guard let id = UserDefaults.standard.string(forKey: activeIDKey) else { return defaultColumnID }
         // The saved path identifies the owner even when its legacy ID collided.
         if let path = UserDefaults.standard.string(forKey: activeHomeKey) {
+            // Older versions could select a duplicate of the physical base home.
+            // Its backup is the same grant, so it must never become a sleeping login.
+            if isBaseHome(URL(fileURLWithPath: path)) { return defaultColumnID }
             let name = URL(fileURLWithPath: path).lastPathComponent
             if name.hasPrefix("profile:"), id == "codex:\(name)" {
                 return profileColumnID(name)
@@ -87,6 +90,7 @@ enum CodexAuthSwap {
         defer { lock.unlock() }
         let base = try storage(at: baseHome)
         guard base.mode != .ephemeral else { throw CodexAuthStorage.Failure.ephemeral }
+        guard columnID == defaultColumnID || !isBaseHome(home) else { throw Failure.busy }
         guard columnID != activeColumnID else { return }
         guard renewals[homeKey(home)] == nil,
               !renewals.values.contains(where: { $0.columnID == columnID || $0.columnID == activeColumnID }) else {
@@ -125,7 +129,9 @@ enum CodexAuthSwap {
         let live = liveHome(columnID: columnID, home: home)
         guard !isBaseHome(live) else { return nil }
         let source = try storage(at: live)
-        guard let record = try source.load() else { return nil }
+        // Usage may read a native auto fallback, but a refresh must not spend
+        // its stale grant while the preferred Keychain owner is unavailable.
+        guard let record = try source.load(verifyingOwner: true) else { return nil }
         let renewal = Renewal(columnID: columnID, key: key, generation: generations[key],
                               storage: source, record: record)
         renewals[key] = renewal
