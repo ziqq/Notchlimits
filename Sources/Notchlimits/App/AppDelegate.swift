@@ -361,7 +361,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 && !codexIds.contains(CodexAuthSwap.profileColumnID(dir.lastPathComponent)) {
             result.append(("CODEX · \(dir.lastPathComponent)", dir))
         }
-        for dir in ProfileDirectories.claudeProfiles() where !claudeDirs.contains(dir.path) {
+        for dir in ProfileDirectories.claudeProfiles()
+            where !ProfileDirectories.isClaudeBase(dir) && !claudeDirs.contains(dir.path) {
             result.append(("CLAUDE · \(dir.lastPathComponent)", dir))
         }
         return result
@@ -393,6 +394,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } else {
             do {
+                guard !ProfileDirectories.isClaudeBase(url) else { throw AccountRemoval.Failure.busy }
                 try FileManager.default.removeItem(at: url)
                 store.rediscover(force: true)
             } catch {

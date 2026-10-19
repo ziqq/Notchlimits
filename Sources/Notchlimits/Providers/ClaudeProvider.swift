@@ -169,7 +169,7 @@ actor ClaudeProvider: UsageProvider {
                 return nil
             }
         }
-        guard let credentials = await read(service, interactive: false) else {
+        guard let credentials = await read(service, interactive: false, verifyingOwner: true) else {
             issues[service] = L.t("error.keychainWrite")
             return nil
         }
@@ -320,9 +320,10 @@ actor ClaudeProvider: UsageProvider {
     }
 
     /// SecItemCopyMatching блокирует поток, пока пользователь отвечает на диалог.
-    private func read(_ service: String, interactive: Bool = true) async -> ClaudeKeychain.Credentials? {
+    private func read(_ service: String, interactive: Bool = true,
+                      verifyingOwner: Bool = false) async -> ClaudeKeychain.Credentials? {
         await Task.detached(priority: .utility) {
-            ClaudeKeychain.credentials(service: service, interactive: interactive)
+            ClaudeKeychain.credentials(service: service, interactive: interactive, verifyingOwner: verifyingOwner)
         }.value
     }
 
