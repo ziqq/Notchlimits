@@ -218,6 +218,11 @@ final class UsageStore: ObservableObject {
             UserDefaults.standard.set(Array(hidden), forKey: "hiddenColumns")
         }
 
+        // Retire the old column before discovery can observe a same-name login
+        // created while its previous directory was staged for deletion.
+        accounts.removeAll { $0.id == id }
+        columns.removeAll { $0.id == id }
+        onColumnsChanged?()
         rediscover(force: true)
     }
 

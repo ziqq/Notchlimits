@@ -20,7 +20,7 @@ enum AccountRemoval {
     static func isExtraProfile(_ account: DiscoveredAccount) -> Bool {
         switch account.source {
         case .claudeKeychain(_, let configDir):
-            return configDir != nil
+            return configDir.map { !ProfileDirectories.isClaudeBase($0) } ?? false
         case .codexHome(let url):
             return !CodexAuthSwap.isBaseHome(url) && url.path.hasPrefix(ProfileDirectories.codexRoot.path + "/")
         case .mock:
@@ -65,6 +65,9 @@ enum AccountRemoval {
     static func remove(_ account: DiscoveredAccount) throws {
         switch account.source {
         case .claudeKeychain(let service, let configDir):
+            // A stale duplicate must not remove the physical main CLI home.
+            if service != ClaudeKeychain.baseService, let configDir,
+               ProfileDirectories.isClaudeBase(configDir) { throw Failure.busy }
             do {
                 try ClaudeKeychain.withRemovalLock(service: service, configDir: configDir) { move in
                     try withProfileDirectory(configDir, root: ProfileDirectories.claudeRoot, move: move) { directory in

@@ -83,7 +83,8 @@ enum ClaudeKeychain {
         }
         // Native macOS login falls back to this file when Keychain rejects a write.
         // Discovery inspects metadata only, just like Keychain enumeration.
-        let directories = [ProfileDirectories.home.appendingPathComponent(".claude")] + ProfileDirectories.claudeProfiles()
+        let directories = [ProfileDirectories.home.appendingPathComponent(".claude")]
+            + ProfileDirectories.claudeProfiles().filter { !ProfileDirectories.isClaudeBase($0) }
         for directory in directories {
             let file = directory.appendingPathComponent(".credentials.json")
             guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path) else { continue }
@@ -136,8 +137,8 @@ enum ClaudeKeychain {
     }
 
     /// Чтение секрета. Блокирующий вызов — только вне главного потока.
-    static func credentials(service: String, interactive: Bool = true) -> Credentials? {
-        let item = readItem(service: service, interactive: interactive)
+    static func credentials(service: String, interactive: Bool = true, verifyingOwner: Bool = false) -> Credentials? {
+        let item = readItem(service: service, interactive: interactive, verifyingOwner: verifyingOwner)
         guard let json = item.json, var credentials = parse(json) else { return nil }
         credentials.backend = item.backend
         return credentials
@@ -162,7 +163,8 @@ enum ClaudeKeychain {
     }
 
     private static func readItem(service: String, interactive: Bool,
-                                 backend: Backend? = nil) -> (json: [String: Any]?, status: OSStatus, backend: Backend) {
+                                 backend: Backend? = nil,
+                                 verifyingOwner: Bool = false) -> (json: [String: Any]?, status: OSStatus, backend: Backend) {
         if backend == .file { return readFile(service: service) }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -173,7 +175,10 @@ enum ClaudeKeychain {
         var result: CFTypeRef?
         let status = access(interactive: interactive) { SecItemCopyMatching(query as CFDictionary, &result) }
         let json = (result as? Data).flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
-        if backend == nil, status != errSecSuccess || json == nil {
+        // Usage may follow the native fallback on read errors. Refresh must
+        // establish that the preferred owner is absent before spending a file grant.
+        if backend == nil, status != errSecSuccess || json == nil,
+           !verifyingOwner || status == errSecItemNotFound {
             let file = readFile(service: service)
             if file.json != nil { return file }
         }
@@ -277,7 +282,7 @@ enum ClaudeKeychain {
     static func canWrite(service: String, renewalLock: ClaudeRefreshLock? = nil) -> Bool {
         guard let storageLock = storageLock(service: service, createParent: renewalLock == nil) else { return false }
         defer { storageLock.release() }
-        let item = readItem(service: service, interactive: renewalLock == nil)
+        let item = readItem(service: service, interactive: renewalLock == nil, verifyingOwner: true)
         guard let json = item.json,
               let data = try? JSONSerialization.data(withJSONObject: json) else { return false }
         return write(data, service: service, backend: item.backend, storageLock: storageLock, renewalLock: renewalLock)
@@ -431,6 +436,10 @@ enum ProfileDirectories {
     static var claudeRoot: URL { home.appendingPathComponent(".claude-profiles") }
     static var codexRoot: URL { home.appendingPathComponent(".codex-profiles") }
 
+    static func isClaudeBase(_ directory: URL) -> Bool {
+        directory.resolvingSymlinksInPath().path == home.appendingPathComponent(".claude").resolvingSymlinksInPath().path
+    }
+
     static func claudeProfiles() -> [URL] {
         // Foundation enumeration can reject a symlink as its root. Enumerate
         // the physical directory but retain the original CLI config spelling.
@@ -438,7 +447,11 @@ enum ProfileDirectories {
             claudeRoot.appendingPathComponent($0.lastPathComponent, isDirectory: true)
         }
     }
-    static func codexProfiles() -> [URL] { subdirectories(of: codexRoot) }
+    static func codexProfiles() -> [URL] {
+        subdirectories(of: codexRoot.resolvingSymlinksInPath()).map {
+            codexRoot.appendingPathComponent($0.lastPathComponent, isDirectory: true)
+        }
+    }
 
     static func subdirectories(of root: URL) -> [URL] {
         guard let entries = try? FileManager.default.contentsOfDirectory(

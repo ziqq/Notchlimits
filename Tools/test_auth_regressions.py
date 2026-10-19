@@ -85,6 +85,33 @@ import Foundation
             result = run_fixture(self.executable, scenario, pathlib.Path(directory))
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_claude_canonical_main_has_one_file_owner(self):
+        self.check_scenario("claude-canonical-main-discovery")
+
+    def test_claude_canonical_main_refuses_stale_duplicate_removal(self):
+        self.check_scenario("claude-canonical-main-stale-removal")
+
+    def test_claude_defers_fallback_refresh_until_keychain_owner_recovers(self):
+        self.check_scenario("claude-owner-denied-fallback")
+
+    def test_claude_preflight_defers_refresh_when_keychain_becomes_unavailable(self):
+        self.check_scenario("claude-owner-preflight-denied")
+
+    def test_claude_does_not_refresh_fallback_over_malformed_keychain_owner(self):
+        self.check_scenario("claude-owner-malformed-fallback")
+
+    def test_codex_symlinked_root_preserves_keyring_lifecycle(self):
+        self.check_scenario("codex-root-symlink-keyring")
+
+    def test_codex_symlinked_root_preserves_file_lifecycle(self):
+        self.check_scenario("codex-root-symlink-file")
+
+    def test_codex_readd_during_removal_gets_new_usage_generation(self):
+        self.check_scenario("codex-readd-during-removal-usage")
+
+    def test_claude_readd_during_removal_gets_new_usage_generation(self):
+        self.check_scenario("claude-readd-during-removal-usage")
+
     def test_default_profile_has_its_own_identity(self):
         self.check_scenario("profile-identity")
 
