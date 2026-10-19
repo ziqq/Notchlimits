@@ -644,3 +644,54 @@ final class NSAlert {
 
     def test_codex_removal_switch_barrier(self):
         self.check_scenario("codex-removal-switch-barrier")
+
+    def test_codex_auto_renew_unavailable(self):
+        self.check_scenario("codex-auto-renew-unavailable")
+
+    def test_codex_auto_force_unavailable(self):
+        self.check_scenario("codex-auto-force-unavailable")
+
+    def test_codex_auto_renew_recovery(self):
+        self.check_scenario("codex-auto-renew-recovery")
+
+    def test_codex_canonical_base_keyring(self):
+        self.check_scenario("codex-canonical-base-keyring")
+
+    def test_codex_canonical_base_file(self):
+        self.check_scenario("codex-canonical-base-file")
+
+    def test_codex_canonical_base_direct(self):
+        self.check_scenario("codex-canonical-base-direct")
+
+    def test_codex_canonical_base_activation_is_rejected(self):
+        self.check_scenario("codex-canonical-base-activate")
+
+    def test_codex_legacy_canonical_base_alias_keeps_current_native_grant(self):
+        self.check_scenario("codex-canonical-base-legacy")
+
+    def test_codex_save_prepare_file(self):
+        self.check_scenario("codex-save-prepare-file")
+
+    def test_codex_save_prepare_auto(self):
+        self.check_scenario("codex-save-prepare-auto")
+
+    def test_claude_rollback_collision(self):
+        self.check_scenario("claude-rollback-collision")
+
+    def test_codex_rollback_collision(self):
+        self.check_scenario("codex-rollback-collision")
+
+    def test_claude_rollback_pending_collision(self):
+        self.check_scenario("claude-rollback-pending-collision")
+
+    def test_codex_rollback_pending_collision(self):
+        self.check_scenario("codex-rollback-pending-collision")
+
+    def test_claude_rollback_replacement(self):
+        self.check_scenario("claude-rollback-replacement")
+
+    def test_codex_rollback_replacement(self):
+        self.check_scenario("codex-rollback-replacement")
+
+    def test_claude_rollback_native_owner(self):
+        self.check_scenario("claude-rollback-native-owner")

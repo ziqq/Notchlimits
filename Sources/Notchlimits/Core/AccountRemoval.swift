@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import Darwin
 
 /// Remove credentials and managed profile directories; preserve the main CLI config.
 enum AccountRemoval {
@@ -21,7 +22,7 @@ enum AccountRemoval {
         case .claudeKeychain(_, let configDir):
             return configDir != nil
         case .codexHome(let url):
-            return url.path.hasPrefix(ProfileDirectories.codexRoot.path + "/")
+            return !CodexAuthSwap.isBaseHome(url) && url.path.hasPrefix(ProfileDirectories.codexRoot.path + "/")
         case .mock:
             return false
         }
@@ -76,6 +77,10 @@ enum AccountRemoval {
             }
 
         case .codexHome(let url):
+            // Discovery presents a canonical base home only as primary. Reject
+            // stale duplicate columns rather than deleting another logical owner.
+            let isBase = CodexAuthSwap.isBaseHome(url)
+            guard !isBase || account.id == CodexAuthSwap.defaultColumnID else { throw Failure.busy }
             // Synchronous callers must also fail safely under a running Desktop.
             if touchesCodexDesktop(account) {
                 guard !DesktopApp.isRunning(bundleID: CodexAppSwitcher().bundleID) else { throw Failure.busy }
@@ -84,8 +89,12 @@ enum AccountRemoval {
                 try CodexAuthSwap.restoreDefault()
             }
             try CodexAuthSwap.removeAuth(home: url) { storage in
-                try withProfileDirectory(url, root: ProfileDirectories.codexRoot) { directory in
-                    try storage.delete(fileHome: directory)
+                if isBase {
+                    try storage.delete()
+                } else {
+                    try withProfileDirectory(url, root: ProfileDirectories.codexRoot) { directory in
+                        try storage.delete(fileHome: directory)
+                    }
                 }
             }
 
@@ -107,10 +116,48 @@ enum AccountRemoval {
             .appendingPathComponent(".removed-" + UUID().uuidString, isDirectory: true)
         try move(directory, removed)
         do { try operation(removed) } catch {
-            try move(removed, directory)
+            do { try move(removed, directory) } catch let rollback as NSError {
+                guard rollback.domain == NSCocoaErrorDomain,
+                      rollback.code == CocoaError.fileWriteFileExists.rawValue else { throw rollback }
+                // A client may bootstrap the original directory while waiting
+                // for OAuth locks. Restore missing entries atomically, keeping
+                // replacement credentials and all native lock owners untouched.
+                try restoreContents(from: removed, to: directory)
+            }
             throw error
         }
         try? manager.removeItem(at: removed)
+    }
+
+    private static func restoreContents(from source: URL, to destination: URL) throws {
+        let sourceFD = open(source.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard sourceFD >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { _ = close(sourceFD) }
+        let destinationFD = open(destination.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard destinationFD >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { _ = close(destinationFD) }
+        // Recover access before unrelated profile metadata can fail to merge.
+        let authFiles: Set<String> = ["auth.json", ".credentials.json", "config.toml"]
+        let names = try FileManager.default.contentsOfDirectory(atPath: source.path).sorted {
+            if authFiles.contains($0) != authFiles.contains($1) { return authFiles.contains($0) }
+            return $0 < $1
+        }
+        for name in names {
+            // Borrowed renewal leases still own these in the staged directory;
+            // the adjacent legacy OAuth lock continues to fence native writers.
+            if name.hasPrefix(".oauth_refresh.lock") || name.hasPrefix(".storage-write.lock") { continue }
+            if renameatx_np(sourceFD, name, destinationFD, name, UInt32(RENAME_EXCL)) == 0 { continue }
+            guard errno == EEXIST else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            let original = source.appendingPathComponent(name), current = destination.appendingPathComponent(name)
+            let old = try original.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            let new = try current.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            if old.isDirectory == true, old.isSymbolicLink != true,
+               new.isDirectory == true, new.isSymbolicLink != true {
+                try restoreContents(from: original, to: current)
+            }
+            // Existing files belong to the concurrent client. Retain conflicting
+            // backups in the hidden directory instead of overwriting either login.
+        }
     }
 
     private static func deleteClaudeCredentials(service: String, configDir: URL?) throws {

@@ -133,8 +133,17 @@ struct CodexAuthStorage {
     }
 
     private func saveFile(_ data: Data) throws {
-        try data.write(to: file, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        let prepared = home.appendingPathComponent(".auth-" + UUID().uuidString + ".json")
+        guard FileManager.default.createFile(atPath: prepared.path, contents: nil,
+                                              attributes: [.posixPermissions: 0o600]) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        defer { try? FileManager.default.removeItem(at: prepared) }
+        // Finish every fallible preparation before publishing credentials. A
+        // chmod failure must not change the login while its owner marker stays old.
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: prepared.path)
+        try data.write(to: prepared)
+        guard rename(prepared.path, file.path) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
     }
 
     private func removeFile(at destination: URL? = nil) throws {

@@ -15,6 +15,10 @@ private enum Fixture {
     static var keychainWrites = 0
     static var codexKeychain: [String: Data] = [:]
     static var denyCodexRead = false
+    static var codexHome: String?
+    static var denyCredentialChmodHome: String?
+    static var beforeCredentialDelete: (() -> Void)?
+    static var rejectSpentRefresh = false
     static var denyCodexWrite = false
     static var denyCodexDelete = false
     static var denyCredentialFileRemoval = false
@@ -311,6 +315,9 @@ private final class FixtureFileManager: Foundation.FileManager, @unchecked Senda
 
 
     override func setAttributes(_ attributes: [FileAttributeKey: Any], ofItemAtPath path: String) throws {
+        if URL(fileURLWithPath: path).deletingLastPathComponent().path == Fixture.denyCredentialChmodHome {
+            throw CocoaError(.fileWriteNoPermission)
+        }
         if path.hasSuffix("/.credentials.json"), Fixture.failClaudeFileWrite, Fixture.refreshCalls > 0 {
             Fixture.lock.lock()
             Fixture.claudeFileWriteFailures += 1
@@ -361,9 +368,11 @@ enum ProcessInfo {
     static let processInfo = FixtureProcessInfo()
     struct FixtureProcessInfo {
         var environment: [String: String] {
-            Foundation.ProcessInfo.processInfo.environment.filter {
+            var overrides = ["SHELL": Fixture.shell]
+            if let home = Fixture.codexHome { overrides["CODEX_HOME"] = home }
+            return Foundation.ProcessInfo.processInfo.environment.filter {
                 !["CODEX_HOME", "ZDOTDIR"].contains($0.key)
-            }.merging(["SHELL": Fixture.shell]) { _, fixture in fixture }
+            }.merging(overrides) { _, fixture in fixture }
         }
     }
 }
@@ -524,6 +533,9 @@ func SecKeychainSetUserInteractionAllowed(_ state: Bool) -> OSStatus {
 }
 
 func SecItemDelete(_ query: CFDictionary) -> OSStatus {
+    let boundary = Fixture.beforeCredentialDelete
+    Fixture.beforeCredentialDelete = nil
+    boundary?()
     Fixture.lock.lock()
     defer { Fixture.lock.unlock() }
     if Fixture.slowKeychainDelete { Thread.sleep(forTimeInterval: 6) }
@@ -556,6 +568,9 @@ struct HTTPClient {
         Fixture.didRefresh()
         Fixture.allowHTTPRetry = retry
         Fixture.refreshInput = json["refresh_token"] as? String ?? ""
+        if Fixture.rejectSpentRefresh && Fixture.refreshInput == "synthetic-already-spent" {
+            return .success(Response(status: 400, data: Data(#"{"error":"refresh_token_reused"}"#.utf8), retryAfter: nil))
+        }
         Fixture.oauthHeldDuringPOST = Fixture.holdsOAuthLocks
         if Fixture.replaceOAuthDuringPOST {
             let path = Fixture.oauthLock.path
@@ -702,6 +717,23 @@ enum Authentication {
             case "codex-removal-quit-refused": try await codexActiveRemoval(refusesQuit: true)
             case "codex-removal-sync-guard": try await codexActiveRemoval(synchronous: true)
             case "codex-removal-switch-barrier": try await codexRemovalSwitchBarrier()
+            case "codex-auto-renew-unavailable": try await codexAutoRenewalUnavailable()
+            case "codex-auto-force-unavailable": try await codexAutoRenewalUnavailable(force: true)
+            case "codex-auto-renew-recovery": try await codexAutoRenewalUnavailable(recovery: true)
+            case "codex-canonical-base-keyring": try await codexCanonicalBaseRemoval()
+            case "codex-canonical-base-file": try await codexCanonicalBaseRemoval(mode: "file")
+            case "codex-canonical-base-direct": try await codexCanonicalBaseRemoval(direct: true)
+            case "codex-canonical-base-activate": try codexCanonicalBaseActivation()
+            case "codex-canonical-base-legacy": try await codexLegacyBaseAlias()
+            case "codex-save-prepare-file": try codexSavePreparationFailure(auto: false)
+            case "codex-save-prepare-auto": try codexSavePreparationFailure(auto: true)
+            case "claude-rollback-collision": try await removalRollbackCollision(codex: false)
+            case "codex-rollback-collision": try await removalRollbackCollision(codex: true)
+            case "claude-rollback-pending-collision": try await removalRollbackCollision(codex: false, pending: true)
+            case "codex-rollback-pending-collision": try await removalRollbackCollision(codex: true, pending: true)
+            case "claude-rollback-replacement": try await removalRollbackCollision(codex: false, replacement: true)
+            case "codex-rollback-replacement": try await removalRollbackCollision(codex: true, replacement: true)
+            case "claude-rollback-native-owner": try await removalRollbackCollision(codex: false, nativeLock: true)
             case "profile-identity": try profileIdentity()
             case "profile-collision": try profileCollision()
             case "profile-active-migration": try profileActiveMigration()
@@ -1401,6 +1433,239 @@ enum Authentication {
             .filter { $0.lastPathComponent.hasPrefix("orphaned-") }.count ?? 0
         print("AUDIT switch accepted: \(switched), native grant returned to profile: \(grant == "native-rotated-profile"), orphan copies: \(orphanCount)")
         try expect(!switched || grant == "native-rotated-profile", "Auto copyback mistook denied Keychain access for a replaced login and orphaned the native rotation")
+    }
+
+
+    private static func codexAutoRenewalUnavailable(force: Bool = false, recovery: Bool = false) async throws {
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("auto-unavailable")
+        try Fixture.codexLogin(home, account: "owner", mode: "auto", expired: recovery)
+        let secure = Fixture.codexKeychain[Fixture.codexKey(home)]!
+        try Fixture.writeAuth(home, account: "owner", refresh: "synthetic-already-spent", expired: !force)
+        Fixture.rejectSpentRefresh = true
+        Fixture.denyCodexRead = true
+        Fixture.usageStatus = force ? 401 : 200
+        let account = DiscoveredAccount(id: "codex:auto-unavailable", provider: .codex,
+                                        profileName: "auto-unavailable", source: .codexHome(home))
+        let provider = CodexProvider()
+        _ = await provider.fetch(account)
+        let deferred = Fixture.refreshCalls == 0
+        Fixture.denyCodexRead = false
+        try expect(deferred && Fixture.codexKeychain[Fixture.codexKey(home)] == secure,
+                   "Auto renewal spent a stale fallback grant while the preferred Keychain owner was unavailable")
+        Fixture.usageStatus = 200
+        _ = await provider.fetch(account)
+        try expect(Fixture.refreshCalls == (recovery ? 1 : 0), "Unlocking Keychain did not resume renewal of its own grant")
+        if recovery {
+            try expect(CodexRenewal.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated",
+                       "The Keychain owner's rotation was not persisted after recovery")
+        }
+    }
+
+    @MainActor
+    private static func codexCanonicalBaseRemoval(mode: String = "keyring", direct: Bool = false) async throws {
+        let owner = ProfileDirectories.codexRoot.appendingPathComponent("base-owner")
+        try Fixture.codexLogin(owner, account: "primary", mode: mode)
+        if direct { Fixture.codexHome = owner.path }
+        else { try Foundation.FileManager.default.createSymbolicLink(at: CodexAuthSwap.baseHome, withDestinationURL: owner) }
+        let project = owner.appendingPathComponent("state_5.sqlite")
+        try Data("synthetic-projects-and-threads".utf8).write(to: project)
+        let primary = DiscoveredAccount(id: CodexAuthSwap.defaultColumnID, provider: .codex,
+                                       profileName: "main", source: .codexHome(CodexAuthSwap.baseHome))
+        let duplicate = DiscoveredAccount(id: "codex:base-owner", provider: .codex,
+                                         profileName: "base-owner", source: .codexHome(owner))
+        let store = UsageStore(providers: [.codex: CodexProvider()], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        let onlyPrimary = store.discoveredAccounts.filter { $0.provider == .codex }.map(\.id) == [primary.id]
+        Fixture.desktopRunning = true
+        let original = try CodexAuthSwap.authData(home: owner)
+        // A stale menu or direct caller must not treat the physical base as an extra profile.
+        var refused = false
+        do { try AccountRemoval.remove(duplicate) } catch { refused = true }
+        let retained = try CodexAuthSwap.authData(home: owner) == original
+        try expect(refused && retained && Foundation.FileManager.default.fileExists(atPath: project.path),
+                   "A duplicate canonical-base column deleted credentials/projects under a running Desktop")
+        try expect(onlyPrimary && !AccountRemoval.isExtraProfile(primary) && !AccountRemoval.isExtraProfile(duplicate),
+                   "The native base home was discovered/classified as an independently removable profile")
+        let result: Result<Void, Error> = await withCheckedContinuation { continuation in
+            store.removeAccount(id: primary.id) { continuation.resume(returning: $0) }
+        }
+        if case .success = result {} else { throw Failure(description: "Primary removal failed after Desktop exit") }
+        try expect(Fixture.desktopStops == 1 && !Fixture.desktopRunning && Fixture.desktopCalls == 0,
+                   "Canonical primary removal did not stop Desktop without launching it")
+        try expect(Foundation.FileManager.default.fileExists(atPath: project.path)
+                   && Foundation.FileManager.default.fileExists(atPath: owner.appendingPathComponent("config.toml").path),
+                   "Primary removal deleted projects or native configuration because CODEX_HOME was inside the managed root")
+        try expect(try CodexAuthSwap.authData(home: owner) == nil, "Primary credentials were not removed")
+    }
+
+    private static func codexCanonicalBaseActivation() throws {
+        let owner = ProfileDirectories.codexRoot.appendingPathComponent("base-owner")
+        try Fixture.codexLogin(owner, account: "primary", mode: "keyring")
+        try Foundation.FileManager.default.createSymbolicLink(at: CodexAuthSwap.baseHome, withDestinationURL: owner)
+        let original = try CodexAuthSwap.authData(home: owner)
+        var refused = false
+        do { try CodexAuthSwap.activate(columnID: "codex:base-owner", home: owner) } catch { refused = true }
+        try expect(refused && CodexAuthSwap.activeColumnID == CodexAuthSwap.defaultColumnID
+                   && CodexAuthSwap.authData(home: owner) == original,
+                   "Activation created a sleeping duplicate of the native-owned base grant")
+    }
+
+    @MainActor
+    private static func codexLegacyBaseAlias() async throws {
+        let owner = ProfileDirectories.codexRoot.appendingPathComponent("legacy-base")
+        try Fixture.codexLogin(owner, account: "primary", mode: "keyring", expired: true)
+        try Foundation.FileManager.default.createSymbolicLink(at: CodexAuthSwap.baseHome, withDestinationURL: owner)
+        let old = try CodexAuthSwap.authData(home: owner)!
+        try Fixture.codexMode(CodexAuthSwap.stashHome, "file")
+        try old.write(to: CodexAuthSwap.stashHome.appendingPathComponent("auth.json"))
+        UserDefaults.standard.set("codex:legacy-base", forKey: "codexAppAccountID")
+        UserDefaults.standard.set(owner.path, forKey: "codexAppAccountHome")
+        UserDefaults.standard.set("file", forKey: "codexAppStashStore")
+        let native = Fixture.root.appendingPathComponent("native-response")
+        try Fixture.writeAuth(native, account: "primary", refresh: "current-native-grant", expired: false)
+        Fixture.codexKeychain[Fixture.codexKey(owner)] = try Data(contentsOf: native.appendingPathComponent("auth.json"))
+        let account = DiscoveredAccount(id: CodexAuthSwap.defaultColumnID, provider: .codex,
+                                       profileName: "main", source: .codexHome(CodexAuthSwap.baseHome))
+        _ = await CodexProvider().fetch(account)
+        try expect(Fixture.refreshCalls == 0 && !CodexAuthSwap.isSwapped,
+                   "A saved canonical-base alias renewed the spent primary backup instead of using the live native home")
+        let other = try Fixture.codexAccount("real-profile")
+        guard case .codexHome(let home) = other.source else { fatalError() }
+        try CodexAuthSwap.activate(columnID: other.id, home: home)
+        try CodexAuthSwap.restoreDefault()
+        try expect(CodexRenewal.refreshToken(owner.appendingPathComponent("auth.json")) == "current-native-grant",
+                   "Recovery from a legacy base alias restored its stale backup over the current native login")
+    }
+
+    private static func codexSavePreparationFailure(auto: Bool) throws {
+        let main = CodexAuthSwap.baseHome
+        let profile = ProfileDirectories.codexRoot.appendingPathComponent("prepared-switch")
+        try Fixture.codexLogin(main, account: "main-a", mode: "file")
+        if auto { try Fixture.codexMode(main, "auto"); Fixture.denyCodexWrite = true }
+        try Fixture.codexLogin(profile, account: "profile-b", mode: "file")
+        Fixture.denyCredentialChmodHome = main.path
+        var failed = false
+        do { try CodexAuthSwap.activate(columnID: "codex:prepared-switch", home: profile) } catch { failed = true }
+        let actual = CodexProvider.readAuth(codexHome: main)?.accountID
+        let marker = CodexAuthSwap.activeColumnID
+        Fixture.denyCredentialChmodHome = nil
+        Fixture.denyCodexWrite = false
+        try CodexAuthSwap.activate(columnID: "codex:prepared-switch", home: profile)
+        try CodexAuthSwap.restoreDefault()
+        let restored = CodexProvider.readAuth(codexHome: main)?.accountID
+        print("Preparation refused: \(failed), actual owner after refusal: \(actual ?? "nil"), restored owner: \(restored ?? "nil")")
+        try expect(failed && actual == "main-a" && marker == CodexAuthSwap.defaultColumnID && restored == "main-a",
+                   "A partial credential save changed ownership before commit and retry overwrote the primary backup")
+        let leftovers = try Foundation.FileManager.default.contentsOfDirectory(atPath: main.path)
+        try expect(!leftovers.contains { $0.hasPrefix(".auth-") }, "Failed credential preparation retained temporary secrets")
+    }
+
+    @MainActor
+    private static func removalRollbackCollision(codex: Bool, pending: Bool = false,
+                                                 replacement: Bool = false, nativeLock: Bool = false) async throws {
+        let account: DiscoveredAccount
+        let home: URL
+        let claude = ClaudeProvider(), provider = CodexProvider()
+        var renewal: Task<FetchOutcome, Never>?
+        if codex {
+            home = ProfileDirectories.codexRoot.appendingPathComponent("rollback-collision")
+            try Fixture.codexLogin(home, account: "retained", mode: replacement ? "file" : "keyring", expired: pending)
+            account = DiscoveredAccount(id: "codex:rollback-collision", provider: .codex,
+                                        profileName: "rollback-collision", source: .codexHome(home))
+            if pending { Fixture.denyCodexWrite = true; _ = await provider.fetch(account) }
+            Fixture.denyCodexDelete = true
+            // A file-mode replacement needs a refused unlink instead of a Keychain error.
+            if replacement { try Fixture.codexMode(home, "auto") }
+        } else {
+            let found = try claudeFileAccount(primary: false, expired: pending)
+            account = found.0; home = found.1.deletingLastPathComponent()
+            if pending {
+                Fixture.failClaudeFileWrite = true
+                renewal = Task { await claude.fetch(account) }
+                for _ in 0..<300 {
+                    if Fixture.claudeFileWriteFailures > 0 { break }
+                    try await Task.sleep(nanoseconds: 5_000_000)
+                }
+                try expect(Fixture.claudeFileWriteFailures > 0, "Pending Claude rotation was not reached")
+            }
+            Fixture.denyKeychainDelete = true
+        }
+        let oldSettings = home.appendingPathComponent("settings.json")
+        try Data("original-settings".utf8).write(to: oldSettings)
+        let nested = home.appendingPathComponent("projects/shared", isDirectory: true)
+        try Foundation.FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try Data("old".utf8).write(to: nested.appendingPathComponent("original"))
+        try Data("old-conflict".utf8).write(to: nested.appendingPathComponent("conflict"))
+        let native = home.appendingPathComponent(".oauth_refresh.lock")
+        var nativeInode: UInt64?
+        Fixture.beforeCredentialDelete = {
+            try! Foundation.FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+            try! Data("new".utf8).write(to: nested.appendingPathComponent("conflict"))
+            try! Data("new".utf8).write(to: nested.appendingPathComponent("bootstrap"))
+            if replacement {
+                if codex { try! Fixture.writeAuth(home, account: "replacement", refresh: "replacement-grant", expired: false) }
+                else {
+                    try! JSONSerialization.data(withJSONObject: Fixture.claudeLogin("replacement", expired: false))
+                        .write(to: home.appendingPathComponent(".credentials.json"))
+                }
+            }
+            if nativeLock {
+                try! Foundation.FileManager.default.createDirectory(at: native, withIntermediateDirectories: true)
+                nativeInode = (try! Foundation.FileManager.default.attributesOfItem(atPath: native.path)[.systemFileNumber] as! NSNumber).uint64Value
+            }
+        }
+        let store = UsageStore(providers: [.claude: claude, .codex: provider], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        var failed = false
+        do { try store.removeAccount(id: account.id) } catch { failed = true }
+        Fixture.denyCodexDelete = false
+        Fixture.denyKeychainDelete = false
+        let accessible: Bool
+        if codex {
+            accessible = CodexProvider.readAuth(codexHome: home)?.accountID == (replacement ? "replacement" : "retained")
+        } else {
+            guard case .claudeKeychain(let service, _) = account.source else { fatalError() }
+            accessible = ClaudeKeychain.credentials(service: service)?.refreshToken == (replacement ? "synthetic-refresh-replacement" : "synthetic-refresh-file-owner")
+        }
+        // Check visibility before the pending writer resumes, so a fresh save
+        // cannot conceal a broken rollback that orphaned the original profile.
+        try expect(failed && accessible, "Refused removal stranded the profile when its original directory was recreated")
+        try expect(try String(contentsOf: oldSettings) == "original-settings"
+                   && String(contentsOf: nested.appendingPathComponent("original")) == "old"
+                   && String(contentsOf: nested.appendingPathComponent("conflict")) == "new"
+                   && String(contentsOf: nested.appendingPathComponent("bootstrap")) == "new",
+                   "Rollback lost original data or overwrote a concurrent client's files")
+        if nativeLock {
+            let inode = (try Foundation.FileManager.default.attributesOfItem(atPath: native.path)[.systemFileNumber] as! NSNumber).uint64Value
+            try expect(inode == nativeInode, "Rollback replaced the native client's OAuth lock")
+            try Foundation.FileManager.default.removeItem(at: native)
+        }
+        Fixture.denyCodexWrite = false
+        Fixture.failClaudeFileWrite = false
+        if let renewal { _ = await renewal.value }
+        if pending {
+            if codex {
+                _ = await provider.fetch(account)
+                try expect(CodexRenewal.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated", "Rollback discarded the pending Codex rotation")
+            } else {
+                _ = await claude.fetch(account)
+                guard case .claudeKeychain(let service, _) = account.source else { fatalError() }
+                try expect(ClaudeKeychain.credentials(service: service)?.refreshToken == "synthetic-rotated", "Rollback discarded the pending Claude rotation")
+            }
+            try expect(Fixture.refreshCalls == 1, "Rollback retried a refresh POST instead of preserving the pending grant")
+        }
+        store.rediscover(force: true)
+        try expect(store.account(for: account.id) != nil, "Refused removal erased the discovered profile")
+        try store.removeAccount(id: account.id)
+        try expect(!Foundation.FileManager.default.fileExists(atPath: home.path), "Retry could not complete removal after rollback")
+        if codex { try Fixture.codexLogin(home, account: "readded", mode: "keyring") }
+        else {
+            try Foundation.FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+            try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("readded", expired: false))
+                .write(to: home.appendingPathComponent(".credentials.json"))
+        }
+        store.rediscover(force: true)
+        try expect(store.account(for: account.id) != nil, "Rollback/retry blocked same-name profile re-addition")
     }
 
     private static func codexStoreRead(_ mode: String, missing: Bool = false, denied: Bool = false) throws {
