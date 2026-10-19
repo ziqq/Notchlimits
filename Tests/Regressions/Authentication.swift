@@ -19,6 +19,11 @@ private enum Fixture {
     static var denyCredentialChmodHome: String?
     static var beforeCredentialDelete: (() -> Void)?
     static var rejectSpentRefresh = false
+    static var pauseAuthReadPath: String?
+    static var authReadPaused = false
+    static var releaseAuthRead = false
+    static var authSwitchCompleted = false
+    static var lastCodexAccount = ""
     static var denyCodexWrite = false
     static var denyCodexDelete = false
     static var denyCredentialFileRemoval = false
@@ -331,7 +336,23 @@ private final class FixtureFileManager: Foundation.FileManager, @unchecked Senda
     private func configPath(_ path: String) -> String {
         path.hasPrefix("/etc/codex/") ? Fixture.root.path + "/system/" + URL(fileURLWithPath: path).lastPathComponent : path
     }
-    override func fileExists(atPath path: String) -> Bool { super.fileExists(atPath: configPath(path)) }
+    override func fileExists(atPath path: String) -> Bool {
+        let exists = super.fileExists(atPath: configPath(path))
+        if path == Fixture.pauseAuthReadPath {
+            Fixture.lock.lock()
+            Fixture.pauseAuthReadPath = nil
+            Fixture.authReadPaused = true
+            Fixture.lock.unlock()
+            while true {
+                Fixture.lock.lock()
+                let released = Fixture.releaseAuthRead
+                Fixture.lock.unlock()
+                if released { break }
+                Thread.sleep(forTimeInterval: 0.005)
+            }
+        }
+        return exists
+    }
     override func contents(atPath path: String) -> Data? { super.contents(atPath: configPath(path)) }
 
 
@@ -633,6 +654,7 @@ struct HTTPClient {
             return .success(Response(status: 200, data: data, retryAfter: nil))
         }
         Fixture.lastAuthorization = headers["Authorization"] ?? ""
+        Fixture.lastCodexAccount = headers["ChatGPT-Account-ID"] ?? ""
         let data = Data(#"{"five_hour":{"utilization":12},"rate_limit":{"primary_window":{"used_percent":12,"limit_window_seconds":18000}}}"#.utf8)
         return .success(Response(status: Fixture.usageStatus, data: data, retryAfter: nil))
     }
@@ -725,6 +747,8 @@ enum Authentication {
             case "codex-canonical-base-direct": try await codexCanonicalBaseRemoval(direct: true)
             case "codex-canonical-base-activate": try codexCanonicalBaseActivation()
             case "codex-canonical-base-legacy": try await codexLegacyBaseAlias()
+            case "codex-canonical-base-menu": try codexBaseProfileMenu()
+            case "codex-usage-switch-snapshot": try await codexUsageSwitchSnapshot()
             case "codex-save-prepare-file": try codexSavePreparationFailure(auto: false)
             case "codex-save-prepare-auto": try codexSavePreparationFailure(auto: true)
             case "claude-rollback-collision": try await removalRollbackCollision(codex: false)
@@ -1496,6 +1520,58 @@ enum Authentication {
                    && Foundation.FileManager.default.fileExists(atPath: owner.appendingPathComponent("config.toml").path),
                    "Primary removal deleted projects or native configuration because CODEX_HOME was inside the managed root")
         try expect(try CodexAuthSwap.authData(home: owner) == nil, "Primary credentials were not removed")
+    }
+
+    @MainActor
+    private static func codexBaseProfileMenu() throws {
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("native-base")
+        Fixture.codexHome = home.path
+        try Fixture.codexMode(home, "keyring")
+        let project = home.appendingPathComponent("state_5.sqlite")
+        try Data("synthetic-projects".utf8).write(to: project)
+        let unfinished = ProfileDirectories.codexRoot.appendingPathComponent("unfinished-extra")
+        try Foundation.FileManager.default.createDirectory(at: unfinished, withIntermediateDirectories: true)
+        let store = UsageStore(providers: [.codex: CodexProvider()], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        let entries = RegressionProfileMenu(store: store).profiles()
+        try expect(!entries.contains { CodexAuthSwap.isBaseHome($0.url) },
+                   "The native base home was offered as an unfinished profile directory after its login was removed")
+        try expect(entries.contains { $0.url.path == unfinished.path }, "A genuine unfinished extra profile disappeared from the menu")
+        try expect(try String(contentsOf: project) == "synthetic-projects", "Menu discovery changed native project data")
+    }
+
+    private static func codexUsageSwitchSnapshot() async throws {
+        let main = CodexAuthSwap.baseHome
+        let profile = ProfileDirectories.codexRoot.appendingPathComponent("snapshot-switch")
+        try Fixture.codexLogin(main, account: "main-a", mode: "file")
+        try Fixture.codexLogin(profile, account: "profile-b", mode: "file")
+        let account = DiscoveredAccount(id: CodexAuthSwap.defaultColumnID, provider: .codex,
+                                       profileName: "main", source: .codexHome(main))
+        Fixture.pauseAuthReadPath = main.appendingPathComponent("auth.json").path
+        let fetch = Task { await CodexProvider().fetch(account) }
+        var paused = false
+        for _ in 0..<300 {
+            Fixture.lock.lock(); paused = Fixture.authReadPaused; Fixture.lock.unlock()
+            if paused { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(paused, "Usage did not reach the credential-read boundary")
+        let switching = Task.detached {
+            try CodexAuthSwap.activate(columnID: "codex:snapshot-switch", home: profile)
+            Fixture.lock.lock(); Fixture.authSwitchCompleted = true; Fixture.lock.unlock()
+        }
+        // The old code commits B while A's read is paused. A consistent read
+        // keeps switching behind its snapshot until the boundary is released.
+        for _ in 0..<300 {
+            Fixture.lock.lock(); let completed = Fixture.authSwitchCompleted; Fixture.lock.unlock()
+            if completed { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        Fixture.lock.lock(); Fixture.releaseAuthRead = true; Fixture.lock.unlock()
+        _ = await fetch.value
+        try await switching.value
+        try expect(Fixture.lastCodexAccount == "main-a", "A primary-column usage request read the selected profile's credentials during a switch")
+        try expect(CodexProvider.readAuth(codexHome: main)?.accountID == "profile-b", "The switch did not complete after the usage snapshot")
     }
 
     private static func codexCanonicalBaseActivation() throws {

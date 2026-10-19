@@ -357,7 +357,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         })
         var result: [(label: String, url: URL)] = []
         for dir in ProfileDirectories.codexProfiles()
-            where !codexIds.contains(CodexAuthSwap.profileColumnID(dir.lastPathComponent)) {
+            where !CodexAuthSwap.isBaseHome(dir)
+                && !codexIds.contains(CodexAuthSwap.profileColumnID(dir.lastPathComponent)) {
             result.append(("CODEX · \(dir.lastPathComponent)", dir))
         }
         for dir in ProfileDirectories.claudeProfiles() where !claudeDirs.contains(dir.path) {

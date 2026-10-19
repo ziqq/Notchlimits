@@ -41,9 +41,8 @@ struct CodexProvider: UsageProvider {
 
     private func request(_ account: DiscoveredAccount, home: URL) async -> FetchOutcome {
         // Вход колонки может быть временно в ~/.codex (открыт в приложении).
-        let live = CodexAuthSwap.liveHome(columnID: account.id, home: home)
         let data: Data?
-        do { data = try CodexAuthSwap.authData(home: live) }
+        do { data = try CodexAuthSwap.authData(columnID: account.id, home: home) }
         catch { return .failure(error.localizedDescription) }
         guard let data, let auth = Self.parseAuth(data) else {
             return .reauth(L.t("column.reauth"))
