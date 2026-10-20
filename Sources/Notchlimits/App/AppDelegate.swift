@@ -393,10 +393,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         } else {
+            defer { store.rediscover(force: true) }
             do {
-                guard !ProfileDirectories.containsNativeHome(url) else { throw AccountRemoval.Failure.busy }
-                try FileManager.default.removeItem(at: url)
-                store.rediscover(force: true)
+                try AccountRemoval.removeIncompleteClaudeProfile(at: url)
             } catch {
                 errorAlert(L.t("remove.failed.title"), error)
             }

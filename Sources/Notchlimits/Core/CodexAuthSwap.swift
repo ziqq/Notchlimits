@@ -268,12 +268,20 @@ enum CodexAuthSwap {
         if restore {
             let base = try storage(at: baseHome)
             let selected = try base.load(verifyingOwner: true)
+            let backup = try storage(at: stashHome)
             let keys = [activeIDKey, activeHomeKey]
             let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
-            // Keep the primary backup until deletion commits. No renewal can
-            // enter between restoration, refused deletion and selection rollback.
+            // Restore primary credentials before removing their backup. A
+            // refused cleanup must precede destructive profile deletion.
             try activateLocked(columnID: defaultColumnID, home: baseHome, keepBackup: true)
-            do { try operation(storage(at: home)) } catch {
+            var removedBackup: CodexAuthStorage.Record?
+            do {
+                let primary = try backup.load(verifyingOwner: true)
+                try backup.delete()
+                removedBackup = primary
+                try operation(storage(at: home))
+            } catch {
+                if let primary = removedBackup { try backup.save(primary.data, backend: primary.backend) }
                 if let selected { try base.save(selected.data, backend: selected.backend) }
                 else { try base.delete() }
                 for (name, value) in zip(keys, saved) {
@@ -282,7 +290,6 @@ enum CodexAuthSwap {
                 }
                 throw error
             }
-            try? storage(at: stashHome).delete()
             UserDefaults.standard.removeObject(forKey: stashStoreKey)
             UserDefaults.standard.removeObject(forKey: sourceAuthKey)
         } else {

@@ -98,7 +98,8 @@ final class ClaudeStorageLock: @unchecked Sendable {
         }
         try FileManager.default.moveItem(at: from, to: to)
         for lock in locks {
-            lock.path = to.appendingPathComponent(URL(fileURLWithPath: lock.path).lastPathComponent).path
+            // A moved symlink may be removed before release; retain its physical target.
+            lock.path = to.resolvingSymlinksInPath().appendingPathComponent(URL(fileURLWithPath: lock.path).lastPathComponent).path
         }
     }
 

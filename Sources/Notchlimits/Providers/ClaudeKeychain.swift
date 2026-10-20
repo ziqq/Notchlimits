@@ -104,8 +104,8 @@ enum ClaudeKeychain {
 
     /// Запись есть, но входа в ней нет. Голый `claude` пишет в базовую запись
     /// служебное (`trustedDeviceToken`) даже без логина — это не аккаунт.
-    static func hasNoLogin(service: String) -> Bool {
-        guard let json = rawItem(service: service) else { return false }
+    static func hasNoLogin(service: String, interactive: Bool = true) -> Bool {
+        guard let json = rawItem(service: service, interactive: interactive) else { return false }
         return isNoLogin(json)
     }
 
@@ -320,7 +320,12 @@ enum ClaudeKeychain {
         guard let directory = configDir ?? storageDirectory(service: service) else {
             throw UnknownRemovalDirectory()
         }
-        try ClaudeRefreshLock.withRemovalLock(directory: directory, createParent: service == baseService) { lease in
+        try withRemovalLock(directory: directory, createParent: service == baseService, operation: operation)
+    }
+
+    static func withRemovalLock(directory: URL, createParent: Bool = false,
+                                operation: (_ move: (URL, URL) throws -> Void) throws -> Void) throws {
+        try ClaudeRefreshLock.withRemovalLock(directory: directory, createParent: createParent) { lease in
             let storage = try ClaudeStorageLock(directory: directory, createParent: false)
             defer { storage.release() }
             guard lease.isHeld, storage.isHeld else { throw ClaudeStorageLock.Failure.lost }
