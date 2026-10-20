@@ -27,24 +27,25 @@ struct CodexProvider: UsageProvider {
             return .reauth(L.t("column.reauth"))
         }
 
-        let outcome = await request(account, home: home)
+        let snapshot: CodexAuthSwap.AuthSnapshot?
+        do { snapshot = try CodexAuthSwap.authSnapshot(columnID: account.id, home: home) }
+        catch { return .failure(error.localizedDescription) }
+        let outcome = await request(snapshot)
         guard case .reauth = outcome else { return outcome }
         if renewal == .unavailable { return .failure(L.t("error.network")) }
         // Не продлеваем второй раз в одном опросе после успешной ротации.
-        guard renewal == .skipped else { return outcome }
+        guard renewal == .skipped, let snapshot else { return outcome }
         // Сервер отверг ещё живой по сроку токен — пробуем продлить и повторить.
-        guard await CodexRenewal.shared.renew(columnID: account.id, home: home, force: true) == .renewed else {
+        guard await CodexRenewal.shared.renew(columnID: account.id, home: home, force: true,
+                                             expected: snapshot) == .renewed else {
             return outcome
         }
-        return await request(account, home: home)
+        do { return await request(try CodexAuthSwap.authSnapshot(columnID: account.id, home: home)) }
+        catch { return .failure(error.localizedDescription) }
     }
 
-    private func request(_ account: DiscoveredAccount, home: URL) async -> FetchOutcome {
-        // Вход колонки может быть временно в ~/.codex (открыт в приложении).
-        let data: Data?
-        do { data = try CodexAuthSwap.authData(columnID: account.id, home: home) }
-        catch { return .failure(error.localizedDescription) }
-        guard let data, let auth = Self.parseAuth(data) else {
+    private func request(_ snapshot: CodexAuthSwap.AuthSnapshot?) async -> FetchOutcome {
+        guard let snapshot, let auth = Self.parseAuth(snapshot.data) else {
             return .reauth(L.t("column.reauth"))
         }
         if let expiresAt = auth.expiresAt, expiresAt.timeIntervalSinceNow < 60 {
@@ -73,8 +74,10 @@ struct CodexProvider: UsageProvider {
                 return .success(UsageSnapshot(subtitle: Self.subtitle(from: response.data, email: email),
                                               windows: windows,
                                               stats: Self.stats(from: response.data)))
-            case 401, 403:
+            case 401:
                 return .reauth(L.t("column.reauth"))
+            case 403:
+                return .failure(L.t("error.http", response.status))
             case 429:
                 return .rateLimited(retryAfter: response.retryAfter)
             default:

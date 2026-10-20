@@ -20,9 +20,9 @@ enum AccountRemoval {
     static func isExtraProfile(_ account: DiscoveredAccount) -> Bool {
         switch account.source {
         case .claudeKeychain(_, let configDir):
-            return configDir.map { !ProfileDirectories.isClaudeBase($0) } ?? false
+            return configDir.map { !ProfileDirectories.containsNativeHome($0) } ?? false
         case .codexHome(let url):
-            return !CodexAuthSwap.isBaseHome(url) && url.path.hasPrefix(ProfileDirectories.codexRoot.path + "/")
+            return !ProfileDirectories.containsNativeHome(url) && url.path.hasPrefix(ProfileDirectories.codexRoot.path + "/")
         case .mock:
             return false
         }
@@ -53,11 +53,6 @@ enum AccountRemoval {
         }
     }
 
-    private static func needsCodexRestore(_ account: DiscoveredAccount) -> Bool {
-        CodexAuthSwap.isSwapped &&
-            [CodexAuthSwap.defaultColumnID, CodexAuthSwap.activeColumnID].contains(account.id)
-    }
-
     private static func touchesCodexDesktop(_ account: DiscoveredAccount) -> Bool {
         [CodexAuthSwap.defaultColumnID, CodexAuthSwap.activeColumnID].contains(account.id)
     }
@@ -65,13 +60,18 @@ enum AccountRemoval {
     static func remove(_ account: DiscoveredAccount) throws {
         switch account.source {
         case .claudeKeychain(let service, let configDir):
-            // A stale duplicate must not remove the physical main CLI home.
-            if service != ClaudeKeychain.baseService, let configDir,
-               ProfileDirectories.isClaudeBase(configDir) { throw Failure.busy }
+            let directory = configDir ?? ClaudeKeychain.configDirectory(for: service)
             do {
-                try ClaudeKeychain.withRemovalLock(service: service, configDir: configDir) { move in
-                    try withProfileDirectory(configDir, root: ProfileDirectories.claudeRoot, move: move) { directory in
-                        try deleteClaudeCredentials(service: service, configDir: directory)
+                try ClaudeKeychain.withRemovalLock(service: service, configDir: directory) { move in
+                    if service != ClaudeKeychain.baseService,
+                       directory.map(ProfileDirectories.isClaudeBase) == true {
+                        // An explicit config path has its own Keychain service.
+                        // Its fallback file and config belong to the main home.
+                        try deleteKeychainEntry(service: service)
+                    } else {
+                        try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot, move: move) { moved in
+                            try deleteClaudeCredentials(service: service, configDir: moved)
+                        }
                     }
                     ClaudeAppSwitcher.accountRemoved(columnID: account.id)
                 }
@@ -84,14 +84,12 @@ enum AccountRemoval {
             // stale duplicate columns rather than deleting another logical owner.
             let isBase = CodexAuthSwap.isBaseHome(url)
             guard !isBase || account.id == CodexAuthSwap.defaultColumnID else { throw Failure.busy }
+            guard isBase || !ProfileDirectories.containsNativeHome(url) else { throw Failure.busy }
             // Synchronous callers must also fail safely under a running Desktop.
             if touchesCodexDesktop(account) {
                 guard !DesktopApp.isRunning(bundleID: CodexAppSwitcher().bundleID) else { throw Failure.busy }
             }
-            if needsCodexRestore(account) {
-                try CodexAuthSwap.restoreDefault()
-            }
-            try CodexAuthSwap.removeAuth(home: url) { storage in
+            try CodexAuthSwap.removeAuth(home: url, columnID: account.id) { storage in
                 if isBase {
                     try storage.delete()
                 } else {
@@ -115,6 +113,7 @@ enum AccountRemoval {
         let manager = FileManager.default
         guard let directory, directory.path.hasPrefix(root.path + "/"),
               manager.fileExists(atPath: directory.path) else { try operation(directory); return }
+        guard !ProfileDirectories.containsNativeHome(directory) else { throw Failure.busy }
         let removed = directory.deletingLastPathComponent()
             .appendingPathComponent(".removed-" + UUID().uuidString, isDirectory: true)
         try move(directory, removed)

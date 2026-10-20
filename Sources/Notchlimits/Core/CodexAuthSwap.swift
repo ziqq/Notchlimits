@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Keep Desktop and CLI on the base CODEX_HOME while swapping only credentials.
 /// Projects and threads stay in place. The primary account waits in an internal
@@ -26,6 +27,7 @@ enum CodexAuthSwap {
     private static let activeIDKey = "codexAppAccountID"
     private static let activeHomeKey = "codexAppAccountHome"
     private static let stashStoreKey = "codexAppStashStore"
+    private static let sourceAuthKey = "codexAppSourceAuth"
 
     /// Перестановка входов и запись продлённых токенов не должны пересечься:
     /// иначе в `~/.codex` уедет уже потраченный refresh-токен.
@@ -37,6 +39,11 @@ enum CodexAuthSwap {
         let generation: UUID?
         let storage: CodexAuthStorage
         let record: CodexAuthStorage.Record
+    }
+    struct AuthSnapshot {
+        let data: Data
+        let key: String
+        let generation: UUID?
     }
     private static var generations: [String: UUID] = [:]
     private static var renewals: [String: Renewal] = [:]
@@ -88,6 +95,10 @@ enum CodexAuthSwap {
     static func activate(columnID: String, home: URL) throws {
         lock.lock()
         defer { lock.unlock() }
+        try activateLocked(columnID: columnID, home: home)
+    }
+
+    private static func activateLocked(columnID: String, home: URL, keepBackup: Bool = false) throws {
         let base = try storage(at: baseHome)
         guard base.mode != .ephemeral else { throw CodexAuthStorage.Failure.ephemeral }
         guard columnID == defaultColumnID || !isBaseHome(home) else { throw Failure.busy }
@@ -104,13 +115,15 @@ enum CodexAuthSwap {
         if let payload { try base.save(payload) } else { try base.delete() }
         if columnID == defaultColumnID {
             // The restored login is durable before its backup is removed.
-            try? storage(at: stashHome).delete()
+            if !keepBackup { try? storage(at: stashHome).delete() }
             UserDefaults.standard.removeObject(forKey: activeIDKey)
             UserDefaults.standard.removeObject(forKey: activeHomeKey)
-            UserDefaults.standard.removeObject(forKey: stashStoreKey)
+            if !keepBackup { UserDefaults.standard.removeObject(forKey: sourceAuthKey) }
+            if !keepBackup { UserDefaults.standard.removeObject(forKey: stashStoreKey) }
         } else {
             UserDefaults.standard.set(columnID, forKey: activeIDKey)
             UserDefaults.standard.set(home.path, forKey: activeHomeKey)
+            UserDefaults.standard.set(payload.flatMap(authIdentity), forKey: sourceAuthKey)
         }
     }
 
@@ -121,10 +134,11 @@ enum CodexAuthSwap {
 
     /// Reserve the source before any refresh POST. Switching cannot publish its
     /// old grant until persistence finishes; successful removal retires the owner.
-    static func beginRenewal(columnID: String, home: URL) throws -> Renewal? {
+    static func beginRenewal(columnID: String, home: URL, expected: AuthSnapshot? = nil) throws -> Renewal? {
         lock.lock()
         defer { lock.unlock() }
         let key = homeKey(home)
+        if let expected, expected.key != key || expected.generation != generations[key] { return nil }
         guard renewals[key] == nil else { throw Failure.busy }
         let live = liveHome(columnID: columnID, home: home)
         guard !isBaseHome(live) else { return nil }
@@ -132,6 +146,7 @@ enum CodexAuthSwap {
         // Usage may read a native auto fallback, but a refresh must not spend
         // its stale grant while the preferred Keychain owner is unavailable.
         guard let record = try source.load(verifyingOwner: true) else { return nil }
+        if let expected, authIdentity(record.data) != authIdentity(expected.data) { return nil }
         let renewal = Renewal(columnID: columnID, key: key, generation: generations[key],
                               storage: source, record: record)
         renewals[key] = renewal
@@ -210,12 +225,18 @@ enum CodexAuthSwap {
         }
         guard let payload, let path = UserDefaults.standard.string(forKey: activeHomeKey) else { return }
         let profile = try storage(at: URL(fileURLWithPath: path))
-        if let previous = try profile.load(verifyingOwner: true)?.data, accountID(payload) == accountID(previous) {
+        if let previous = try profile.load(verifyingOwner: true)?.data,
+           accountID(payload) == accountID(previous),
+           let identity = authIdentity(previous),
+           identity == (UserDefaults.standard.string(forKey: sourceAuthKey) ?? authIdentity(payload)) {
             try profile.save(payload)
+            UserDefaults.standard.set(authIdentity(payload), forKey: sourceAuthKey)
         } else {
             // Retain an unexpected native login without exporting a Keychain login to plaintext.
             let orphan = stashHome.deletingLastPathComponent().appendingPathComponent("orphaned-" + UUID().uuidString)
             try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
+            try ("cli_auth_credentials_store = \"" + live.mode.rawValue + "\"\n")
+                .write(to: orphan.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
             try CodexAuthStorage(home: orphan, mode: live.mode).save(payload)
         }
     }
@@ -225,18 +246,48 @@ enum CodexAuthSwap {
     /// Resolve the column and read its credentials in one snapshot. A switch
     /// must not replace base credentials between routing and the file/Keychain read.
     static func authData(columnID: String, home: URL) throws -> Data? {
+        try authSnapshot(columnID: columnID, home: home)?.data
+    }
+
+    static func authSnapshot(columnID: String, home: URL) throws -> AuthSnapshot? {
         lock.lock()
         defer { lock.unlock() }
-        return try storage(at: liveHome(columnID: columnID, home: home)).load()?.data
+        guard let data = try storage(at: liveHome(columnID: columnID, home: home)).load()?.data else { return nil }
+        let key = homeKey(home)
+        return AuthSnapshot(data: data, key: key, generation: generations[key])
     }
 
     static func hasAuth(home: URL) -> Bool { (try? storage(at: home))?.contains() ?? false }
 
-    static func removeAuth(home: URL, operation: (CodexAuthStorage) throws -> Void = { try $0.delete() }) throws {
+    static func removeAuth(home: URL, columnID: String? = nil,
+                           operation: (CodexAuthStorage) throws -> Void = { try $0.delete() }) throws {
         lock.lock()
         defer { lock.unlock() }
         let key = homeKey(home)
-        try operation(storage(at: home))
+        let restore = isSwapped && columnID.map { [defaultColumnID, activeColumnID].contains($0) } == true
+        if restore {
+            let base = try storage(at: baseHome)
+            let selected = try base.load(verifyingOwner: true)
+            let keys = [activeIDKey, activeHomeKey]
+            let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
+            // Keep the primary backup until deletion commits. No renewal can
+            // enter between restoration, refused deletion and selection rollback.
+            try activateLocked(columnID: defaultColumnID, home: baseHome, keepBackup: true)
+            do { try operation(storage(at: home)) } catch {
+                if let selected { try base.save(selected.data, backend: selected.backend) }
+                else { try base.delete() }
+                for (name, value) in zip(keys, saved) {
+                    if let value { UserDefaults.standard.set(value, forKey: name) }
+                    else { UserDefaults.standard.removeObject(forKey: name) }
+                }
+                throw error
+            }
+            try? storage(at: stashHome).delete()
+            UserDefaults.standard.removeObject(forKey: stashStoreKey)
+            UserDefaults.standard.removeObject(forKey: sourceAuthKey)
+        } else {
+            try operation(storage(at: home))
+        }
         generations[key] = UUID()
         renewals[key] = nil
     }
@@ -254,5 +305,15 @@ enum CodexAuthSwap {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let tokens = root["tokens"] as? [String: Any] else { return nil }
         return tokens["account_id"] as? String
+    }
+
+    /// Persist only a digest of the source session, never credentials in defaults.
+    /// Native metadata updates do not constitute another login.
+    private static func authIdentity(_ data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let fields = ["auth_mode", "tokens", "OPENAI_API_KEY"]
+        let auth = root.filter { fields.contains($0.key) }
+        guard !auth.isEmpty, let canonical = try? JSONSerialization.data(withJSONObject: auth, options: [.sortedKeys]) else { return nil }
+        return SHA256.hash(data: canonical).map { String(format: "%02x", $0) }.joined()
     }
 }
