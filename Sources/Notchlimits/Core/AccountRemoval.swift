@@ -57,6 +57,33 @@ enum AccountRemoval {
         [CodexAuthSwap.defaultColumnID, CodexAuthSwap.activeColumnID].contains(account.id)
     }
 
+    /// A stale unfinished-profile menu must not delete a newly completed login.
+    static func removeIncompleteClaudeProfile(at directory: URL) throws {
+        guard directory.path.hasPrefix(ProfileDirectories.claudeRoot.path + "/"),
+              !ProfileDirectories.containsNativeHome(directory) else { throw Failure.busy }
+        do {
+            try ClaudeKeychain.withRemovalLock(directory: directory) { move in
+                guard !FileManager.default.fileExists(atPath: directory.appendingPathComponent(".credentials.json").path) else {
+                    throw Failure.busy
+                }
+                let path = directory.resolvingSymlinksInPath().path
+                let services = ClaudeKeychain.items().map(\.service).filter {
+                    ClaudeKeychain.configDirectory(for: $0)?.resolvingSymlinksInPath().path == path
+                }
+                // Native CLI also writes non-login stubs. Remove those only
+                // after proving that no OAuth login is present or unreadable.
+                guard services.allSatisfy({ ClaudeKeychain.hasNoLogin(service: $0, interactive: false) }) else {
+                    throw Failure.busy
+                }
+                try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot, move: move) { _ in
+                    for service in services { try deleteKeychainEntry(service: service) }
+                }
+            }
+        } catch is ClaudeStorageLock.Failure {
+            throw Failure.busy
+        }
+    }
+
     static func remove(_ account: DiscoveredAccount) throws {
         switch account.source {
         case .claudeKeychain(let service, let configDir):

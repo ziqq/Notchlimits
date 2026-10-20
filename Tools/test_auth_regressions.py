@@ -44,28 +44,48 @@ import Foundation
 }
 final class NSAlert {
     var messageText = "", informativeText = ""
-    func addButton(withTitle: String) {}
+    enum Style { case warning }
+    var alertStyle = Style.warning
+    final class Button { var hasDestructiveAction = false; var keyEquivalent = "" }
+    @discardableResult func addButton(withTitle: String) -> Button { Button() }
 }
 @MainActor final class RegressionTerminationDelegate {
     var claudeProvider: ClaudeProvider? = ClaudeProvider()
     var terminationPending = false
     func runModalAbovePanel(_ alert: NSAlert) {}
 ''' + delegate[start:end] + "\n}\n")
-        # The unfinished-profile menu must never offer the physical native home.
+        # Exercise the exact menu and removal handlers with synthetic AppKit.
         start = delegate.index("    private func orphanProfiles(")
         end = delegate.index("{", start) + 1
         depth = 1
         while depth:
             depth += (delegate[end] == "{") - (delegate[end] == "}")
             end += 1
+        menu_body = delegate[start:end]
+        start = delegate.index("    @objc private func removeOrphanProfile(")
+        end = delegate.index("{", start) + 1
+        depth = 1
+        while depth:
+            depth += (delegate[end] == "{") - (delegate[end] == "}")
+            end += 1
+        removal_body = delegate[start:end].replace("@objc private", "private", 1)
         menu = pathlib.Path(cls.build.name) / "ProfileMenu.swift"
         menu.write_text('''
 import Foundation
+final class NSMenuItem { var representedObject: Any? }
 @MainActor final class RegressionProfileMenu {
+    enum ModalResponse { case alertFirstButtonReturn }
+    var failure: Error?
+    func runModalAbovePanel(_ alert: NSAlert) -> ModalResponse { .alertFirstButtonReturn }
+    func errorAlert(_ title: String, _ error: Error) { failure = error }
+    func remove(path: String) {
+        let sender = NSMenuItem(); sender.representedObject = path
+        removeOrphanProfile(sender)
+    }
     let store: UsageStore
     init(store: UsageStore) { self.store = store }
     func profiles() -> [(label: String, url: URL)] { orphanProfiles() }
-''' + delegate[start:end] + "\n}\n")
+''' + menu_body + "\n" + removal_body + "\n}\n")
         cls.executable = compile_fixture(cls.build.name, "Authentication", [
             "Model/Models.swift", "Model/Account.swift", "Core/JWT.swift",
             *(["Core/ClaudeStorageLock.swift"] if (SOURCES / "Core/ClaudeStorageLock.swift").exists() else []),
@@ -791,3 +811,51 @@ import Foundation
 
     def test_claude_rollback_native_owner(self):
         self.check_scenario("claude-rollback-native-owner")
+
+    def test_claude_incomplete_respects_native_oauth_locks(self):
+        self.check_scenario("claude-incomplete-native-oauth")
+
+    def test_claude_incomplete_respects_native_storage_lock(self):
+        self.check_scenario("claude-incomplete-native-storage")
+
+    def test_claude_incomplete_respects_native_legacy_lock(self):
+        self.check_scenario("claude-incomplete-native-legacy")
+
+    def test_claude_incomplete_preserves_completed_keychain_login(self):
+        self.check_scenario("claude-incomplete-completed-keychain")
+
+    def test_claude_incomplete_preserves_completed_fallback_login(self):
+        self.check_scenario("claude-incomplete-completed-file")
+
+    def test_claude_incomplete_empty_profile_can_be_removed_and_readded(self):
+        self.check_scenario("claude-incomplete-empty")
+
+    def test_claude_incomplete_removes_native_non_login_stub_under_leases(self):
+        self.check_scenario("claude-incomplete-stub")
+
+    def test_claude_incomplete_preserves_unreadable_owner(self):
+        self.check_scenario("claude-incomplete-unreadable-owner")
+
+    def test_claude_incomplete_restores_directory_after_refused_stub_deletion(self):
+        self.check_scenario("claude-incomplete-stub-refusal")
+
+    def test_claude_incomplete_does_not_recreate_missing_profile(self):
+        self.check_scenario("claude-incomplete-missing")
+
+    def test_codex_primary_removal_preserves_selection_when_backup_keyring_refuses_delete(self):
+        self.check_scenario("codex-primary-backup-keyring-refusal")
+
+    def test_codex_selected_removal_preserves_profile_when_backup_keyring_refuses_delete(self):
+        self.check_scenario("codex-selected-backup-keyring-refusal")
+
+    def test_codex_primary_removal_preserves_selection_when_backup_file_refuses_delete(self):
+        self.check_scenario("codex-primary-backup-file-refusal")
+
+    def test_codex_keyring_target_refusal_restores_removed_primary_backup(self):
+        self.check_scenario("codex-keyring-delete-restores-backup")
+
+    def test_codex_file_target_refusal_restores_removed_primary_backup(self):
+        self.check_scenario("codex-file-delete-restores-backup")
+
+    def test_claude_incomplete_symlink_releases_physical_locks(self):
+        self.check_scenario("claude-incomplete-symlink")

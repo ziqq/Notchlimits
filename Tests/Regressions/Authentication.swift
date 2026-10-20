@@ -28,7 +28,9 @@ private enum Fixture {
     static var authSwitchCompleted = false
     static var lastCodexAccount = ""
     static var denyCodexWrite = false
+    static var denyCodexDeleteAccount: String?
     static var denyCodexDelete = false
+    static var denyCredentialFileRemovalPath: String?
     static var denyCredentialFileRemoval = false
     static var denyProfileRemoval: String?
     static var denyProfileMove = false
@@ -312,6 +314,7 @@ private final class FixtureFileManager: Foundation.FileManager, @unchecked Senda
            url.path == denied || url.lastPathComponent.hasPrefix(".removed-") {
             throw CocoaError(.fileWriteNoPermission)
         }
+        if url.path == Fixture.denyCredentialFileRemovalPath { throw CocoaError(.fileWriteNoPermission) }
         if Fixture.denyCredentialFileRemoval && ["auth.json", ".credentials.json"].contains(url.lastPathComponent) {
             throw CocoaError(.fileWriteNoPermission)
         }
@@ -498,6 +501,7 @@ func SecItemCopyMatching(_ query: CFDictionary, _ result: UnsafeMutablePointer<C
         if let service = (query as NSDictionary)[kSecAttrService as String] as? String {
             guard let json = entries[service] else { return errSecItemNotFound }
             if (query as NSDictionary)[kSecReturnData as String] as? Bool == true {
+                guard !Fixture.denyClaudeRead else { return errSecInteractionNotAllowed }
                 result?.pointee = try! JSONSerialization.data(withJSONObject: json) as CFData
             } else { result?.pointee = [kSecAttrService as String: service] as NSDictionary }
         } else { result?.pointee = entries.keys.map { [kSecAttrService as String: $0] } as NSArray }
@@ -586,6 +590,7 @@ func SecItemDelete(_ query: CFDictionary) -> OSStatus {
     if (query as NSDictionary)[kSecAttrService as String] as? String == "Codex Auth" {
         guard !Fixture.denyCodexDelete else { return errSecAuthFailed }
         let key = (query as NSDictionary)[kSecAttrAccount as String] as! String
+        guard key != Fixture.denyCodexDeleteAccount else { return errSecAuthFailed }
         Fixture.codexKeychain[key] = nil
         return errSecSuccess
     }
@@ -702,6 +707,23 @@ enum Authentication {
     static func main() async {
         do {
             switch CommandLine.arguments[1] {
+            case "claude-incomplete-native-oauth": try await claudeIncompleteRemoval(state: "oauth")
+            case "claude-incomplete-native-storage": try await claudeIncompleteRemoval(state: "storage")
+            case "claude-incomplete-native-legacy": try await claudeIncompleteRemoval(state: "legacy")
+            case "claude-incomplete-completed-keychain": try await claudeIncompleteRemoval(state: "keychain")
+            case "claude-incomplete-completed-file": try await claudeIncompleteRemoval(state: "file")
+            case "claude-incomplete-symlink": try await claudeIncompleteRemoval(state: "symlink")
+            case "claude-incomplete-empty": try await claudeIncompleteRemoval(state: "empty")
+            case "claude-incomplete-stub": try await claudeIncompleteRemoval(state: "stub")
+            case "claude-incomplete-unreadable-owner": try await claudeIncompleteRemoval(state: "unreadable")
+            case "claude-incomplete-stub-refusal": try await claudeIncompleteRemoval(state: "stub-refusal")
+            case "claude-incomplete-missing": try await claudeIncompleteRemoval(state: "missing")
+            case "codex-primary-backup-keyring-refusal": try await codexBackupRemovalRefusal()
+            case "codex-selected-backup-keyring-refusal": try await codexBackupRemovalRefusal(primary: false)
+            case "codex-primary-backup-file-refusal": try await codexBackupRemovalRefusal(mode: "file")
+            case "codex-keyring-delete-restores-backup": try await codexBackupRemovalRefusal(targetDenied: true)
+            case "codex-file-delete-restores-backup": try await codexBackupRemovalRefusal(mode: "file", targetDenied: true)
+
             case "codex-retired-usage-same-grant": try await codexRetiredUsage401(sameGrant: true)
             case "codex-relogin-usage-401": try await codexRetiredUsage401(relogin: true)
             case "codex-copyback-file-relogin": try codexCopybackRelogin(mode: "file")
@@ -3541,6 +3563,138 @@ enum Authentication {
                        && !ClaudeCLISelection.isEnabled,
                        "Removing a hashed service changed the main login, fallback file or Switch CLI setting")
         }
+    }
+
+    @MainActor
+    private static func claudeIncompleteRemoval(state: String) async throws {
+        Fixture.keychainExists = false
+        let directory = ProfileDirectories.claudeRoot.appendingPathComponent("unfinished-login")
+        try Foundation.FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let native = Fixture.storageDirectory.appendingPathComponent("settings.json")
+        try Foundation.FileManager.default.createDirectory(at: native.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("preserve-main-config".utf8).write(to: native)
+        let store = UsageStore(providers: [.claude: ClaudeProvider()], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        let menu = RegressionProfileMenu(store: store)
+        try expect(menu.profiles().contains { $0.url.path == directory.path }, "Fixture did not expose an unfinished profile")
+        if state == "symlink" {
+            let physical = Fixture.root.appendingPathComponent("physical-incomplete-profile")
+            try Foundation.FileManager.default.moveItem(at: directory, to: physical)
+            try Foundation.FileManager.default.createSymbolicLink(at: directory, withDestinationURL: physical)
+        }
+        let physical = directory.resolvingSymlinksInPath()
+        let pointer = DesktopApp.supportDirectory.appendingPathComponent("claude-cli/selected-profile")
+        try Foundation.FileManager.default.createDirectory(at: pointer.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("/previous-cli-profile\n".utf8).write(to: pointer)
+        ClaudeCLISelection.isEnabled = false
+        let hash = SHA256.hash(data: Data(directory.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
+        let service = Fixture.service + "-" + hash
+        let current = directory.appendingPathComponent(".oauth_refresh.lock")
+        let legacy = URL(fileURLWithPath: directory.resolvingSymlinksInPath().path + ".lock")
+        let storage = directory.appendingPathComponent(".storage-write.lock")
+        let nativeLocks: [URL]
+        switch state {
+        case "oauth": nativeLocks = [current, legacy, storage]
+        case "legacy": nativeLocks = [legacy]
+        case "storage": nativeLocks = [storage]
+        default: nativeLocks = []
+        }
+        for lock in nativeLocks { try Foundation.FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true) }
+        // These changes happen after menu enumeration, while confirmation is open.
+        if ["oauth", "keychain", "unreadable"].contains(state) {
+            Fixture.claudeEntries = [service: Fixture.claudeLogin("completed-native-login", expired: false)]
+        } else if ["stub", "stub-refusal"].contains(state) {
+            Fixture.claudeEntries = [service: ["trustedDeviceToken": "synthetic-device-stub"]]
+        }
+        if state == "file" {
+            try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("completed-file-login", expired: false))
+                .write(to: directory.appendingPathComponent(".credentials.json"))
+        }
+        if state == "unreadable" { Fixture.denyClaudeRead = true }
+        if state == "missing" { try Foundation.FileManager.default.removeItem(at: directory) }
+        Fixture.denyKeychainDelete = state == "stub-refusal"
+        var nativeWriterBlocked = false
+        Fixture.expectedOAuthDirectory = directory
+        Fixture.beforeCredentialDelete = {
+            let acquired = Darwin.mkdir(legacy.path, 0o700)
+            nativeWriterBlocked = acquired != 0 && errno == EEXIST
+            if acquired == 0 { _ = Darwin.rmdir(legacy.path) }
+        }
+        menu.remove(path: directory.path)
+        let succeeds = ["empty", "stub", "symlink"].contains(state)
+        let retained = Foundation.FileManager.default.fileExists(atPath: directory.path)
+        print("Unfinished profile state=\(state), directory retained=\(retained), error=\(String(describing: menu.failure))")
+        try expect((menu.failure == nil) == succeeds && retained == (!succeeds && state != "missing"),
+                   "Unfinished-profile deletion removed a native owner, new login or refused stub, or could not remove an empty profile")
+        try expect(nativeLocks.allSatisfy { Foundation.FileManager.default.fileExists(atPath: $0.path) },
+                   "Unfinished-profile deletion removed a native lock owner")
+        for lock in [current, legacy, storage] where !nativeLocks.contains(lock) {
+            try expect(!Foundation.FileManager.default.fileExists(atPath: lock.path), "Refused unfinished-profile deletion leaked a newly acquired lock")
+        }
+        if state == "stub" {
+            try expect(nativeWriterBlocked && Fixture.claudeEntries?[service] == nil,
+                       "Unfinished-profile deletion retained the native non-login stub or removed it without OAuth leases")
+        } else if Fixture.claudeEntries != nil {
+            try expect(Fixture.claudeEntries?[service] != nil, "Refused unfinished-profile deletion removed Keychain data")
+        }
+        if state == "file" {
+            try expect(ClaudeKeychain.credentials(service: service)?.refreshToken == "synthetic-refresh-completed-file-login",
+                       "A completed fallback login was removed through a stale unfinished-profile menu")
+        }
+        try expect(try String(contentsOf: native) == "preserve-main-config"
+                   && (try String(contentsOf: pointer)) == "/previous-cli-profile\n"
+                   && !ClaudeCLISelection.isEnabled && Fixture.desktopCalls == 0 && Fixture.desktopStops == 0,
+                   "Unfinished-profile removal changed native settings, Desktop or CLI routing")
+        if succeeds {
+            try expect(!Foundation.FileManager.default.fileExists(atPath: physical.appendingPathComponent(".oauth_refresh.lock").path)
+                       && !Foundation.FileManager.default.fileExists(atPath: physical.appendingPathComponent(".storage-write.lock").path),
+                       "Successful unfinished-profile deletion leaked native locks in the physical directory")
+            try Foundation.FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            Fixture.claudeEntries = [service: Fixture.claudeLogin("readded-owner", expired: false)]
+            store.rediscover(force: true)
+            try expect(store.account(for: "claude:" + service) != nil, "The removed unfinished profile could not be re-added")
+        }
+    }
+
+    @MainActor
+    private static func codexBackupRemovalRefusal(mode: String = "keyring", primary: Bool = true,
+                                                 targetDenied: Bool = false) async throws {
+        let base = CodexAuthSwap.baseHome
+        let profile = ProfileDirectories.codexRoot.appendingPathComponent("selected-for-primary-delete")
+        let id = "codex:selected-for-primary-delete"
+        try Fixture.codexLogin(base, account: "primary-to-delete", mode: mode)
+        try Fixture.codexLogin(profile, account: "selected", mode: "file")
+        try CodexAuthSwap.activate(columnID: id, home: profile)
+        let backup = CodexAuthSwap.stashHome
+        let expectedSelected = try CodexAuthSwap.authData(home: base)
+        let expectedPrimary = try CodexAuthSwap.authData(home: backup)
+        try expect(expectedPrimary != nil, "Fixture did not preserve a primary backup")
+        if mode == "keyring" { Fixture.denyCodexDeleteAccount = Fixture.codexKey(targetDenied ? base : backup) }
+        else { Fixture.denyCredentialFileRemovalPath = (targetDenied ? base : backup).appendingPathComponent("auth.json").path }
+        Fixture.desktopRunning = true
+        let store = UsageStore(providers: [.codex: CodexProvider()], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        let result: Result<Void, Error> = await withCheckedContinuation { c in
+            store.removeAccount(id: primary ? CodexAuthSwap.defaultColumnID : id) { c.resume(returning: $0) }
+        }
+        let failed: Bool
+        if case .failure = result { failed = true } else { failed = false }
+        print("Codex backup removal mode=\(mode), primary=\(primary), targetDenied=\(targetDenied), failure=\(failed), active=\(CodexAuthSwap.activeColumnID)")
+        try expect(failed && CodexAuthSwap.activeColumnID == id
+                   && (try CodexAuthSwap.authData(home: base)) == expectedSelected
+                   && (try CodexAuthSwap.authData(home: backup)) == expectedPrimary
+                   && store.account(for: CodexAuthSwap.defaultColumnID) != nil && store.account(for: id) != nil
+                   && Foundation.FileManager.default.fileExists(atPath: profile.path),
+                   "A refused backup or target deletion reported success, changed selection, hid a live backup or removed the selected profile")
+        try expect(Fixture.desktopStops == 1 && Fixture.desktopCalls == 0,
+                   "Removal did not wait for Desktop exit without launching it")
+        Fixture.denyCodexDeleteAccount = nil
+        Fixture.denyCredentialFileRemovalPath = nil
+        try CodexAuthSwap.restoreDefault()
+        try expect(CodexProvider.readAuth(codexHome: base)?.accountID == "primary-to-delete",
+                   "A refused deletion lost the recoverable primary login")
+        try expect(mode == "file" || Fixture.codexKeychain[Fixture.codexKey(backup)] == nil,
+                   "Successful restoration did not remove the primary Keychain backup")
     }
 
 }
