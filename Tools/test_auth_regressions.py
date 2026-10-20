@@ -859,3 +859,51 @@ final class NSMenuItem { var representedObject: Any? }
 
     def test_claude_incomplete_symlink_releases_physical_locks(self):
         self.check_scenario("claude-incomplete-symlink")
+
+    def test_claude_borrowed_lease_respects_new_native_current(self):
+        self.check_scenario("claude-borrowed-foreign-current")
+
+    def test_claude_borrowed_lease_can_retry_ordinary_rollback(self):
+        self.check_scenario("claude-borrowed-normal-retry")
+
+    def test_claude_shared_directory_preserves_other_cli_owner(self):
+        self.check_scenario("claude-shared-extra")
+
+    def test_claude_shared_directory_preserves_cli_off_setting(self):
+        self.check_scenario("claude-shared-extra-cli-off")
+
+    def test_claude_shared_directory_preserves_other_fallback(self):
+        self.check_scenario("claude-shared-extra-fallback")
+
+    def test_claude_shared_directory_defers_when_metadata_is_unavailable(self):
+        self.check_scenario("claude-shared-extra-metadata-denied")
+
+    def test_claude_stale_file_owner_cannot_delete_a_new_shared_login(self):
+        self.check_scenario("claude-shared-extra-file-owner")
+
+    def test_claude_incomplete_defers_when_metadata_is_unavailable(self):
+        self.check_scenario("claude-incomplete-metadata-denied")
+
+    def test_codex_restore_rolls_back_refused_keyring_cleanup(self):
+        self.check_scenario("codex-restore-backup-keyring-refusal")
+
+    def test_codex_restore_rolls_back_refused_file_cleanup(self):
+        self.check_scenario("codex-restore-backup-file-refusal")
+
+    def test_codex_restore_rolls_back_refused_auto_cleanup(self):
+        self.check_scenario("codex-restore-backup-auto-refusal")
+
+    def test_codex_restore_refusal_preserves_native_copyback_progress(self):
+        self.check_scenario("codex-restore-backup-native-progress")
+
+    def test_codex_primary_removal_cleans_legacy_keyring_backup(self):
+        self.check_scenario("codex-legacy-backup-keyring-removal")
+
+    def test_codex_primary_removal_cleans_legacy_file_backup(self):
+        self.check_scenario("codex-legacy-backup-file-removal")
+
+    def test_codex_primary_removal_cleans_legacy_auto_backup(self):
+        self.check_scenario("codex-legacy-backup-auto-removal")
+
+    def test_codex_primary_removal_preserves_refused_legacy_backup(self):
+        self.check_scenario("codex-legacy-backup-refusal")

@@ -88,12 +88,21 @@ final class ClaudeStorageLock: @unchecked Sendable {
         return !released && !heartbeatFailed && withinLease && ownsDirectory
     }
 
+    fileprivate func isHeld(at url: URL) -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return !released && !heartbeatFailed && withinLease && ownsDirectory && ownsDirectory(at: url.path)
+    }
+
     /// Rename a managed profile without making its pinned native locks appear
     /// lost to heartbeat or concurrent renewal checks during removal/rollback.
     static func moveDirectory(from: URL, to: URL, locks: [ClaudeStorageLock]) throws {
         locks.forEach { $0.stateLock.lock() }
         defer { locks.reversed().forEach { $0.stateLock.unlock() } }
-        guard locks.allSatisfy({ !$0.released && !$0.heartbeatFailed && $0.withinLease && $0.ownsDirectory }) else {
+        guard locks.allSatisfy({
+            !$0.released && !$0.heartbeatFailed && $0.withinLease && $0.ownsDirectory
+                && $0.ownsDirectory(at: from.appendingPathComponent(URL(fileURLWithPath: $0.path).lastPathComponent).path)
+        }) else {
             throw Failure.lost
         }
         try FileManager.default.moveItem(at: from, to: to)
@@ -104,6 +113,10 @@ final class ClaudeStorageLock: @unchecked Sendable {
     }
 
     private var ownsDirectory: Bool {
+        ownsDirectory(at: path)
+    }
+
+    private func ownsDirectory(at path: String) -> Bool {
         guard let current = Identity.at(path) else { return false }
         // The held descriptor prevents inode reuse while alive. Birthtime is
         // checked only when recovering the previous JSON owner-record format.
@@ -265,7 +278,9 @@ final class ClaudeRefreshLock: @unchecked Sendable {
         defer { if existing == nil { lease.release() } }
         lease.releaseLock.lock()
         defer { lease.releaseLock.unlock() }
-        guard lease.isHeld else { throw ClaudeStorageLock.Failure.lost }
+        guard lease.isHeld, lease.current.isHeld(at: directory.appendingPathComponent(".oauth_refresh.lock")) else {
+            throw ClaudeStorageLock.Failure.busy
+        }
         try operation(lease)
     }
 

@@ -66,17 +66,8 @@ enum ClaudeKeychain {
     /// Записи с датой последнего изменения. Только атрибуты — секрет не
     /// читается, диалога пароля не будет.
     static func items() -> [(service: String, modified: Date?)] {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecMatchLimit as String: kSecMatchLimitAll,
-            kSecReturnAttributes as String: true
-        ]
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        let items = status == errSecSuccess ? (result as? [[String: Any]] ?? []) : []
-
         var found: [String: Date?] = [:]
-        for item in items {
+        for item in keychainItems() ?? [] {
             guard let service = item[kSecAttrService as String] as? String,
                   service == baseService || service.hasPrefix(baseService + "-") else { continue }
             found[service] = item[kSecAttrModificationDate as String] as? Date
@@ -100,6 +91,32 @@ enum ClaudeKeychain {
                 if rhs.service == baseService { return false }
                 return lhs.service < rhs.service
             }
+    }
+
+    /// nil means ownership metadata is unavailable; destructive callers must defer.
+    static func keychainServices(in directory: URL) -> [String]? {
+        guard let items = keychainItems() else { return nil }
+        let path = directory.resolvingSymlinksInPath().path
+        return items.compactMap { item in
+            guard let service = item[kSecAttrService as String] as? String,
+                  service == baseService || service.hasPrefix(baseService + "-") else { return nil }
+            let owner = service == baseService ? ProfileDirectories.home.appendingPathComponent(".claude")
+                : configDirectory(for: service)
+            return owner?.resolvingSymlinksInPath().path == path ? service : nil
+        }
+    }
+
+    private static func keychainItems() -> [[String: Any]]? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+            kSecReturnAttributes as String: true
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return [] }
+        guard status == errSecSuccess else { return nil }
+        return result as? [[String: Any]]
     }
 
     /// Запись есть, но входа в ней нет. Голый `claude` пишет в базовую запись
