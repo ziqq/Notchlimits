@@ -440,6 +440,15 @@ enum ProfileDirectories {
         directory.resolvingSymlinksInPath().path == home.appendingPathComponent(".claude").resolvingSymlinksInPath().path
     }
 
+    static func containsNativeHome(_ directory: URL) -> Bool {
+        let path = directory.resolvingSymlinksInPath().path
+        let prefix = path.hasSuffix("/") ? path : path + "/"
+        return [home.appendingPathComponent(".claude"), CodexAuthSwap.baseHome].contains {
+            let native = $0.resolvingSymlinksInPath().path
+            return native == path || native.hasPrefix(prefix)
+        }
+    }
+
     static func claudeProfiles() -> [URL] {
         // Foundation enumeration can reject a symlink as its root. Enumerate
         // the physical directory but retain the original CLI config spelling.

@@ -130,14 +130,15 @@ actor CodexRenewal {
     private var terminating = false
 
     /// `force` — продлить, даже если срок ещё не подошёл (usage ответил 401).
-    func renew(columnID: String, home: URL, force: Bool) async -> Result {
+    func renew(columnID: String, home: URL, force: Bool,
+               expected: CodexAuthSwap.AuthSnapshot? = nil) async -> Result {
         if let saved = pending[columnID] {
             if let result = persist(saved, columnID: columnID) { return result }
         }
         guard !terminating else { return .skipped }
         let renewal: CodexAuthSwap.Renewal
         do {
-            guard let source = try CodexAuthSwap.beginRenewal(columnID: columnID, home: home) else { return .skipped }
+            guard let source = try CodexAuthSwap.beginRenewal(columnID: columnID, home: home, expected: expected) else { return .skipped }
             renewal = source
         } catch { return .unavailable }
         defer {

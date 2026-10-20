@@ -88,7 +88,7 @@ import Foundation
     def test_claude_canonical_main_has_one_file_owner(self):
         self.check_scenario("claude-canonical-main-discovery")
 
-    def test_claude_canonical_main_refuses_stale_duplicate_removal(self):
+    def test_claude_canonical_main_preserves_stale_duplicate_configuration(self):
         self.check_scenario("claude-canonical-main-stale-removal")
 
     def test_claude_defers_fallback_refresh_until_keychain_owner_recovers(self):
@@ -111,6 +111,54 @@ import Foundation
 
     def test_claude_readd_during_removal_gets_new_usage_generation(self):
         self.check_scenario("claude-readd-during-removal-usage")
+
+    def test_codex_retired_usage_401(self):
+        self.check_scenario("codex-retired-usage-401")
+
+    def test_codex_copyback_relogin(self):
+        self.check_scenario("codex-copyback-relogin")
+
+    def test_codex_removal_selection_rollback(self):
+        self.check_scenario("codex-removal-selection-rollback")
+
+    def test_codex_native_parent_removal(self):
+        self.check_scenario("codex-native-parent-removal")
+
+    def test_claude_native_parent_removal(self):
+        self.check_scenario("claude-native-parent-removal")
+
+    def test_codex_usage_region_403(self):
+        self.check_scenario("codex-usage-region-403")
+
+    def test_claude_native_hashed_owner_removal(self):
+        self.check_scenario("claude-native-hashed-owner-removal")
+
+    def test_codex_retired_usage_same_grant(self):
+        self.check_scenario("codex-retired-usage-same-grant")
+
+    def test_codex_relogin_usage_401(self):
+        self.check_scenario("codex-relogin-usage-401")
+
+    def test_codex_copyback_file_relogin(self):
+        self.check_scenario("codex-copyback-file-relogin")
+
+    def test_codex_copyback_keyring_native(self):
+        self.check_scenario("codex-copyback-keyring-native")
+
+    def test_codex_copyback_legacy_relogin(self):
+        self.check_scenario("codex-copyback-legacy-relogin")
+
+    def test_codex_removal_file_selection_rollback(self):
+        self.check_scenario("codex-removal-file-selection-rollback")
+
+    def test_codex_removal_primary_selection_rollback(self):
+        self.check_scenario("codex-removal-primary-selection-rollback")
+
+    def test_codex_removal_native_progress_rollback(self):
+        self.check_scenario("codex-removal-native-progress-rollback")
+
+    def test_claude_native_shared_owner_removal(self):
+        self.check_scenario("claude-native-shared-owner-removal")
 
     def test_default_profile_has_its_own_identity(self):
         self.check_scenario("profile-identity")

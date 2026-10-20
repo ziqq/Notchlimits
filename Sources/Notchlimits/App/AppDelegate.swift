@@ -357,12 +357,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         })
         var result: [(label: String, url: URL)] = []
         for dir in ProfileDirectories.codexProfiles()
-            where !CodexAuthSwap.isBaseHome(dir)
+            where !ProfileDirectories.containsNativeHome(dir)
                 && !codexIds.contains(CodexAuthSwap.profileColumnID(dir.lastPathComponent)) {
             result.append(("CODEX · \(dir.lastPathComponent)", dir))
         }
         for dir in ProfileDirectories.claudeProfiles()
-            where !ProfileDirectories.isClaudeBase(dir) && !claudeDirs.contains(dir.path) {
+            where !ProfileDirectories.containsNativeHome(dir) && !claudeDirs.contains(dir.path) {
             result.append(("CLAUDE · \(dir.lastPathComponent)", dir))
         }
         return result
@@ -394,7 +394,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } else {
             do {
-                guard !ProfileDirectories.isClaudeBase(url) else { throw AccountRemoval.Failure.busy }
+                guard !ProfileDirectories.containsNativeHome(url) else { throw AccountRemoval.Failure.busy }
                 try FileManager.default.removeItem(at: url)
                 store.rediscover(force: true)
             } catch {
