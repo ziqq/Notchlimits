@@ -95,14 +95,15 @@ enum CodexAuthSwap {
     static func activate(columnID: String, home: URL) throws {
         lock.lock()
         defer { lock.unlock() }
-        try activateLocked(columnID: columnID, home: home)
+        _ = try activateLocked(columnID: columnID, home: home)
     }
 
-    private static func activateLocked(columnID: String, home: URL, keepBackup: Bool = false) throws {
+    private static func activateLocked(columnID: String, home: URL,
+                                       keepBackup: Bool = false) throws -> CodexAuthStorage.Record? {
         let base = try storage(at: baseHome)
         guard base.mode != .ephemeral else { throw CodexAuthStorage.Failure.ephemeral }
         guard columnID == defaultColumnID || !isBaseHome(home) else { throw Failure.busy }
-        guard columnID != activeColumnID else { return }
+        guard columnID != activeColumnID else { return nil }
         guard renewals[homeKey(home)] == nil,
               !renewals.values.contains(where: { $0.columnID == columnID || $0.columnID == activeColumnID }) else {
             throw Failure.busy
@@ -111,11 +112,17 @@ enum CodexAuthSwap {
         let payload = try storage(at: incoming).load(verifyingOwner: true)?.data
         guard columnID == defaultColumnID || payload != nil else { throw Failure.missingAuth }
         try FileManager.default.createDirectory(at: baseHome, withIntermediateDirectories: true)
-        try giveBackCurrent()
+        let previous = try giveBackCurrent()
         if let payload { try base.save(payload) } else { try base.delete() }
         if columnID == defaultColumnID {
-            // The restored login is durable before its backup is removed.
-            if !keepBackup { try? storage(at: stashHome).delete() }
+            // Do not forget a refused backup cleanup or report a completed switch.
+            if !keepBackup {
+                do { try storage(at: stashHome).delete() } catch {
+                    if let previous { try base.save(previous.data, backend: previous.backend) }
+                    else { try base.delete() }
+                    throw error
+                }
+            }
             UserDefaults.standard.removeObject(forKey: activeIDKey)
             UserDefaults.standard.removeObject(forKey: activeHomeKey)
             if !keepBackup { UserDefaults.standard.removeObject(forKey: sourceAuthKey) }
@@ -125,6 +132,7 @@ enum CodexAuthSwap {
             UserDefaults.standard.set(home.path, forKey: activeHomeKey)
             UserDefaults.standard.set(payload.flatMap(authIdentity), forKey: sourceAuthKey)
         }
+        return previous
     }
 
     /// Вернуть основной аккаунт в `~/.codex` (перед удалением аккаунта и т.п.).
@@ -210,9 +218,10 @@ enum CodexAuthSwap {
     }()
 
     /// Вход, что сейчас в `~/.codex`, — обратно владельцу.
-    private static func giveBackCurrent() throws {
+    private static func giveBackCurrent() throws -> CodexAuthStorage.Record? {
         let live = try storage(at: baseHome)
-        let payload = try live.load(verifyingOwner: true)?.data
+        let record = try live.load(verifyingOwner: true)
+        let payload = record?.data
         if !isSwapped {
             try FileManager.default.createDirectory(at: stashHome, withIntermediateDirectories: true)
             let stash = try CodexAuthStorage(home: stashHome, mode: live.mode)
@@ -221,9 +230,9 @@ enum CodexAuthSwap {
             try ("cli_auth_credentials_store = \"" + live.mode.rawValue + "\"\n")
                 .write(to: stashHome.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
             UserDefaults.standard.set(live.mode.rawValue, forKey: stashStoreKey)
-            return
+            return record
         }
-        guard let payload, let path = UserDefaults.standard.string(forKey: activeHomeKey) else { return }
+        guard let payload, let path = UserDefaults.standard.string(forKey: activeHomeKey) else { return record }
         let profile = try storage(at: URL(fileURLWithPath: path))
         if let previous = try profile.load(verifyingOwner: true)?.data,
            accountID(payload) == accountID(previous),
@@ -239,6 +248,7 @@ enum CodexAuthSwap {
                 .write(to: orphan.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
             try CodexAuthStorage(home: orphan, mode: live.mode).save(payload)
         }
+        return record
     }
 
     static func authData(home: URL) throws -> Data? { try storage(at: home).load()?.data }
@@ -265,15 +275,14 @@ enum CodexAuthSwap {
         defer { lock.unlock() }
         let key = homeKey(home)
         let restore = isSwapped && columnID.map { [defaultColumnID, activeColumnID].contains($0) } == true
-        if restore {
+        if restore || columnID == defaultColumnID {
             let base = try storage(at: baseHome)
-            let selected = try base.load(verifyingOwner: true)
             let backup = try storage(at: stashHome)
             let keys = [activeIDKey, activeHomeKey]
             let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
             // Restore primary credentials before removing their backup. A
             // refused cleanup must precede destructive profile deletion.
-            try activateLocked(columnID: defaultColumnID, home: baseHome, keepBackup: true)
+            let selected = restore ? try activateLocked(columnID: defaultColumnID, home: baseHome, keepBackup: true) : nil
             var removedBackup: CodexAuthStorage.Record?
             do {
                 let primary = try backup.load(verifyingOwner: true)
@@ -282,11 +291,13 @@ enum CodexAuthSwap {
                 try operation(storage(at: home))
             } catch {
                 if let primary = removedBackup { try backup.save(primary.data, backend: primary.backend) }
-                if let selected { try base.save(selected.data, backend: selected.backend) }
-                else { try base.delete() }
-                for (name, value) in zip(keys, saved) {
-                    if let value { UserDefaults.standard.set(value, forKey: name) }
-                    else { UserDefaults.standard.removeObject(forKey: name) }
+                if restore {
+                    if let selected { try base.save(selected.data, backend: selected.backend) }
+                    else { try base.delete() }
+                    for (name, value) in zip(keys, saved) {
+                        if let value { UserDefaults.standard.set(value, forKey: name) }
+                        else { UserDefaults.standard.removeObject(forKey: name) }
+                    }
                 }
                 throw error
             }
@@ -301,7 +312,9 @@ enum CodexAuthSwap {
 
     private static func storage(at home: URL) throws -> CodexAuthStorage {
         if home.standardizedFileURL == stashHome.standardizedFileURL {
-            let saved = UserDefaults.standard.string(forKey: stashStoreKey) ?? "file"
+            guard let saved = UserDefaults.standard.string(forKey: stashStoreKey) else {
+                return try CodexAuthStorage(home: home)
+            }
             guard let mode = CodexAuthStorage.Mode(rawValue: saved) else { throw CodexAuthStorage.Failure.settings }
             return try CodexAuthStorage(home: home, mode: mode)
         }

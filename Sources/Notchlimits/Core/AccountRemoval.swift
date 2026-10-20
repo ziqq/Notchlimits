@@ -66,10 +66,7 @@ enum AccountRemoval {
                 guard !FileManager.default.fileExists(atPath: directory.appendingPathComponent(".credentials.json").path) else {
                     throw Failure.busy
                 }
-                let path = directory.resolvingSymlinksInPath().path
-                let services = ClaudeKeychain.items().map(\.service).filter {
-                    ClaudeKeychain.configDirectory(for: $0)?.resolvingSymlinksInPath().path == path
-                }
+                guard let services = ClaudeKeychain.keychainServices(in: directory) else { throw Failure.busy }
                 // Native CLI also writes non-login stubs. Remove those only
                 // after proving that no OAuth login is present or unreadable.
                 guard services.allSatisfy({ ClaudeKeychain.hasNoLogin(service: $0, interactive: false) }) else {
@@ -90,10 +87,18 @@ enum AccountRemoval {
             let directory = configDir ?? ClaudeKeychain.configDirectory(for: service)
             do {
                 try ClaudeKeychain.withRemovalLock(service: service, configDir: directory) { move in
-                    if service != ClaudeKeychain.baseService,
-                       directory.map(ProfileDirectories.isClaudeBase) == true {
-                        // An explicit config path has its own Keychain service.
-                        // Its fallback file and config belong to the main home.
+                    let shared: Bool
+                    if let directory, !ProfileDirectories.isClaudeBase(directory) {
+                        guard let owners = ClaudeKeychain.keychainServices(in: directory) else { throw Failure.busy }
+                        shared = owners.contains { $0 != service }
+                        // A file-only login cannot claim the common fallback
+                        // after another Keychain owner has appeared.
+                        guard !shared || owners.contains(service) else { throw Failure.busy }
+                    } else {
+                        shared = service != ClaudeKeychain.baseService && directory.map(ProfileDirectories.isClaudeBase) == true
+                    }
+                    if shared {
+                        // Other owners retain their shared configuration and fallback.
                         try deleteKeychainEntry(service: service)
                     } else {
                         try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot, move: move) { moved in
