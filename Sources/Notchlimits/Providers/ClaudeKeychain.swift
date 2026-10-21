@@ -437,10 +437,8 @@ enum ClaudeKeychain {
     }
 
     private static func pathVariants(_ url: URL) -> [String] {
-        let path = url.path
-        return Array(Set([path, path + "/",
-                          url.standardizedFileURL.path,
-                          url.resolvingSymlinksInPath().path]))
+        let paths = [url.path, url.standardizedFileURL.path, url.resolvingSymlinksInPath().path]
+        return Array(Set(paths.flatMap { [$0, $0 + "/"] }))
     }
 
     private static func sha256Hex(_ string: String) -> String {

@@ -89,6 +89,15 @@ struct CodexAuthStorage {
         }
     }
 
+    /// A switch can promote an auto file fallback into Keychain. Restore the
+    /// owner through the preferred backend instead of leaving that item above
+    /// a restored file. Never export an original Keychain record to a fallback.
+    func restore(_ record: Record?) throws {
+        guard let record else { try delete(); return }
+        let backend: Backend? = mode == .auto && record.backend == .file ? nil : record.backend
+        try save(record.data, backend: backend)
+    }
+
     func delete(fileHome: URL? = nil) throws {
         guard mode != .ephemeral else { throw Failure.ephemeral }
         let file = (fileHome ?? home).appendingPathComponent("auth.json")

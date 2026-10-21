@@ -907,3 +907,36 @@ final class NSMenuItem { var representedObject: Any? }
 
     def test_codex_primary_removal_preserves_refused_legacy_backup(self):
         self.check_scenario("codex-legacy-backup-refusal")
+
+    def test_claude_physical_trailing_path_selects_exact_cli_service(self):
+        self.check_scenario("claude-physical-trailing-switch")
+
+    def test_claude_physical_trailing_path_renews_under_native_locks(self):
+        self.check_scenario("claude-physical-trailing-renewal")
+
+    def test_claude_physical_trailing_owner_survives_shared_removal(self):
+        self.check_scenario("claude-physical-trailing-shared")
+
+    def test_claude_physical_trailing_owner_preserves_cli_off(self):
+        self.check_scenario("claude-physical-trailing-shared-off")
+
+    def test_claude_physical_trailing_owner_preserves_shared_fallback(self):
+        self.check_scenario("claude-physical-trailing-shared-fallback")
+
+    def test_codex_auto_file_fallback_rolls_back_backup_file_refusal(self):
+        self.check_scenario("codex-auto-fallback-restore-file-refusal")
+
+    def test_codex_auto_file_fallback_rolls_back_backup_keyring_refusal(self):
+        self.check_scenario("codex-auto-fallback-restore-keyring-refusal")
+
+    def test_codex_auto_file_fallback_rolls_back_selected_removal_refusal(self):
+        self.check_scenario("codex-auto-fallback-selected-refusal")
+
+    def test_codex_auto_file_fallback_rolls_back_primary_removal_refusal(self):
+        self.check_scenario("codex-auto-fallback-primary-refusal")
+
+    def test_codex_auto_fallback_rollback_preserves_later_native_copyback(self):
+        self.check_scenario("codex-auto-fallback-native-progress")
+
+    def test_codex_auto_file_fallback_restores_primary_after_keychain_recovers(self):
+        self.check_scenario("codex-auto-fallback-restore-success")
