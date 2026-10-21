@@ -3,7 +3,7 @@ import Darwin
 
 /// Route new CLI invocations to existing profiles without copying credentials.
 /// The shell reads a persistent selection, so Claude works when Notchlimits is closed.
-enum ClaudeCLISelection {
+enum CLISelection$Claude {
     static let enabledKey = "switchClaudeCLI"
 
     static var isEnabled: Bool {
@@ -24,9 +24,9 @@ enum ClaudeCLISelection {
             throw Failure(errorDescription: L.t("error.unknownSource"))
         }
         let selection: String
-        if service == ClaudeKeychain.baseService {
+        if service == AuthStorage$Claude.baseService {
             selection = ""
-        } else if let path = ClaudeKeychain.configPath(for: service) {
+        } else if let path = AuthStorage$Claude.configPath(for: service) {
             selection = path
         } else {
             throw Failure(errorDescription: L.t("error.cliProfile"))
@@ -119,8 +119,8 @@ enum ClaudeCLISelection {
         }
 
         func commit() throws {
-            guard ClaudeKeychain.contains(service: service),
-                  service == ClaudeKeychain.baseService || ClaudeKeychain.configPath(for: service) == selection else {
+            guard AuthStorage$Claude.contains(service: service),
+                  service == AuthStorage$Claude.baseService || AuthStorage$Claude.configPath(for: service) == selection else {
                 throw Failure(errorDescription: L.t("error.cliProfile"))
             }
             guard rename(staged.path, pointer.path) == 0 else {

@@ -44,7 +44,7 @@ enum DefaultsMigration {
             let name = directory.lastPathComponent
             guard name.hasPrefix("profile:") else { continue }
             let legacyID = "codex:\(name)"
-            let currentID = CodexAuthSwap.profileColumnID(name)
+            let currentID = AuthSwap$Codex.profileColumnID(name)
             if oldHidden.contains(legacyID) { hidden.insert(currentID) }
             if names[currentID] == nil, let name = oldNames[legacyID] {
                 names[currentID] = name

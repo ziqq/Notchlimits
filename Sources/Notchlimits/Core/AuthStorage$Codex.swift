@@ -1,10 +1,11 @@
 import Foundation
 import Security
 import CryptoKit
+import Darwin
 import TOMLDecoder
 
 /// The native Codex auth payload, stored under the selected CODEX_HOME.
-struct CodexAuthStorage {
+struct AuthStorage$Codex {
     enum Mode: String { case file, keyring, auto, ephemeral }
     enum Backend { case file, keyring }
     struct Record { let data: Data; let backend: Backend }
@@ -30,11 +31,22 @@ struct CodexAuthStorage {
     }
 
     init(home: URL, mode: Mode? = nil) throws {
-        self.home = home
-        self.mode = try mode ?? Self.configuredMode(home: home)
-        let hash = SHA256.hash(data: Data(home.resolvingSymlinksInPath().path.utf8))
+        let path = Self.canonicalPath(home)
+        // Pin file operations to the same physical owner as the native Keychain
+        // key. A later symlink retarget must not redirect a pending rotation.
+        self.home = URL(fileURLWithPath: path, isDirectory: true)
+        self.mode = try mode ?? Self.configuredMode(home: self.home)
+        let hash = SHA256.hash(data: Data(path.utf8))
             .map { String(format: "%02x", $0) }.joined()
         account = "cli|" + hash.prefix(16)
+    }
+
+    /// Match Rust Path::canonicalize, including its fallback for missing homes.
+    /// Foundation also rewrites /private/tmp to /tmp, producing a different key.
+    static func canonicalPath(_ home: URL) -> String {
+        guard let path = home.path.withCString({ realpath($0, nil) }) else { return home.path }
+        defer { free(path) }
+        return String(cString: path)
     }
 
     func load(backend: Backend? = nil, verifyingOwner: Bool = false) throws -> Record? {
@@ -73,13 +85,13 @@ struct CodexAuthStorage {
             return
         }
         do {
-            var status = ClaudeKeychain.access(interactive: false) {
+            var status = AuthStorage$Claude.access(interactive: false) {
                 SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
             }
             if status == errSecItemNotFound {
                 var item = query
                 item[kSecValueData as String] = data
-                status = ClaudeKeychain.access(interactive: false) { SecItemAdd(item as CFDictionary, nil) }
+                status = AuthStorage$Claude.access(interactive: false) { SecItemAdd(item as CFDictionary, nil) }
             }
             guard status == errSecSuccess else { throw Failure.keychain(status) }
             try? removeFile()
@@ -105,7 +117,7 @@ struct CodexAuthStorage {
         let backup = FileManager.default.fileExists(atPath: file.path) ? try Data(contentsOf: file) : nil
         try removeFile(at: file)
         do {
-            let status = ClaudeKeychain.access(interactive: false) { SecItemDelete(query as CFDictionary) }
+            let status = AuthStorage$Claude.access(interactive: false) { SecItemDelete(query as CFDictionary) }
             guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.keychain(status) }
         } catch {
             if let backup,
@@ -126,7 +138,7 @@ struct CodexAuthStorage {
         request[kSecReturnData as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        let status = ClaudeKeychain.access(interactive: false) { SecItemCopyMatching(request as CFDictionary, &result) }
+        let status = AuthStorage$Claude.access(interactive: false) { SecItemCopyMatching(request as CFDictionary, &result) }
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess else { throw Failure.keychain(status) }
         guard let data = result as? Data,
@@ -138,7 +150,7 @@ struct CodexAuthStorage {
         var request = query
         request[kSecReturnAttributes as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
-        return ClaudeKeychain.access(interactive: false) { SecItemCopyMatching(request as CFDictionary, nil) }
+        return AuthStorage$Claude.access(interactive: false) { SecItemCopyMatching(request as CFDictionary, nil) }
     }
 
     private func saveFile(_ data: Data) throws {

@@ -4,7 +4,7 @@ import Foundation
 ///
 /// Токен читается из Keychain и держится только в памяти — до `expiresAt`
 /// или до первого 401. Продление сохраняем только поверх того же входа.
-actor ClaudeProvider: UsageProvider {
+actor Provider$Claude: UsageProvider {
 
     private struct CachedToken {
         let value: String
@@ -19,7 +19,7 @@ actor ClaudeProvider: UsageProvider {
     }
 
     private var tokens: [String: CachedToken] = [:]
-    private var origins: [String: ClaudeKeychain.Credentials] = [:]
+    private var origins: [String: AuthStorage$Claude.Credentials] = [:]
     private var terminating = false
     private var renewing: Set<String> = []
     private var removalGenerations: [String: UUID] = [:]
@@ -38,8 +38,8 @@ actor ClaudeProvider: UsageProvider {
     /// отозвал прежний refresh-токен, так что это единственная живая копия:
     /// пробуем записать на каждом цикле, пока не выйдет.
     private struct Pending {
-        let tokens: ClaudeOAuth.Tokens
-        let credentials: ClaudeKeychain.Credentials
+        let tokens: OAuth$Claude.Tokens
+        let credentials: AuthStorage$Claude.Credentials
     }
 
     private var unsaved: [String: Pending] = [:]
@@ -55,7 +55,7 @@ actor ClaudeProvider: UsageProvider {
         guard let token = await token(for: service) else {
             if let issue = issues[service] { return .failure(issue) }
             let noLogin = await Task.detached(priority: .utility) {
-                ClaudeKeychain.hasNoLogin(service: service)
+                AuthStorage$Claude.hasNoLogin(service: service)
             }.value
             return noLogin ? .notAnAccount : .reauth(L.t("column.reauth"))
         }
@@ -142,10 +142,10 @@ actor ClaudeProvider: UsageProvider {
         } else if unsaved[service] == nil {
             return nil
         }
-        guard ClaudeKeychain.supportsStorageLock else { return nil }
+        guard AuthStorage$Claude.supportsStorageLock else { return nil }
 
         guard let lease = await Task.detached(priority: .utility, operation: {
-            ClaudeKeychain.refreshLock(service: service)
+            AuthStorage$Claude.refreshLock(service: service)
         }).value else {
             issues[service] = L.t("error.keychainWrite")
             return nil
@@ -178,7 +178,7 @@ actor ClaudeProvider: UsageProvider {
         guard credentials.isRefreshable, let refreshToken = credentials.refreshToken else { return nil }
 
         let writable = await Task.detached(priority: .utility) {
-            ClaudeKeychain.canWrite(service: service, renewalLock: lease)
+            AuthStorage$Claude.canWrite(service: service, renewalLock: lease)
         }.value
         guard writable, lease.isHeld, !terminating, removalGenerations[service] == generation else {
             issues[service] = L.t("error.keychainWrite")
@@ -189,7 +189,7 @@ actor ClaudeProvider: UsageProvider {
         // A compromised lease cancels the request and forbids subsequent writes.
         renewing.insert(service)
         defer { renewing.remove(service) }
-        let request = Task { await ClaudeOAuth.refresh(refreshToken: refreshToken, scopes: credentials.scopes) }
+        let request = Task { await OAuth$Claude.refresh(refreshToken: refreshToken, scopes: credentials.scopes) }
         lease.onLost { request.cancel() }
         let response = await request.value
         guard removalGenerations[service] == generation else { return nil }
@@ -256,7 +256,7 @@ actor ClaudeProvider: UsageProvider {
         forget(service)
     }
 
-    private func adopt(_ credentials: ClaudeKeychain.Credentials, service: String) -> CachedToken? {
+    private func adopt(_ credentials: AuthStorage$Claude.Credentials, service: String) -> CachedToken? {
         if let origin = origins[service], !origin.hasSameTokens(as: credentials) { forget(service) }
         guard rejected[service] != credentials.accessToken else { return nil }
         if let cached = tokens[service], cached.isUsable { return cached }
@@ -269,8 +269,8 @@ actor ClaudeProvider: UsageProvider {
     /// Каким refresh-токеном продлевать. Не дописанный в Keychain новее того,
     /// что там лежит: старый сервер уже отозвал. Чистая функция — покрыта
     /// самопроверкой.
-    static func refreshToken(pending: ClaudeOAuth.Tokens?,
-                             stored: ClaudeKeychain.Credentials) -> String? {
+    static func refreshToken(pending: OAuth$Claude.Tokens?,
+                             stored: AuthStorage$Claude.Credentials) -> String? {
         if let pending = pending?.refreshToken { return pending }
         guard stored.isRefreshable else { return nil }
         return stored.refreshToken
@@ -279,7 +279,7 @@ actor ClaudeProvider: UsageProvider {
     /// A rotated grant must reach the CLI's record before its OAuth locks are
     /// released. Retry persistence only; never issue another refresh request.
     private func persist(_ pending: Pending, to service: String,
-                         lease: ClaudeRefreshLock, generation: UUID?) async -> ClaudeKeychain.SaveResult {
+                         lease: RefreshLock$Claude, generation: UUID?) async -> AuthStorage$Claude.SaveResult {
         var delay: UInt64 = 250_000_000
         while lease.isHeld && removalGenerations[service] == generation {
             let result = await write(pending, to: service, lease: lease)
@@ -312,22 +312,22 @@ actor ClaudeProvider: UsageProvider {
 
     func cancelTermination() { terminating = false }
 
-    private func write(_ pending: Pending, to service: String, lease: ClaudeRefreshLock) async -> ClaudeKeychain.SaveResult {
+    private func write(_ pending: Pending, to service: String, lease: RefreshLock$Claude) async -> AuthStorage$Claude.SaveResult {
         await Task.detached(priority: .utility) {
-            ClaudeKeychain.save(service: service, tokens: pending.tokens,
+            AuthStorage$Claude.save(service: service, tokens: pending.tokens,
                                 expected: pending.credentials, renewalLock: lease)
         }.value
     }
 
     /// SecItemCopyMatching блокирует поток, пока пользователь отвечает на диалог.
     private func read(_ service: String, interactive: Bool = true,
-                      verifyingOwner: Bool = false) async -> ClaudeKeychain.Credentials? {
+                      verifyingOwner: Bool = false) async -> AuthStorage$Claude.Credentials? {
         await Task.detached(priority: .utility) {
-            ClaudeKeychain.credentials(service: service, interactive: interactive, verifyingOwner: verifyingOwner)
+            AuthStorage$Claude.credentials(service: service, interactive: interactive, verifyingOwner: verifyingOwner)
         }.value
     }
 
-    private static func cache(_ credentials: ClaudeKeychain.Credentials) -> CachedToken? {
+    private static func cache(_ credentials: AuthStorage$Claude.Credentials) -> CachedToken? {
         let cached = CachedToken(value: credentials.accessToken,
                                  expiresAt: credentials.expiresAt,
                                  plan: credentials.plan)

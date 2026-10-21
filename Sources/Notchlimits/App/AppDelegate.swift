@@ -6,7 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var store: UsageStore!
     private var panel: PanelController!
-    private var claudeProvider: ClaudeProvider?
+    private var claudeProvider: Provider$Claude?
     private var terminationPending = false
     private var hotKeys: HotKeyManager!
     private lazy var updater = UpdaterController(
@@ -27,12 +27,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if DebugProbe.runIfRequested() { return }
 
         let useMock = ProcessInfo.processInfo.environment["NOTCHLIMITS_MOCK"] == "1"
-        let discovery: AccountDiscovery = useMock ? MockDiscovery() : RealDiscovery()
-        let claude = ClaudeProvider()
+        let discovery: AccountDiscovery = useMock ? Discovery$Mock() : Discovery$Real()
+        let claude = Provider$Claude()
         claudeProvider = useMock ? nil : claude
         let providers: [Provider: UsageProvider] = useMock
-            ? [.claude: MockProvider(), .codex: MockProvider()]
-            : [.claude: claude, .codex: CodexProvider()]
+            ? [.claude: Provider$Mock(), .codex: Provider$Mock()]
+            : [.claude: claude, .codex: Provider$Codex()]
 
         store = UsageStore(providers: providers, discovery: discovery)
         panel = PanelController(store: store, keepAwake: .shared, power: .shared)
@@ -78,12 +78,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         terminationPending = true
         Task {
             async let claudeReady = claudeProvider?.prepareForTermination() ?? true
-            async let codexReady = CodexRenewal.shared.prepareForTermination()
+            async let codexReady = Renewal$Codex.shared.prepareForTermination()
             let results = await (claudeReady, codexReady)
             let ready = results.0 && results.1
             if !ready {
                 await claudeProvider?.cancelTermination()
-                await CodexRenewal.shared.cancelTermination()
+                await Renewal$Codex.shared.cancelTermination()
                 let alert = NSAlert()
                 alert.messageText = L.t("error.pendingCredentials")
                 alert.informativeText = L.t("error.keychainWrite")
@@ -209,7 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(settingItem(L.t("menu.loginItem"), .loginItem,
                           state: LoginItem.isEnabled ? .on : .off))
         let switchCLI = settingItem(L.t("menu.switchCLI"), .switchCLI,
-                                    state: ClaudeCLISelection.isEnabled ? .on : .off)
+                                    state: CLISelection$Claude.isEnabled ? .on : .off)
         switchCLI.toolTip = L.t("menu.switchCLI.help")
         switchCLI.view?.toolTip = switchCLI.toolTip
         menu.addItem(switchCLI)
@@ -296,8 +296,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             toggleLoginItem()
             enabled = LoginItem.isEnabled
         case .switchCLI:
-            ClaudeCLISelection.isEnabled.toggle()
-            enabled = ClaudeCLISelection.isEnabled
+            CLISelection$Claude.isEnabled.toggle()
+            enabled = CLISelection$Claude.isEnabled
         case nil:
             return
         }
@@ -358,7 +358,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var result: [(label: String, url: URL)] = []
         for dir in ProfileDirectories.codexProfiles()
             where !ProfileDirectories.containsNativeHome(dir)
-                && !codexIds.contains(CodexAuthSwap.profileColumnID(dir.lastPathComponent)) {
+                && !codexIds.contains(AuthSwap$Codex.profileColumnID(dir.lastPathComponent)) {
             result.append(("CODEX · \(dir.lastPathComponent)", dir))
         }
         for dir in ProfileDirectories.claudeProfiles()
@@ -385,7 +385,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if url.path.hasPrefix(ProfileDirectories.codexRoot.path + "/") {
             AccountRemoval.remove(DiscoveredAccount(
-                id: CodexAuthSwap.profileColumnID(url.lastPathComponent), provider: .codex,
+                id: AuthSwap$Codex.profileColumnID(url.lastPathComponent), provider: .codex,
                 profileName: url.lastPathComponent, source: .codexHome(url))) { result in
                 switch result {
                 case .success: self.store.rediscover(force: true)

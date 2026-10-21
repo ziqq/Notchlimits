@@ -46,7 +46,7 @@ enum AccountRemoval {
             completion(result.flatMap { Result { try remove(account) } })
         }
         if touchesCodexDesktop(account) {
-            let app = CodexAppSwitcher()
+            let app = AppSwitcher$Codex()
             DesktopApp.stop(bundleID: app.bundleID, appName: app.appName, completion: finish)
         } else {
             finish(.success(()))
@@ -54,7 +54,7 @@ enum AccountRemoval {
     }
 
     private static func touchesCodexDesktop(_ account: DiscoveredAccount) -> Bool {
-        [CodexAuthSwap.defaultColumnID, CodexAuthSwap.activeColumnID].contains(account.id)
+        [AuthSwap$Codex.defaultColumnID, AuthSwap$Codex.activeColumnID].contains(account.id)
     }
 
     /// A stale unfinished-profile menu must not delete a newly completed login.
@@ -62,21 +62,21 @@ enum AccountRemoval {
         guard directory.path.hasPrefix(ProfileDirectories.claudeRoot.path + "/"),
               !ProfileDirectories.containsNativeHome(directory) else { throw Failure.busy }
         do {
-            try ClaudeKeychain.withRemovalLock(directory: directory) { move in
+            try AuthStorage$Claude.withRemovalLock(directory: directory) { move in
                 guard !FileManager.default.fileExists(atPath: directory.appendingPathComponent(".credentials.json").path) else {
                     throw Failure.busy
                 }
-                guard let services = ClaudeKeychain.keychainServices(in: directory) else { throw Failure.busy }
+                guard let services = AuthStorage$Claude.keychainServices(in: directory) else { throw Failure.busy }
                 // Native CLI also writes non-login stubs. Remove those only
                 // after proving that no OAuth login is present or unreadable.
-                guard services.allSatisfy({ ClaudeKeychain.hasNoLogin(service: $0, interactive: false) }) else {
+                guard services.allSatisfy({ AuthStorage$Claude.hasNoLogin(service: $0, interactive: false) }) else {
                     throw Failure.busy
                 }
                 try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot, move: move) { _ in
                     for service in services { try deleteKeychainEntry(service: service) }
                 }
             }
-        } catch is ClaudeStorageLock.Failure {
+        } catch is StorageLock$Claude.Failure {
             throw Failure.busy
         }
     }
@@ -84,18 +84,18 @@ enum AccountRemoval {
     static func remove(_ account: DiscoveredAccount) throws {
         switch account.source {
         case .claudeKeychain(let service, let configDir):
-            let directory = configDir ?? ClaudeKeychain.configDirectory(for: service)
+            let directory = configDir ?? AuthStorage$Claude.configDirectory(for: service)
             do {
-                try ClaudeKeychain.withRemovalLock(service: service, configDir: directory) { move in
+                try AuthStorage$Claude.withRemovalLock(service: service, configDir: directory) { move in
                     let shared: Bool
                     if let directory, !ProfileDirectories.isClaudeBase(directory) {
-                        guard let owners = ClaudeKeychain.keychainServices(in: directory) else { throw Failure.busy }
+                        guard let owners = AuthStorage$Claude.keychainServices(in: directory) else { throw Failure.busy }
                         shared = owners.contains { $0 != service }
                         // A file-only login cannot claim the common fallback
                         // after another Keychain owner has appeared.
                         guard !shared || owners.contains(service) else { throw Failure.busy }
                     } else {
-                        shared = service != ClaudeKeychain.baseService && directory.map(ProfileDirectories.isClaudeBase) == true
+                        shared = service != AuthStorage$Claude.baseService && directory.map(ProfileDirectories.isClaudeBase) == true
                     }
                     if shared {
                         // Other owners retain their shared configuration and fallback.
@@ -105,23 +105,23 @@ enum AccountRemoval {
                             try deleteClaudeCredentials(service: service, configDir: moved)
                         }
                     }
-                    ClaudeAppSwitcher.accountRemoved(columnID: account.id)
+                    AppSwitcher$Claude.accountRemoved(columnID: account.id)
                 }
-            } catch is ClaudeStorageLock.Failure {
+            } catch is StorageLock$Claude.Failure {
                 throw Failure.busy
             }
 
         case .codexHome(let url):
             // Discovery presents a canonical base home only as primary. Reject
             // stale duplicate columns rather than deleting another logical owner.
-            let isBase = CodexAuthSwap.isBaseHome(url)
-            guard !isBase || account.id == CodexAuthSwap.defaultColumnID else { throw Failure.busy }
+            let isBase = AuthSwap$Codex.isBaseHome(url)
+            guard !isBase || account.id == AuthSwap$Codex.defaultColumnID else { throw Failure.busy }
             guard isBase || !ProfileDirectories.containsNativeHome(url) else { throw Failure.busy }
             // Synchronous callers must also fail safely under a running Desktop.
             if touchesCodexDesktop(account) {
-                guard !DesktopApp.isRunning(bundleID: CodexAppSwitcher().bundleID) else { throw Failure.busy }
+                guard !DesktopApp.isRunning(bundleID: AppSwitcher$Codex().bundleID) else { throw Failure.busy }
             }
-            try CodexAuthSwap.removeAuth(home: url, columnID: account.id) { storage in
+            try AuthSwap$Codex.removeAuth(home: url, columnID: account.id) { storage in
                 if isBase {
                     try storage.delete()
                 } else {
@@ -195,7 +195,7 @@ enum AccountRemoval {
     }
 
     private static func deleteClaudeCredentials(service: String, configDir: URL?) throws {
-        let file = configDir?.appendingPathComponent(".credentials.json") ?? ClaudeKeychain.credentialFile(service: service)
+        let file = configDir?.appendingPathComponent(".credentials.json") ?? AuthStorage$Claude.credentialFile(service: service)
         let backup = try file.flatMap { FileManager.default.fileExists(atPath: $0.path) ? try Data(contentsOf: $0) : nil }
         // An unlink failure must leave Keychain and pending grants untouched.
         if let file, backup != nil { try FileManager.default.removeItem(at: file) }
@@ -215,7 +215,7 @@ enum AccountRemoval {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service
         ]
-        let status = ClaudeKeychain.access { SecItemDelete(query as CFDictionary) }
+        let status = AuthStorage$Claude.access { SecItemDelete(query as CFDictionary) }
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw Failure.keychain(status)
         }

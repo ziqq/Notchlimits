@@ -65,8 +65,8 @@ enum AccountSetup {
         if name.isEmpty {
             // Пока в ~/.codex подменён вход профиля (открыт в приложении),
             // основной живёт в запасе — туда и входим, чужой вход не трогаем.
-            let home = CodexAuthSwap.liveHome(columnID: CodexAuthSwap.defaultColumnID,
-                                              home: CodexAuthSwap.baseHome)
+            let home = AuthSwap$Codex.liveHome(columnID: AuthSwap$Codex.defaultColumnID,
+                                              home: AuthSwap$Codex.baseHome)
             try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
             let script = """
             #!/bin/zsh
@@ -107,7 +107,7 @@ enum AccountSetup {
             }
             // Без папки конфига — базовая запись, её берёт голая `claude`.
             // Запись с хэшем, чью папку не нашли, во вход основного не превращаем.
-            guard configDir != nil || service == ClaudeKeychain.baseService else {
+            guard configDir != nil || service == AuthStorage$Claude.baseService else {
                 showAlert(title: L.t("setup.failed.title"), message: L.t("error.unknownSource"))
                 return
             }
@@ -124,9 +124,9 @@ enum AccountSetup {
             }
             // Входим туда, где вход колонки лежит прямо сейчас: для основного
             // аккаунта это может быть запас, пока в ~/.codex чужой.
-            let live = CodexAuthSwap.liveHome(columnID: account.id, home: home)
+            let live = AuthSwap$Codex.liveHome(columnID: account.id, home: home)
             try? FileManager.default.createDirectory(at: live, withIntermediateDirectories: true)
-            let directory = CodexAuthSwap.isBaseHome(live) || live == CodexAuthSwap.stashHome
+            let directory = AuthSwap$Codex.isBaseHome(live) || live == AuthSwap$Codex.stashHome
                 ? Target.codex.mainScriptDirectory
                 : live
             let script = codexReloginScript(binary: binary, profileName: account.profileName, home: live)
@@ -196,16 +196,16 @@ enum AccountSetup {
         static let claude = Target(
             root: ProfileDirectories.claudeRoot,
             mainLabel: "~/.claude",
-            mainExists: { ClaudeKeychain.services().contains(ClaudeKeychain.baseService) },
+            mainExists: { AuthStorage$Claude.services().contains(AuthStorage$Claude.baseService) },
             mainScriptDirectory: DesktopApp.supportDirectory.appendingPathComponent("login/claude-main"))
 
         static let codex = Target(
             root: ProfileDirectories.codexRoot,
             mainLabel: "~/.codex",
             mainExists: {
-                let home = CodexAuthSwap.liveHome(columnID: CodexAuthSwap.defaultColumnID,
-                                                  home: CodexAuthSwap.baseHome)
-                return CodexAuthSwap.hasAuth(home: home)
+                let home = AuthSwap$Codex.liveHome(columnID: AuthSwap$Codex.defaultColumnID,
+                                                  home: AuthSwap$Codex.baseHome)
+                return AuthSwap$Codex.hasAuth(home: home)
             },
             mainScriptDirectory: DesktopApp.supportDirectory.appendingPathComponent("login/codex-main"))
     }

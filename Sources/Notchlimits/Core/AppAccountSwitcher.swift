@@ -7,11 +7,11 @@ import AppKit
 /// (`DesktopApp.restart`). Чем «подготовить» — у каждого приложения своё:
 ///
 /// - Claude: аккаунт — веб-сессия Electron в user-data-dir, у каждой колонки
-///   своя папка данных (`ClaudeAppSwitcher`).
+///   своя папка данных (`AppSwitcher$Claude`).
 /// - Codex: вход живёт в `~/.codex/auth.json`, а рядом — проекты, треды и
 ///   сайдбар. Отдельный CODEX_HOME на аккаунт терял бы их, поэтому приложение
 ///   всегда работает на `~/.codex`, а подменяется только `auth.json`
-///   (`CodexAppSwitcher`, `CodexAuthSwap`).
+///   (`AppSwitcher$Codex`, `AuthSwap$Codex`).
 ///
 /// Список аккаунтов — это колонки панели того же провайдера.
 protocol AppAccountSwitcher {
@@ -73,8 +73,8 @@ enum AppSwitchState {
 
 func appAccountSwitcher(for provider: Provider) -> any AppAccountSwitcher {
     switch provider {
-    case .claude: return ClaudeAppSwitcher()
-    case .codex: return CodexAppSwitcher()
+    case .claude: return AppSwitcher$Claude()
+    case .codex: return AppSwitcher$Codex()
     }
 }
 
@@ -82,8 +82,8 @@ func appAccountSwitcher(for provider: Provider) -> any AppAccountSwitcher {
 
 /// Claude Desktop: своя папка данных (`--user-data-dir`) на колонку. Первый
 /// свич на аккаунт открывает приложение в пустой папке — там нужно войти.
-final class ClaudeAppSwitcher: AppAccountSwitcher {
-    private var cliChange: ClaudeCLISelection.Prepared?
+final class AppSwitcher$Claude: AppAccountSwitcher {
+    private var cliChange: CLISelection$Claude.Prepared?
     private var preparedKey: String?
     let bundleID = "com.anthropic.claudefordesktop"
     let appName = "Claude"
@@ -128,7 +128,7 @@ final class ClaudeAppSwitcher: AppAccountSwitcher {
         let dir = Self.root.appendingPathComponent(key, isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         preparedKey = key
-        if ClaudeCLISelection.isEnabled { cliChange = try ClaudeCLISelection.stage(account) }
+        if CLISelection$Claude.isEnabled { cliChange = try CLISelection$Claude.stage(account) }
         let config = NSWorkspace.OpenConfiguration()
         config.arguments = ["--user-data-dir=\(dir.path)"]
         return config
@@ -139,11 +139,11 @@ final class ClaudeAppSwitcher: AppAccountSwitcher {
         // filesystem change prevents publishing the prepared CLI selection.
         let launchedKey = preparedKey ?? Self.key(for: account.id)
         defer { UserDefaults.standard.set(launchedKey, forKey: Self.currentKey) }
-        if ClaudeCLISelection.isEnabled {
+        if CLISelection$Claude.isEnabled {
             guard launchedKey == Self.key(for: account.id) else {
                 throw RetiredAccount()
             }
-            let change = try cliChange ?? ClaudeCLISelection.stage(account)
+            let change = try cliChange ?? CLISelection$Claude.stage(account)
             try change.commit()
         }
         cliChange = nil
@@ -157,17 +157,17 @@ final class ClaudeAppSwitcher: AppAccountSwitcher {
 
 /// Desktop and CLI share the base CODEX_HOME and its configured auth backend.
 /// Swap credentials only, preserving the application's projects and threads.
-struct CodexAppSwitcher: AppAccountSwitcher {
+struct AppSwitcher$Codex: AppAccountSwitcher {
     let bundleID = "com.openai.codex"
     let appName = "Codex"
 
     func isOpenInApp(columnID: String) -> Bool? {
-        CodexAuthSwap.activeColumnID == columnID
+        AuthSwap$Codex.activeColumnID == columnID
     }
 
     func prepare(_ account: DiscoveredAccount) throws -> NSWorkspace.OpenConfiguration {
-        guard case .codexHome(let home) = account.source else { throw CodexAuthSwap.Failure.missingAuth }
-        try CodexAuthSwap.activate(columnID: account.id, home: home)
+        guard case .codexHome(let home) = account.source else { throw AuthSwap$Codex.Failure.missingAuth }
+        try AuthSwap$Codex.activate(columnID: account.id, home: home)
         return NSWorkspace.OpenConfiguration()
     }
 

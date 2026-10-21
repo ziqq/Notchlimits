@@ -15,12 +15,12 @@ class AuthenticationRegressions(unittest.TestCase):
         cls.build = tempfile.TemporaryDirectory(prefix="notchlimits-auth-tests-")
         cls.addClassCleanup(cls.build.cleanup)
         # The assertion is identical for both revisions; only the old save API differs.
-        keychain = (SOURCES / "Providers/ClaudeKeychain.swift").read_text()
+        keychain = (SOURCES / "Providers/AuthStorage$Claude.swift").read_text()
         flags = () if "expected: Credentials" in keychain else ("-DLEGACY_CLAUDE_SAVE",)
-        provider = (SOURCES / "Providers/ClaudeProvider.swift").read_text()
+        provider = (SOURCES / "Providers/Provider$Claude.swift").read_text()
         if "func prepareForTermination(" in provider:
             flags += ("-DCLAUDE_TERMINATION_DRAIN",)
-        codex = (SOURCES / "Providers/CodexOAuth.swift").read_text()
+        codex = (SOURCES / "Providers/OAuth$Codex.swift").read_text()
         if "func prepareForTermination(" in codex:
             flags += ("-DCODEX_TERMINATION_DRAIN",)
         if "completion:" in (SOURCES / "Core/AccountRemoval.swift").read_text():
@@ -50,7 +50,7 @@ final class NSAlert {
     @discardableResult func addButton(withTitle: String) -> Button { Button() }
 }
 @MainActor final class RegressionTerminationDelegate {
-    var claudeProvider: ClaudeProvider? = ClaudeProvider()
+    var claudeProvider: Provider$Claude? = Provider$Claude()
     var terminationPending = false
     func runModalAbovePanel(_ alert: NSAlert) {}
 ''' + delegate[start:end] + "\n}\n")
@@ -88,15 +88,15 @@ final class NSMenuItem { var representedObject: Any? }
 ''' + menu_body + "\n" + removal_body + "\n}\n")
         cls.executable = compile_fixture(cls.build.name, "Authentication", [
             "Model/Models.swift", "Model/Account.swift", "Core/JWT.swift",
-            *(["Core/ClaudeStorageLock.swift"] if (SOURCES / "Core/ClaudeStorageLock.swift").exists() else []),
-            *(["Core/CodexAuthStorage.swift"] if (SOURCES / "Core/CodexAuthStorage.swift").exists() else []),
-            "Core/CodexAuthSwap.swift", "Core/AccountRemoval.swift",
+            *(["Core/StorageLock$Claude.swift"] if (SOURCES / "Core/StorageLock$Claude.swift").exists() else []),
+            *(["Core/AuthStorage$Codex.swift"] if (SOURCES / "Core/AuthStorage$Codex.swift").exists() else []),
+            "Core/AuthSwap$Codex.swift", "Core/AccountRemoval.swift",
             "Core/AccountSwitcher.swift", "Core/AppAccountSwitcher.swift",
-            *(["Core/ClaudeCLISelection.swift"] if (SOURCES / "Core/ClaudeCLISelection.swift").exists() else []),
+            *(["Core/CLISelection$Claude.swift"] if (SOURCES / "Core/CLISelection$Claude.swift").exists() else []),
             "Core/DefaultsMigration.swift", "Core/UsageStore.swift", "Core/UsageCache.swift",
-            "Providers/ClaudeKeychain.swift", "Providers/ClaudeOAuth.swift",
-            "Providers/ClaudeProvider.swift", "Providers/CodexOAuth.swift",
-            "Providers/CodexProvider.swift", "Providers/RealDiscovery.swift",
+            "Providers/AuthStorage$Claude.swift", "Providers/OAuth$Claude.swift",
+            "Providers/Provider$Claude.swift", "Providers/OAuth$Codex.swift",
+            "Providers/Provider$Codex.swift", "Providers/Discovery$Real.swift",
         ], flags, extra_sources=[termination, menu])
 
     def check_scenario(self, scenario):
@@ -940,3 +940,63 @@ final class NSMenuItem { var representedObject: Any? }
 
     def test_codex_auto_file_fallback_restores_primary_after_keychain_recovers(self):
         self.check_scenario("codex-auto-fallback-restore-success")
+
+    def test_codex_native_canonical_keyring_read(self):
+        self.check_scenario("codex-native-canonical-keyring")
+
+    def test_codex_native_canonical_auto_prefers_keyring(self):
+        self.check_scenario("codex-native-canonical-auto")
+
+    def test_codex_native_canonical_save_updates_existing_item(self):
+        self.check_scenario("codex-native-canonical-save")
+
+    def test_codex_native_canonical_keyring_removal(self):
+        self.check_scenario("codex-native-canonical-remove")
+
+    def test_codex_native_canonical_auto_removal(self):
+        self.check_scenario("codex-native-canonical-remove-auto")
+
+    def test_codex_native_canonical_renewal(self):
+        self.check_scenario("codex-native-canonical-renew")
+
+    def test_codex_native_canonical_switch_and_copyback(self):
+        self.check_scenario("codex-native-canonical-switch")
+
+    def test_codex_native_canonical_file_mode_control(self):
+        self.check_scenario("codex-native-canonical-file")
+
+    def test_codex_retarget_readd_same_grant_retires_request(self):
+        self.check_scenario("codex-retarget-readd-same")
+
+    def test_codex_retarget_readd_new_grant_control(self):
+        self.check_scenario("codex-retarget-readd-new")
+
+    def test_codex_retarget_preserves_inflight_rotation_at_original_owner(self):
+        self.check_scenario("codex-retarget-inflight")
+
+    def test_codex_retarget_drains_pending_rotation_to_original_owner(self):
+        self.check_scenario("codex-retarget-pending")
+
+    def test_codex_retarget_aba_retires_late_usage_401(self):
+        self.check_scenario("codex-retarget-usage-aba")
+
+    def test_claude_stub_result_cannot_hide_new_cli_login(self):
+        self.check_scenario("claude-stub-login-race")
+
+    def test_claude_stub_same_timestamp_cannot_hide_new_login(self):
+        self.check_scenario("claude-stub-same-date")
+
+    def test_claude_stub_legacy_marker_cannot_hide_valid_login(self):
+        self.check_scenario("claude-stub-legacy-marker")
+
+    def test_claude_stub_denied_owner_does_not_follow_stale_fallback(self):
+        self.check_scenario("claude-stub-owner-denied")
+
+    def test_claude_stub_malformed_owner_does_not_follow_stale_fallback(self):
+        self.check_scenario("claude-stub-owner-malformed")
+
+    def test_claude_genuine_stub_remains_hidden_control(self):
+        self.check_scenario("claude-stub-genuine")
+
+    def test_claude_stub_later_login_is_discovered_control(self):
+        self.check_scenario("claude-stub-later-login")

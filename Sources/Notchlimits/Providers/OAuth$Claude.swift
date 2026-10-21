@@ -9,7 +9,7 @@ import Foundation
 /// Токен обновления может ротироваться: если в ответе пришёл новый, прежний
 /// перестаёт действовать, поэтому результат обязательно пишется обратно в
 /// Keychain — иначе мы сломаем вход самого CLI.
-enum ClaudeOAuth {
+enum OAuth$Claude {
 
     static let tokenURL = URL(string: "https://platform.claude.com/v1/oauth/token")!
     static let clientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"

@@ -201,7 +201,7 @@ final class UsageStore: ObservableObject {
 
     private func finishRemoval(_ account: DiscoveredAccount) {
         let id = account.id
-        if let claude = providers[.claude] as? ClaudeProvider,
+        if let claude = providers[.claude] as? Provider$Claude,
            case .claudeKeychain = account.source {
             Task { await claude.accountRemoved(account) }
         }
@@ -288,7 +288,7 @@ final class UsageStore: ObservableObject {
         case .notAnAccount:
             // Запись без входа: запоминаем и убираем колонку при пересборке.
             if case .claudeKeychain(let service, _)? = account(for: id)?.source {
-                ClaudeKeychain.markNoLogin(service: service)
+                AuthStorage$Claude.markNoLogin(service: service)
             }
             runtime[id] = state
             rediscover(force: true)
