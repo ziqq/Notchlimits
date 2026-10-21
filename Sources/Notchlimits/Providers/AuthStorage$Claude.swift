@@ -7,7 +7,7 @@ import Security
 /// Перечисление профилей запрашивает только атрибуты — это не трогает ACL и не
 /// вызывает диалог. Диалог macOS показывает один раз при первом чтении самого
 /// секрета; в нём нужно нажать «Разрешать всегда».
-enum ClaudeKeychain {
+enum AuthStorage$Claude {
 
     static let baseService = "Claude Code-credentials"
     enum Backend { case keychain, file }
@@ -121,8 +121,8 @@ enum ClaudeKeychain {
 
     /// Запись есть, но входа в ней нет. Голый `claude` пишет в базовую запись
     /// служебное (`trustedDeviceToken`) даже без логина — это не аккаунт.
-    static func hasNoLogin(service: String, interactive: Bool = true) -> Bool {
-        guard let json = rawItem(service: service, interactive: interactive) else { return false }
+    static func hasNoLogin(service: String, interactive: Bool = true, verifyingOwner: Bool = false) -> Bool {
+        guard let json = readItem(service: service, interactive: interactive, verifyingOwner: verifyingOwner).json else { return false }
         return isNoLogin(json)
     }
 
@@ -150,7 +150,11 @@ enum ClaudeKeychain {
         guard let modified,
               let stubs = UserDefaults.standard.dictionary(forKey: stubsKey) as? [String: Double],
               let seen = stubs[service] else { return false }
+        // A late stub result or a same-timestamp native write can leave a marker
+        // on a newer login. Confirm it without a dialog before hiding the owner;
+        // denied or malformed preferred Keychain entries must remain visible.
         return seen == modified.timeIntervalSince1970
+            && hasNoLogin(service: service, interactive: false, verifyingOwner: true)
     }
 
     /// Чтение секрета. Блокирующий вызов — только вне главного потока.
@@ -171,12 +175,6 @@ enum ClaudeKeychain {
         ]
         var result: CFTypeRef?
         return access { SecItemCopyMatching(query as CFDictionary, &result) }
-    }
-
-    /// Сырой JSON записи. Нужен отдельно, чтобы при записи сохранить поля,
-    /// про которые мы не знаем: их пишет CLI, и терять их нельзя.
-    private static func rawItem(service: String, interactive: Bool = true) -> [String: Any]? {
-        readItem(service: service, interactive: interactive).json
     }
 
     private static func readItem(service: String, interactive: Bool,
@@ -264,8 +262,8 @@ enum ClaudeKeychain {
     /// current JSON. Discard a stale response if the login changed, preserving
     /// unknown fields. This blocking operation must run off the main thread.
     @discardableResult
-    static func save(service: String, tokens: ClaudeOAuth.Tokens,
-                     expected: Credentials, renewalLock: ClaudeRefreshLock? = nil) -> SaveResult {
+    static func save(service: String, tokens: OAuth$Claude.Tokens,
+                     expected: Credentials, renewalLock: RefreshLock$Claude? = nil) -> SaveResult {
         guard let storageLock = storageLock(service: service, createParent: renewalLock == nil) else { return .failed }
         defer { storageLock.release() }
         let item = readItem(service: service, interactive: renewalLock == nil, backend: expected.backend)
@@ -296,7 +294,7 @@ enum ClaudeKeychain {
     /// ДО продления — сервер отзывает прежний refresh-токен, и если новый
     /// потом не записать, в Keychain останется мёртвый, а CLI, наткнувшись
     /// на него, обнулит вход. Блокирующий вызов — только вне главного потока.
-    static func canWrite(service: String, renewalLock: ClaudeRefreshLock? = nil) -> Bool {
+    static func canWrite(service: String, renewalLock: RefreshLock$Claude? = nil) -> Bool {
         guard let storageLock = storageLock(service: service, createParent: renewalLock == nil) else { return false }
         defer { storageLock.release() }
         let item = readItem(service: service, interactive: renewalLock == nil, verifyingOwner: true)
@@ -306,7 +304,7 @@ enum ClaudeKeychain {
     }
 
     private static func write(_ data: Data, service: String, backend: Backend,
-                              storageLock: ClaudeStorageLock, renewalLock: ClaudeRefreshLock?) -> Bool {
+                              storageLock: StorageLock$Claude, renewalLock: RefreshLock$Claude?) -> Bool {
         if backend == .file {
             guard storageLock.isHeld, renewalLock?.isHeld != false,
                   let file = credentialFile(service: service) else { return false }
@@ -326,9 +324,9 @@ enum ClaudeKeychain {
         } == errSecSuccess
     }
 
-    static func refreshLock(service: String) -> ClaudeRefreshLock? {
+    static func refreshLock(service: String) -> RefreshLock$Claude? {
         guard supportsStorageLock, let directory = storageDirectory(service: service) else { return nil }
-        return try? ClaudeRefreshLock(directory: directory, createParent: service == baseService)
+        return try? RefreshLock$Claude(directory: directory, createParent: service == baseService)
     }
 
     static func withRemovalLock(service: String, configDir: URL?,
@@ -342,10 +340,10 @@ enum ClaudeKeychain {
 
     static func withRemovalLock(directory: URL, createParent: Bool = false,
                                 operation: (_ move: (URL, URL) throws -> Void) throws -> Void) throws {
-        try ClaudeRefreshLock.withRemovalLock(directory: directory, createParent: createParent) { lease in
-            let storage = try ClaudeStorageLock(directory: directory, createParent: false)
+        try RefreshLock$Claude.withRemovalLock(directory: directory, createParent: createParent) { lease in
+            let storage = try StorageLock$Claude(directory: directory, createParent: false)
             defer { storage.release() }
-            guard lease.isHeld, storage.isHeld else { throw ClaudeStorageLock.Failure.lost }
+            guard lease.isHeld, storage.isHeld else { throw StorageLock$Claude.Failure.lost }
             try operation { from, to in try lease.moveDirectory(from: from, to: to, storage: storage) }
         }
     }
@@ -354,10 +352,10 @@ enum ClaudeKeychain {
         var errorDescription: String? { L.t("error.cliProfile") }
     }
 
-    private static func storageLock(service: String, createParent: Bool) -> ClaudeStorageLock? {
+    private static func storageLock(service: String, createParent: Bool) -> StorageLock$Claude? {
         guard supportsStorageLock, let directory = storageDirectory(service: service) else { return nil }
         // Renewal already owns this directory. Do not recreate it after removal.
-        return try? ClaudeStorageLock(directory: directory, createParent: createParent && service == baseService)
+        return try? StorageLock$Claude(directory: directory, createParent: createParent && service == baseService)
     }
 
     private static func storageDirectory(service: String) -> URL? {
@@ -463,7 +461,7 @@ enum ProfileDirectories {
     static func containsNativeHome(_ directory: URL) -> Bool {
         let path = directory.resolvingSymlinksInPath().path
         let prefix = path.hasSuffix("/") ? path : path + "/"
-        return [home.appendingPathComponent(".claude"), CodexAuthSwap.baseHome].contains {
+        return [home.appendingPathComponent(".claude"), AuthSwap$Codex.baseHome].contains {
             let native = $0.resolvingSymlinksInPath().path
             return native == path || native.hasPrefix(prefix)
         }

@@ -3,7 +3,7 @@ import Foundation
 
 /// Coordinates with Claude Code's secureStorage.mutate: mkdir `.storage-write.lock`
 /// in the credentials directory and keep its mtime current while holding it.
-final class ClaudeStorageLock: @unchecked Sendable {
+final class StorageLock$Claude: @unchecked Sendable {
     enum Failure: Error { case busy, lost }
 
     private var path: String
@@ -96,7 +96,7 @@ final class ClaudeStorageLock: @unchecked Sendable {
 
     /// Rename a managed profile without making its pinned native locks appear
     /// lost to heartbeat or concurrent renewal checks during removal/rollback.
-    static func moveDirectory(from: URL, to: URL, locks: [ClaudeStorageLock]) throws {
+    static func moveDirectory(from: URL, to: URL, locks: [StorageLock$Claude]) throws {
         locks.forEach { $0.stateLock.lock() }
         defer { locks.reversed().forEach { $0.stateLock.unlock() } }
         guard locks.allSatisfy({
@@ -235,15 +235,15 @@ final class ClaudeStorageLock: @unchecked Sendable {
 
 /// Claude Code holds both locks across read, refresh and persistence. The legacy
 /// lock uses the real config path, including for symlinked profile directories.
-final class ClaudeRefreshLock: @unchecked Sendable {
+final class RefreshLock$Claude: @unchecked Sendable {
     private final class Active {
-        weak var lease: ClaudeRefreshLock?
-        init(_ lease: ClaudeRefreshLock) { self.lease = lease }
+        weak var lease: RefreshLock$Claude?
+        init(_ lease: RefreshLock$Claude) { self.lease = lease }
     }
     private static let registryLock = NSLock()
     private static var active: [String: Active] = [:]
-    private let current: ClaudeStorageLock
-    private let legacy: ClaudeStorageLock
+    private let current: StorageLock$Claude
+    private let legacy: StorageLock$Claude
     private let directoryKey: String
     private let releaseLock = NSLock()
 
@@ -252,11 +252,11 @@ final class ClaudeRefreshLock: @unchecked Sendable {
         if createParent {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
-        current = try ClaudeStorageLock(path: directory.appendingPathComponent(".oauth_refresh.lock"),
+        current = try StorageLock$Claude(path: directory.appendingPathComponent(".oauth_refresh.lock"),
                                         lifetime: 60, createParent: false)
         do {
             let path = directory.resolvingSymlinksInPath().path + ".lock"
-            legacy = try ClaudeStorageLock(path: URL(fileURLWithPath: path), lifetime: 60, createParent: false)
+            legacy = try StorageLock$Claude(path: URL(fileURLWithPath: path), lifetime: 60, createParent: false)
         } catch {
             current.release()
             throw error
@@ -269,26 +269,26 @@ final class ClaudeRefreshLock: @unchecked Sendable {
     /// Removal may borrow our renewal lease, but must never bypass a native owner.
     /// Keep that lease from being released until the synchronous mutation ends.
     static func withRemovalLock(directory: URL, createParent: Bool,
-                                operation: (ClaudeRefreshLock) throws -> Void) throws {
+                                operation: (RefreshLock$Claude) throws -> Void) throws {
         let key = directory.resolvingSymlinksInPath().path
         registryLock.lock()
         let existing = active[key]?.lease
         registryLock.unlock()
-        let lease = try existing ?? ClaudeRefreshLock(directory: directory, createParent: createParent)
+        let lease = try existing ?? RefreshLock$Claude(directory: directory, createParent: createParent)
         defer { if existing == nil { lease.release() } }
         lease.releaseLock.lock()
         defer { lease.releaseLock.unlock() }
         guard lease.isHeld, lease.current.isHeld(at: directory.appendingPathComponent(".oauth_refresh.lock")) else {
-            throw ClaudeStorageLock.Failure.busy
+            throw StorageLock$Claude.Failure.busy
         }
         try operation(lease)
     }
 
     var isHeld: Bool { current.isHeld && legacy.isHeld }
 
-    func moveDirectory(from: URL, to: URL, storage: ClaudeStorageLock) throws {
+    func moveDirectory(from: URL, to: URL, storage: StorageLock$Claude) throws {
         // The legacy OAuth lock is adjacent to the profile and stays in place.
-        try ClaudeStorageLock.moveDirectory(from: from, to: to, locks: [current, storage])
+        try StorageLock$Claude.moveDirectory(from: from, to: to, locks: [current, storage])
     }
 
     func onLost(_ handler: @escaping () -> Void) {

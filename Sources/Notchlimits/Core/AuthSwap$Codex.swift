@@ -5,7 +5,7 @@ import CryptoKit
 /// Projects and threads stay in place. The primary account waits in an internal
 /// backup using its original backend; native token changes return to the selected
 /// profile's backend before the next switch. liveHome keeps column identities stable.
-enum CodexAuthSwap {
+enum AuthSwap$Codex {
 
     enum Failure: LocalizedError {
         case missingAuth, busy
@@ -37,15 +37,18 @@ enum CodexAuthSwap {
         let columnID: String
         let key: String
         let generation: UUID?
-        let storage: CodexAuthStorage
-        let record: CodexAuthStorage.Record
+        let columnGeneration: UUID?
+        let storage: AuthStorage$Codex
+        let record: AuthStorage$Codex.Record
     }
     struct AuthSnapshot {
         let data: Data
         let key: String
         let generation: UUID?
+        let columnGeneration: UUID?
     }
     private static var generations: [String: UUID] = [:]
+    private static var columnGenerations: [String: UUID] = [:]
     private static var renewals: [String: Renewal] = [:]
 
     /// Базовый CODEX_HOME: его берут голая `codex` и приложение.
@@ -89,7 +92,7 @@ enum CodexAuthSwap {
         homeKey(url) == homeKey(baseHome)
     }
 
-    private static func homeKey(_ home: URL) -> String { home.resolvingSymlinksInPath().path }
+    private static func homeKey(_ home: URL) -> String { AuthStorage$Codex.canonicalPath(home) }
 
     /// Положить в `~/.codex` вход колонки. Приложение должно быть закрыто.
     static func activate(columnID: String, home: URL) throws {
@@ -99,9 +102,9 @@ enum CodexAuthSwap {
     }
 
     private static func activateLocked(columnID: String, home: URL,
-                                       keepBackup: Bool = false) throws -> CodexAuthStorage.Record? {
+                                       keepBackup: Bool = false) throws -> AuthStorage$Codex.Record? {
         let base = try storage(at: baseHome)
-        guard base.mode != .ephemeral else { throw CodexAuthStorage.Failure.ephemeral }
+        guard base.mode != .ephemeral else { throw AuthStorage$Codex.Failure.ephemeral }
         guard columnID == defaultColumnID || !isBaseHome(home) else { throw Failure.busy }
         guard columnID != activeColumnID else { return nil }
         guard renewals[homeKey(home)] == nil,
@@ -145,7 +148,8 @@ enum CodexAuthSwap {
         lock.lock()
         defer { lock.unlock() }
         let key = homeKey(home)
-        if let expected, expected.key != key || expected.generation != generations[key] { return nil }
+        if let expected, expected.key != key || expected.generation != generations[key]
+            || expected.columnGeneration != columnGenerations[columnID] { return nil }
         guard renewals[key] == nil else { throw Failure.busy }
         let live = liveHome(columnID: columnID, home: home)
         guard !isBaseHome(live) else { return nil }
@@ -153,8 +157,10 @@ enum CodexAuthSwap {
         // Usage may read a native auto fallback, but a refresh must not spend
         // its stale grant while the preferred Keychain owner is unavailable.
         guard let record = try source.load(verifyingOwner: true) else { return nil }
+        guard homeKey(home) == key, homeKey(live) == source.home.path else { throw Failure.busy }
         if let expected, authIdentity(record.data) != authIdentity(expected.data) { return nil }
         let renewal = Renewal(columnID: columnID, key: key, generation: generations[key],
+                              columnGeneration: columnGenerations[columnID],
                               storage: source, record: record)
         renewals[key] = renewal
         return renewal
@@ -177,11 +183,13 @@ enum CodexAuthSwap {
     /// mode a temporary Keychain error must not turn a file fallback into a re-login.
     @discardableResult
     static func storeRenewed(_ renewal: Renewal, usedRefreshToken: String,
-                             tokens: CodexOAuth.Tokens) throws -> Bool {
+                             tokens: OAuth$Codex.Tokens) throws -> Bool {
         lock.lock()
         defer { lock.unlock() }
         let key = renewal.key
-        guard generations[key] == renewal.generation, renewals[key]?.id == renewal.id else { return false }
+        guard generations[key] == renewal.generation,
+              columnGenerations[renewal.columnID] == renewal.columnGeneration,
+              renewals[key]?.id == renewal.id else { return false }
         let destination = renewal.storage
         guard let record = try destination.load(backend: renewal.record.backend) else { return false }
         guard let updated = renewedAuth(record.data, usedRefreshToken: usedRefreshToken,
@@ -194,7 +202,7 @@ enum CodexAuthSwap {
     /// refresh-токен (его обновил кто-то ещё) или файл не разобрать.
     /// Незнакомые поля сохраняются. Чистая функция — покрыта самопроверкой.
     static func renewedAuth(_ data: Data, usedRefreshToken: String,
-                            tokens: CodexOAuth.Tokens, now: Date) -> Data? {
+                            tokens: OAuth$Codex.Tokens, now: Date) -> Data? {
         guard var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               var stored = root["tokens"] as? [String: Any],
               stored["refresh_token"] as? String == usedRefreshToken
@@ -217,13 +225,13 @@ enum CodexAuthSwap {
     }()
 
     /// Вход, что сейчас в `~/.codex`, — обратно владельцу.
-    private static func giveBackCurrent() throws -> CodexAuthStorage.Record? {
+    private static func giveBackCurrent() throws -> AuthStorage$Codex.Record? {
         let live = try storage(at: baseHome)
         let record = try live.load(verifyingOwner: true)
         let payload = record?.data
         if !isSwapped {
             try FileManager.default.createDirectory(at: stashHome, withIntermediateDirectories: true)
-            let stash = try CodexAuthStorage(home: stashHome, mode: live.mode)
+            let stash = try AuthStorage$Codex(home: stashHome, mode: live.mode)
             if let payload { try stash.save(payload) } else { try stash.delete() }
             // A CLI re-login into our internal backup must use that same backend.
             try ("cli_auth_credentials_store = \"" + live.mode.rawValue + "\"\n")
@@ -245,7 +253,7 @@ enum CodexAuthSwap {
             try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
             try ("cli_auth_credentials_store = \"" + live.mode.rawValue + "\"\n")
                 .write(to: orphan.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
-            try CodexAuthStorage(home: orphan, mode: live.mode).save(payload)
+            try AuthStorage$Codex(home: orphan, mode: live.mode).save(payload)
         }
         return record
     }
@@ -261,15 +269,19 @@ enum CodexAuthSwap {
     static func authSnapshot(columnID: String, home: URL) throws -> AuthSnapshot? {
         lock.lock()
         defer { lock.unlock() }
-        guard let data = try storage(at: liveHome(columnID: columnID, home: home)).load()?.data else { return nil }
         let key = homeKey(home)
-        return AuthSnapshot(data: data, key: key, generation: generations[key])
+        let live = liveHome(columnID: columnID, home: home)
+        let source = try storage(at: live)
+        guard let data = try source.load()?.data else { return nil }
+        guard homeKey(home) == key, homeKey(live) == source.home.path else { throw Failure.busy }
+        return AuthSnapshot(data: data, key: key, generation: generations[key],
+                            columnGeneration: columnGenerations[columnID])
     }
 
     static func hasAuth(home: URL) -> Bool { (try? storage(at: home))?.contains() ?? false }
 
     static func removeAuth(home: URL, columnID: String? = nil,
-                           operation: (CodexAuthStorage) throws -> Void = { try $0.delete() }) throws {
+                           operation: (AuthStorage$Codex) throws -> Void = { try $0.delete() }) throws {
         lock.lock()
         defer { lock.unlock() }
         let key = homeKey(home)
@@ -282,7 +294,7 @@ enum CodexAuthSwap {
             // Restore primary credentials before removing their backup. A
             // refused cleanup must precede destructive profile deletion.
             let selected = restore ? try activateLocked(columnID: defaultColumnID, home: baseHome, keepBackup: true) : nil
-            var removedBackup: CodexAuthStorage.Record?
+            var removedBackup: AuthStorage$Codex.Record?
             do {
                 let primary = try backup.load(verifyingOwner: true)
                 try backup.delete()
@@ -305,18 +317,26 @@ enum CodexAuthSwap {
             try operation(storage(at: home))
         }
         generations[key] = UUID()
+        if let columnID { columnGenerations[columnID] = UUID() }
         renewals[key] = nil
+        // The logical profile may have moved to another physical root while its
+        // old request was in flight. Successful removal retires that owner too.
+        let retired = renewals.filter { $0.value.columnID == columnID }.map(\.key)
+        for key in retired {
+            generations[key] = UUID()
+            renewals[key] = nil
+        }
     }
 
-    private static func storage(at home: URL) throws -> CodexAuthStorage {
+    private static func storage(at home: URL) throws -> AuthStorage$Codex {
         if home.standardizedFileURL == stashHome.standardizedFileURL {
             guard let saved = UserDefaults.standard.string(forKey: stashStoreKey) else {
-                return try CodexAuthStorage(home: home)
+                return try AuthStorage$Codex(home: home)
             }
-            guard let mode = CodexAuthStorage.Mode(rawValue: saved) else { throw CodexAuthStorage.Failure.settings }
-            return try CodexAuthStorage(home: home, mode: mode)
+            guard let mode = AuthStorage$Codex.Mode(rawValue: saved) else { throw AuthStorage$Codex.Failure.settings }
+            return try AuthStorage$Codex(home: home, mode: mode)
         }
-        return try CodexAuthStorage(home: home)
+        return try AuthStorage$Codex(home: home)
     }
 
     private static func accountID(_ data: Data) -> String? {

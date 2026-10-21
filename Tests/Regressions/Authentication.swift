@@ -21,6 +21,7 @@ private enum Fixture {
     static var malformedClaudeRead = false
     static var codexHome: String?
     static var denyCredentialChmodHome: String?
+    static var failCodexFileWrite = false
     static var beforeCredentialDelete: (() -> Void)?
     static var rejectSpentRefresh = false
     static var pauseAuthReadPath: String?
@@ -46,6 +47,9 @@ private enum Fixture {
     static var cliVersion = "2.1.278"
     static var shell = "/bin/zsh"
     static var keychainReads = 0
+    static var claudeMetadataDate: Date?
+    static var preserveClaudeMetadataDate = false
+    static var noninteractiveClaudeReads = 0
     static var changeLoginAfterRead = 0
     static var pendingCLILogin = false
     static var replaceLockAfterRead = 0
@@ -124,7 +128,7 @@ private enum Fixture {
         defer { _ = rmdir(legacyLock.path) }
         guard mkdir(storageLock.path, 0o700) == 0 else { return }
         defer { _ = rmdir(storageLock.path) }
-        if ClaudeKeychain.parse(keychain)?.refreshToken == "synthetic-refresh-old-login" {
+        if AuthStorage$Claude.parse(keychain)?.refreshToken == "synthetic-refresh-old-login" {
             // Model native eRn after invalid_grant for the already rotated grant.
             keychain["claudeAiOauth"] = ["accessToken": "", "refreshToken": "", "expiresAt": 0]
             cliClearedRevokedGrant = true
@@ -203,7 +207,13 @@ private enum Fixture {
     }
 
     static func codexKey(_ home: URL) -> String {
-        let hash = SHA256.hash(data: Data(home.resolvingSymlinksInPath().path.utf8))
+        // Independent native contract: Rust canonicalize uses realpath on macOS.
+        let path: String
+        if let canonical = home.path.withCString({ realpath($0, nil) }) {
+            path = String(cString: canonical)
+            free(canonical)
+        } else { path = home.path }
+        let hash = SHA256.hash(data: Data(path.utf8))
             .map { String(format: "%02x", $0) }.joined()
         return "cli|" + hash.prefix(16)
     }
@@ -331,6 +341,9 @@ private final class FixtureFileManager: Foundation.FileManager, @unchecked Senda
 
 
     override func setAttributes(_ attributes: [FileAttributeKey: Any], ofItemAtPath path: String) throws {
+        if Fixture.failCodexFileWrite && URL(fileURLWithPath: path).lastPathComponent.hasPrefix(".auth-") {
+            throw CocoaError(.fileWriteNoPermission)
+        }
         if URL(fileURLWithPath: path).deletingLastPathComponent().path == Fixture.denyCredentialChmodHome {
             throw CocoaError(.fileWriteNoPermission)
         }
@@ -521,18 +534,26 @@ func SecItemCopyMatching(_ query: CFDictionary, _ result: UnsafeMutablePointer<C
             return errSecSuccess
         }
         if Fixture.keychainExists, let service = Fixture.discoveredClaudeService {
-            result?.pointee = [[kSecAttrService as String: service]] as NSArray
+            var attributes: [String: Any] = [kSecAttrService as String: service]
+            if let modified = Fixture.claudeMetadataDate { attributes[kSecAttrModificationDate as String] = modified }
+            result?.pointee = [attributes] as NSArray
         } else { result?.pointee = NSArray() }
     } else {
         guard Fixture.keychainExists else { return errSecItemNotFound }
         Fixture.keychainReads += 1
+        if !Fixture.interactionAllowed { Fixture.noninteractiveClaudeReads += 1 }
         if Fixture.denyClaudeRead || Fixture.keychainReads == Fixture.denyClaudeReadAt {
             return errSecInteractionNotAllowed
         }
         if Fixture.malformedClaudeRead { result?.pointee = Data("invalid-json".utf8) as CFData; return errSecSuccess }
         let data = try! JSONSerialization.data(withJSONObject: Fixture.keychain)
         if Fixture.slowKeychainRead { Thread.sleep(forTimeInterval: 6.5) }
-        if Fixture.keychainReads == Fixture.changeLoginAfterRead { Fixture.tryCLILogin() }
+        if Fixture.keychainReads == Fixture.changeLoginAfterRead {
+            Fixture.tryCLILogin()
+            if Fixture.claudeMetadataDate != nil && !Fixture.preserveClaudeMetadataDate {
+                Fixture.claudeMetadataDate = Date(timeIntervalSince1970: 2)
+            }
+        }
         if Fixture.keychainReads == Fixture.replaceLockAfterRead {
             let path = Fixture.storageLock.path
             _ = rename(path, path + ".previous-owner")
@@ -711,6 +732,26 @@ enum Authentication {
     static func main() async {
         do {
             switch CommandLine.arguments[1] {
+            case "codex-native-canonical-keyring": try await codexNativeCanonical(action: "read")
+            case "codex-native-canonical-auto": try await codexNativeCanonical(action: "read", mode: "auto")
+            case "codex-native-canonical-save": try await codexNativeCanonical(action: "save")
+            case "codex-native-canonical-remove": try await codexNativeCanonical(action: "remove")
+            case "codex-native-canonical-remove-auto": try await codexNativeCanonical(action: "remove", mode: "auto")
+            case "codex-native-canonical-renew": try await codexNativeCanonical(action: "renew")
+            case "codex-native-canonical-switch": try await codexNativeCanonical(action: "switch")
+            case "codex-native-canonical-file": try await codexNativeCanonical(action: "read", mode: "file")
+            case "codex-retarget-readd-same": try await codexRetarget(action: "remove")
+            case "codex-retarget-readd-new": try await codexRetarget(action: "remove", reuseGrant: false)
+            case "codex-retarget-inflight": try await codexRetarget(action: "inflight")
+            case "codex-retarget-pending": try await codexRetarget(action: "pending")
+            case "codex-retarget-usage-aba": try await codexRetarget(action: "usage")
+            case "claude-stub-login-race": try await claudeStubOwnership(state: "race")
+            case "claude-stub-same-date": try await claudeStubOwnership(state: "same-date")
+            case "claude-stub-legacy-marker": try await claudeStubOwnership(state: "legacy")
+            case "claude-stub-owner-denied": try await claudeStubOwnership(state: "denied")
+            case "claude-stub-owner-malformed": try await claudeStubOwnership(state: "malformed")
+            case "claude-stub-genuine": try await claudeStubOwnership(state: "genuine")
+            case "claude-stub-later-login": try await claudeStubOwnership(state: "later")
             case "claude-physical-trailing-switch": try await claudePhysicalTrailingPath(action: "switch")
             case "claude-physical-trailing-renewal": try await claudePhysicalTrailingPath(action: "renew")
             case "claude-physical-trailing-shared": try await claudePhysicalTrailingPath(action: "remove")
@@ -993,15 +1034,15 @@ enum Authentication {
         if fallback { try Fixture.writeAuth(home, account: "fallback-b", refresh: "fallback-grant", expired: false) }
         let account = DiscoveredAccount(id: "codex:auto-source", provider: .codex, profileName: "auto-source", source: .codexHome(home))
         Fixture.response = .heldRenewed
-        let task = Task { await CodexProvider().fetch(account) }
+        let task = Task { await Provider$Codex().fetch(account) }
         try await waitForRefresh(1)
         // The server has accepted the grant; Keychain becomes unreadable before persistence.
         Fixture.denyCodexRead = true
         Fixture.releaseRefresh()
         _ = await task.value
         Fixture.denyCodexRead = false
-        let outcome = await CodexProvider().fetch(account)
-        let saved = CodexRenewal.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated"
+        let outcome = await Provider$Codex().fetch(account)
+        let saved = Renewal$Codex.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated"
         print("auto rotation saved after unlocking: \(saved), refresh POST count: \(Fixture.refreshCalls)")
         if case .success = outcome {} else {
             throw Failure(description: "Auto fallback discarded the rotated Keychain grant as if a different file login replaced it")
@@ -1014,8 +1055,8 @@ enum Authentication {
         let home = ProfileDirectories.codexRoot.appendingPathComponent("readded")
         try Fixture.codexLogin(home, account: "generation-a", mode: "keyring", expired: true)
         let account = DiscoveredAccount(id: "codex:readded", provider: .codex, profileName: "readded", source: .codexHome(home))
-        let provider = CodexProvider()
-        let store = UsageStore(providers: [.codex: provider], discovery: RealDiscovery())
+        let provider = Provider$Codex()
+        let store = UsageStore(providers: [.codex: provider], discovery: Discovery$Real())
         store.rediscover(force: true)
         Fixture.distinctRefreshGrants = true
         Fixture.response = .heldRenewed
@@ -1033,7 +1074,7 @@ enum Authentication {
         _ = await old.value
         Fixture.denyCodexWrite = false
         let outcome = await provider.fetch(account)
-        let saved = CodexRenewal.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated-synthetic-refresh-generation-b"
+        let saved = Renewal$Codex.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated-synthetic-refresh-generation-b"
         print("replacement rotation retained: \(saved), refresh POST count: \(Fixture.refreshCalls)")
         if case .success = outcome {} else {
             throw Failure(description: "Removed generation's late response erased the re-added generation's pending rotation")
@@ -1043,7 +1084,7 @@ enum Authentication {
 
     @MainActor
     private static func codexSwitchInFlight(mode: String = "keyring", alias: Bool = false) async throws {
-        let main = CodexAuthSwap.baseHome
+        let main = AuthSwap$Codex.baseHome
         let home = ProfileDirectories.codexRoot.appendingPathComponent("switching")
         try Fixture.codexLogin(main, account: "main", mode: "file")
         try Fixture.codexLogin(home, account: "switching", mode: mode, expired: true)
@@ -1051,17 +1092,17 @@ enum Authentication {
         let target = alias ? ProfileDirectories.codexRoot.appendingPathComponent("switch-alias") : home
         if alias { try Foundation.FileManager.default.createSymbolicLink(at: target, withDestinationURL: home) }
         Fixture.response = .heldRenewed
-        let renewal = Task { await CodexProvider().fetch(account) }
+        let renewal = Task { await Provider$Codex().fetch(account) }
         try await waitForRefresh(1)
         var switched = false
-        do { try CodexAuthSwap.activate(columnID: alias ? "codex:switch-alias" : account.id, home: target); switched = true } catch {}
-        let oldGrantPublished = switched && CodexRenewal.refreshToken(main.appendingPathComponent("auth.json")) == "synthetic-refresh-switching"
+        do { try AuthSwap$Codex.activate(columnID: alias ? "codex:switch-alias" : account.id, home: target); switched = true } catch {}
+        let oldGrantPublished = switched && Renewal$Codex.refreshToken(main.appendingPathComponent("auth.json")) == "synthetic-refresh-switching"
         Fixture.releaseRefresh()
         _ = await renewal.value
         print("switch exposed a grant while its refresh response was in flight: \(oldGrantPublished)")
         try expect(!oldGrantPublished, "Switch exposed an already-submitted refresh grant to the native Desktop/CLI before rotation was persisted")
-        try CodexAuthSwap.activate(columnID: account.id, home: home)
-        try expect(CodexRenewal.refreshToken(main.appendingPathComponent("auth.json")) == "synthetic-rotated",
+        try AuthSwap$Codex.activate(columnID: account.id, home: home)
+        try expect(Renewal$Codex.refreshToken(main.appendingPathComponent("auth.json")) == "synthetic-rotated",
                    "Switch did not recover after renewal persisted its grant")
     }
 
@@ -1072,7 +1113,7 @@ enum Authentication {
         try Foundation.FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("file-login", expired: false))
             .write(to: home.appendingPathComponent(".credentials.json"))
-        let accounts = RealDiscovery().discover().filter { $0.provider == .claude }
+        let accounts = Discovery$Real().discover().filter { $0.provider == .claude }
         print("valid native Claude fallback file: true, discovered Claude accounts: \(accounts.count)")
         try expect(accounts.count == 1, "Native macOS Claude file fallback is invisible to discovery")
     }
@@ -1094,31 +1135,31 @@ enum Authentication {
     }
 
     private static func codexTOMLMode() throws {
-        let home = CodexAuthSwap.baseHome
+        let home = AuthSwap$Codex.baseHome
         try Fixture.codexLogin(home, account: "secure", mode: "keyring")
         try Data("cli_auth_credentials_store = \"\"\"keyring\"\"\"\n".utf8)
             .write(to: home.appendingPathComponent("config.toml"))
-        try expect(CodexProvider.readAuth(codexHome: home)?.accountID == "secure", "Valid TOML multiline basic string was rejected as an unknown storage setting")
+        try expect(Provider$Codex.readAuth(codexHome: home)?.accountID == "secure", "Valid TOML multiline basic string was rejected as an unknown storage setting")
     }
 
     private static func codexTOMLBackend() throws {
-        let home = CodexAuthSwap.baseHome
+        let home = AuthSwap$Codex.baseHome
         try Fixture.codexLogin(home, account: "old-direct-login", mode: "keyring")
         try Data("features = { secret_auth_storage = true }\ncli_auth_credentials_store = 'keyring'\n".utf8)
             .write(to: home.appendingPathComponent("config.toml"))
-        try expect(CodexProvider.readAuth(codexHome: home) == nil, "Valid inline TOML features bypassed the encrypted-backend guard and loaded an obsolete direct Keychain login")
+        try expect(Provider$Codex.readAuth(codexHome: home) == nil, "Valid inline TOML features bypassed the encrypted-backend guard and loaded an obsolete direct Keychain login")
     }
 
 
     @MainActor
     private static func codexSwitchPending(deniedRemoval: Bool = false) async throws {
-        let main = CodexAuthSwap.baseHome
+        let main = AuthSwap$Codex.baseHome
         let home = ProfileDirectories.codexRoot.appendingPathComponent("pending-switch")
         try Fixture.codexLogin(main, account: "main", mode: "file")
         try Fixture.codexLogin(home, account: "pending-switch", mode: "keyring", expired: true)
         let account = DiscoveredAccount(id: "codex:pending-switch", provider: .codex, profileName: "pending-switch", source: .codexHome(home))
         Fixture.denyCodexWrite = true
-        _ = await CodexProvider().fetch(account)
+        _ = await Provider$Codex().fetch(account)
         if deniedRemoval {
             Fixture.denyCodexDelete = true
             var failed = false
@@ -1127,16 +1168,16 @@ enum Authentication {
             Fixture.denyCodexDelete = false
         } else {
             var failed = false
-            do { try CodexAuthSwap.activate(columnID: account.id, home: home) } catch { failed = true }
-            try expect(failed && CodexProvider.readAuth(codexHome: main)?.accountID == "main",
+            do { try AuthSwap$Codex.activate(columnID: account.id, home: home) } catch { failed = true }
+            try expect(failed && Provider$Codex.readAuth(codexHome: main)?.accountID == "main",
                        "Switch published an unsaved refresh grant")
         }
         Fixture.denyCodexWrite = false
-        let result = await CodexProvider().fetch(account)
+        let result = await Provider$Codex().fetch(account)
         if case .success = result {} else { throw Failure(description: "Pending persistence did not recover") }
         try expect(Fixture.refreshCalls == 1, "Pending persistence repeated the refresh POST")
-        try CodexAuthSwap.activate(columnID: account.id, home: home)
-        try expect(CodexRenewal.refreshToken(main.appendingPathComponent("auth.json")) == "synthetic-rotated", "Switch lost the durable grant")
+        try AuthSwap$Codex.activate(columnID: account.id, home: home)
+        try expect(Renewal$Codex.refreshToken(main.appendingPathComponent("auth.json")) == "synthetic-rotated", "Switch lost the durable grant")
     }
 
     @MainActor
@@ -1146,7 +1187,7 @@ enum Authentication {
         try Fixture.codexMode(home, "auto")
         let account = DiscoveredAccount(id: "codex:auto-file", provider: .codex, profileName: "auto-file", source: .codexHome(home))
         Fixture.response = .heldRenewed
-        let task = Task { await CodexProvider().fetch(account) }
+        let task = Task { await Provider$Codex().fetch(account) }
         try await waitForRefresh(1)
         let other = ProfileDirectories.codexRoot.appendingPathComponent("other")
         try Fixture.codexLogin(other, account: "new-keychain-login", mode: "keyring")
@@ -1180,8 +1221,8 @@ enum Authentication {
         let directory = file.deletingLastPathComponent()
         let settings = directory.appendingPathComponent("settings.json")
         try Data("preserved".utf8).write(to: settings)
-        let provider = ClaudeProvider()
-        let store = UsageStore(providers: [.claude: provider], discovery: RealDiscovery())
+        let provider = Provider$Claude()
+        let store = UsageStore(providers: [.claude: provider], discovery: Discovery$Real())
         store.rediscover(force: true)
         try expect(store.account(for: account.id) != nil, "File-backed Claude profile was not discovered")
         Fixture.failClaudeFileWrite = failSave
@@ -1208,7 +1249,7 @@ enum Authentication {
         let result = await renewal.value
         if case .success = result {} else { throw Failure(description: "File-backed Claude renewal failed") }
         let json = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
-        try expect(ClaudeKeychain.parse(json)?.refreshToken == "synthetic-rotated" && json["unknown"] as? String == "preserved",
+        try expect(AuthStorage$Claude.parse(json)?.refreshToken == "synthetic-rotated" && json["unknown"] as? String == "preserved",
                    "File renewal lost its grant or unknown native fields")
         let permissions = try Foundation.FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber
         try expect(permissions?.intValue == 0o600 && Fixture.refreshCalls == 1 && Fixture.keychainWrites == 0,
@@ -1234,7 +1275,7 @@ enum Authentication {
     private static func claudeFileLockBusy() async throws {
         let (account, file) = try claudeFileAccount()
         try Foundation.FileManager.default.createDirectory(at: Fixture.oauthLock, withIntermediateDirectories: true)
-        let provider = ClaudeProvider()
+        let provider = Provider$Claude()
         _ = await provider.fetch(account)
         try expect(Fixture.refreshCalls == 0, "File-backed refresh ignored a native OAuth lock")
         try Foundation.FileManager.default.removeItem(at: Fixture.oauthLock)
@@ -1247,7 +1288,7 @@ enum Authentication {
     private static func claudeFileRelogin() async throws {
         let (account, file) = try claudeFileAccount(primary: false)
         Fixture.response = .heldRenewed
-        let task = Task { await ClaudeProvider().fetch(account) }
+        let task = Task { await Provider$Claude().fetch(account) }
         try await waitForRefresh(1)
         let replacement = try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("new-file-login", expired: false))
         try replacement.write(to: file, options: .atomic)
@@ -1259,7 +1300,7 @@ enum Authentication {
     }
 
     private static func codexTOMLForms() throws {
-        let home = CodexAuthSwap.baseHome
+        let home = AuthSwap$Codex.baseHome
         try Fixture.codexLogin(home, account: "secure", mode: "keyring")
         let forms = [
             "cli_auth_credentials_store = '''keyring'''\n",
@@ -1268,23 +1309,23 @@ enum Authentication {
         ]
         for text in forms {
             try Data(text.utf8).write(to: home.appendingPathComponent("config.toml"))
-            try expect(CodexProvider.readAuth(codexHome: home)?.accountID == "secure", "Valid native TOML form did not select Keychain")
+            try expect(Provider$Codex.readAuth(codexHome: home)?.accountID == "secure", "Valid native TOML form did not select Keychain")
         }
         for features in ["features = { 'secret_auth_storage' = true }", "[ 'features' ]\nsecret_auth_storage = true", "features . secret_auth_storage = true"] {
             try Data(("cli_auth_credentials_store = 'keyring'\n" + features + "\n").utf8).write(to: home.appendingPathComponent("config.toml"))
-            try expect(CodexProvider.readAuth(codexHome: home) == nil, "Valid TOML syntax bypassed the encrypted backend guard")
+            try expect(Provider$Codex.readAuth(codexHome: home) == nil, "Valid TOML syntax bypassed the encrypted backend guard")
         }
     }
 
 
     private static func codexBaseAlias() async throws {
-        let main = CodexAuthSwap.baseHome
+        let main = AuthSwap$Codex.baseHome
         try Fixture.codexLogin(main, account: "main", mode: "keyring", expired: true)
         let home = ProfileDirectories.codexRoot.appendingPathComponent("base-alias")
         try Foundation.FileManager.default.createDirectory(at: ProfileDirectories.codexRoot, withIntermediateDirectories: true)
         try Foundation.FileManager.default.createSymbolicLink(at: home, withDestinationURL: main)
         let account = DiscoveredAccount(id: "codex:base-alias", provider: .codex, profileName: "base-alias", source: .codexHome(home))
-        _ = await CodexProvider().fetch(account)
+        _ = await Provider$Codex().fetch(account)
         try expect(Fixture.refreshCalls == 0, "Symlink alias renewed a grant owned by the native Desktop/CLI")
     }
 
@@ -1329,7 +1370,7 @@ enum Authentication {
         let home = ProfileDirectories.codexRoot.appendingPathComponent("quit-profile")
         try Fixture.codexLogin(home, account: "quit-profile", mode: "keyring", expired: true)
         let account = DiscoveredAccount(id: "codex:quit-profile", provider: .codex, profileName: "quit-profile", source: .codexHome(home))
-        let provider = CodexProvider()
+        let provider = Provider$Codex()
         var task: Task<FetchOutcome, Never>?
         if inFlight {
             Fixture.response = .heldRenewed
@@ -1359,7 +1400,7 @@ enum Authentication {
         }
         try expect(!approvedBeforeDurable, "Normal quit abandoned the only rotated Codex credentials or an accepted refresh POST")
         try expect(application.approved == true, "Quit did not complete after Codex credentials became durable")
-        try expect(CodexRenewal.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated", "Quit lost the rotated grant")
+        try expect(Renewal$Codex.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated", "Quit lost the rotated grant")
         try expect(Fixture.refreshCalls == 1, "Termination retried the refresh POST")
     }
 
@@ -1367,18 +1408,18 @@ enum Authentication {
         let home = ProfileDirectories.codexRoot.appendingPathComponent("quit-timeout")
         try Fixture.codexLogin(home, account: "quit-timeout", mode: "keyring", expired: true)
         let account = DiscoveredAccount(id: "codex:quit-timeout", provider: .codex, profileName: "quit-timeout", source: .codexHome(home))
-        let provider = CodexProvider()
+        let provider = Provider$Codex()
         Fixture.denyCodexWrite = true
         _ = await provider.fetch(account)
         #if CODEX_TERMINATION_DRAIN
-        let ready = await CodexRenewal.shared.prepareForTermination(timeout: 0.05)
+        let ready = await Renewal$Codex.shared.prepareForTermination(timeout: 0.05)
         #else
         let ready = true
         #endif
         try expect(!ready, "Quit was approved despite a denied write of rotated Codex credentials")
         Fixture.denyCodexWrite = false
         _ = await provider.fetch(account)
-        try expect(CodexRenewal.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated", "Cancelled quit lost its pending grant")
+        try expect(Renewal$Codex.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated", "Cancelled quit lost its pending grant")
         let other = try Fixture.codexAccount("after-cancelled-quit")
         _ = await provider.fetch(other)
         try expect(Fixture.refreshCalls == 2, "A cancelled quit permanently disabled automatic renewal")
@@ -1389,8 +1430,8 @@ enum Authentication {
         let account: DiscoveredAccount
         let directory: URL
         var original: Data
-        let claude = ClaudeProvider()
-        let provider = CodexProvider()
+        let claude = Provider$Claude()
+        let provider = Provider$Codex()
         var claudeRenewal: Task<FetchOutcome, Never>?
         if codex {
             directory = ProfileDirectories.codexRoot.appendingPathComponent("deny-directory")
@@ -1414,10 +1455,10 @@ enum Authentication {
                 original = try Data(contentsOf: file)
             }
         }
-        let store = UsageStore(providers: [.claude: claude, .codex: provider], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.claude: claude, .codex: provider], discovery: Discovery$Real())
         store.rediscover(force: true)
         try expect(store.account(for: account.id) != nil, "Removal profile was not discovered")
-        let desktopKey = ClaudeAppSwitcher.key(for: account.id)
+        let desktopKey = AppSwitcher$Claude.key(for: account.id)
         Fixture.denyProfileRemoval = directory.path
         Fixture.denyProfileMove = moveDenied
         Fixture.denyKeychainDelete = credentialDenied
@@ -1434,16 +1475,16 @@ enum Authentication {
         Fixture.slowKeychainDelete = false
         if moveDenied || credentialDenied {
             try expect(failed && retained && remains, "Failed profile removal lost credentials or reported success")
-            try expect(ClaudeAppSwitcher.key(for: account.id) == desktopKey, "Failed removal retired the Desktop session")
+            try expect(AppSwitcher$Claude.key(for: account.id) == desktopKey, "Failed removal retired the Desktop session")
             Fixture.denyCodexWrite = false
             Fixture.failClaudeFileWrite = false
             if let claudeRenewal { _ = await claudeRenewal.value }
             if codex {
                 _ = await provider.fetch(account)
-                try expect(CodexRenewal.refreshToken(directory.appendingPathComponent("auth.json")) == "synthetic-rotated", "Failed directory removal discarded a pending rotation")
+                try expect(Renewal$Codex.refreshToken(directory.appendingPathComponent("auth.json")) == "synthetic-rotated", "Failed directory removal discarded a pending rotation")
             } else {
                 _ = await claude.fetch(account)
-                try expect(ClaudeKeychain.credentials(service: account.id.replacingOccurrences(of: "claude:", with: ""))?.refreshToken == "synthetic-rotated", "Failed directory removal discarded a pending Claude rotation")
+                try expect(AuthStorage$Claude.credentials(service: account.id.replacingOccurrences(of: "claude:", with: ""))?.refreshToken == "synthetic-rotated", "Failed directory removal discarded a pending Claude rotation")
             }
             try expect(Fixture.refreshCalls == 1, "Failed directory removal repeated the refresh POST")
         } else {
@@ -1464,19 +1505,19 @@ enum Authentication {
     @MainActor
     private static func codexActiveRemoval(refusesQuit: Bool = false, synchronous: Bool = false,
                                            primary: Bool = false, unswapped: Bool = false) async throws {
-        let main = CodexAuthSwap.baseHome
+        let main = AuthSwap$Codex.baseHome
         let profile = ProfileDirectories.codexRoot.appendingPathComponent("active-removed")
         try Fixture.codexLogin(main, account: "main", mode: "file")
         try Fixture.codexLogin(profile, account: "removed", mode: "file")
-        let originalMain = CodexProvider.readAuth(codexHome: main)!
-        if !unswapped { try CodexAuthSwap.activate(columnID: "codex:active-removed", home: profile) }
+        let originalMain = Provider$Codex.readAuth(codexHome: main)!
+        if !unswapped { try AuthSwap$Codex.activate(columnID: "codex:active-removed", home: profile) }
         // Desktop's refresh POST is accepted for B. It must exit before A is restored.
         Fixture.desktopRunning = true
         Fixture.desktopRefusesQuit = refusesQuit
-        ClaudeCLISelection.isEnabled = false
-        let account = DiscoveredAccount(id: primary ? CodexAuthSwap.defaultColumnID : "codex:active-removed", provider: .codex,
+        CLISelection$Claude.isEnabled = false
+        let account = DiscoveredAccount(id: primary ? AuthSwap$Codex.defaultColumnID : "codex:active-removed", provider: .codex,
                                         profileName: primary ? "main" : "active-removed", source: .codexHome(primary ? main : profile))
-        let store = UsageStore(providers: [.codex: CodexProvider()], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.codex: Provider$Codex()], discovery: Discovery$Real())
         store.rediscover(force: true)
         var failed = false
         #if COORDINATED_CODEX_REMOVAL
@@ -1492,42 +1533,42 @@ enum Authentication {
         do { try store.removeAccount(id: account.id) } catch { failed = true }
         #endif
         if refusesQuit || synchronous {
-            try expect(failed && CodexAuthSwap.isSwapped && CodexProvider.readAuth(codexHome: main)?.accountID == "removed", "Desktop exit refusal changed the active login or deleted credentials")
+            try expect(failed && AuthSwap$Codex.isSwapped && Provider$Codex.readAuth(codexHome: main)?.accountID == "removed", "Desktop exit refusal changed the active login or deleted credentials")
             try expect(Foundation.FileManager.default.fileExists(atPath: profile.path), "Refused removal deleted the profile")
             return
         }
         // Model native persist_tokens: reload current storage, replace response
         // tokens and save. A terminated process cannot perform this late write.
-        if Fixture.desktopRunning, let record = try CodexAuthStorage(home: main).load() {
+        if Fixture.desktopRunning, let record = try AuthStorage$Codex(home: main).load() {
             var root = try JSONSerialization.jsonObject(with: record.data) as! [String: Any]
             var tokens = root["tokens"] as! [String: Any]
             tokens["access_token"] = "synthetic-native-removed-access"
             tokens["refresh_token"] = "synthetic-native-removed-refresh"
             root["tokens"] = tokens
-            try CodexAuthStorage(home: main).save(JSONSerialization.data(withJSONObject: root))
+            try AuthStorage$Codex(home: main).save(JSONSerialization.data(withJSONObject: root))
         }
         try expect(!failed && !Fixture.desktopRunning && Fixture.desktopStops == 1, "Removal did not wait for Desktop exit")
         if primary {
-            try expect(CodexProvider.readAuth(codexHome: main) == nil, "Primary account was not removed")
-            try expect(CodexProvider.readAuth(codexHome: profile)?.accountID == "removed", "Primary deletion lost the selected profile's login")
+            try expect(Provider$Codex.readAuth(codexHome: main) == nil, "Primary account was not removed")
+            try expect(Provider$Codex.readAuth(codexHome: profile)?.accountID == "removed", "Primary deletion lost the selected profile's login")
         } else {
-            try expect(CodexProvider.readAuth(codexHome: main)?.accessToken == originalMain.accessToken, "Late native refresh overwrote the restored primary login")
+            try expect(Provider$Codex.readAuth(codexHome: main)?.accessToken == originalMain.accessToken, "Late native refresh overwrote the restored primary login")
             try expect(!Foundation.FileManager.default.fileExists(atPath: profile.path), "Selected profile was not removed")
         }
-        try expect(Fixture.desktopCalls == 0 && !ClaudeCLISelection.isEnabled, "Removal launched Desktop or changed the Claude CLI setting")
+        try expect(Fixture.desktopCalls == 0 && !CLISelection$Claude.isEnabled, "Removal launched Desktop or changed the Claude CLI setting")
     }
 
     @MainActor
     private static func codexRemovalSwitchBarrier() async throws {
-        let main = CodexAuthSwap.baseHome
+        let main = AuthSwap$Codex.baseHome
         let profile = ProfileDirectories.codexRoot.appendingPathComponent("removal-barrier")
         try Fixture.codexLogin(main, account: "main", mode: "file")
         try Fixture.codexLogin(profile, account: "removed", mode: "file")
         let account = DiscoveredAccount(id: "codex:removal-barrier", provider: .codex, profileName: "removal-barrier", source: .codexHome(profile))
-        try CodexAuthSwap.activate(columnID: account.id, home: profile)
+        try AuthSwap$Codex.activate(columnID: account.id, home: profile)
         Fixture.desktopRunning = true
         Fixture.holdDesktopStop = true
-        let store = UsageStore(providers: [.codex: CodexProvider()], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.codex: Provider$Codex()], discovery: Discovery$Real())
         store.rediscover(force: true)
         var removed: Result<Void, Error>?
         #if COORDINATED_CODEX_REMOVAL
@@ -1535,10 +1576,10 @@ enum Authentication {
         #else
         removed = Result { try store.removeAccount(id: account.id) }
         #endif
-        try expect(removed == nil && CodexAuthSwap.isSwapped, "Removal changed credentials before Desktop exited")
+        try expect(removed == nil && AuthSwap$Codex.isSwapped, "Removal changed credentials before Desktop exited")
         let other = try Fixture.codexAccount("other")
         var switched = false
-        CodexAppSwitcher().switchTo(other) { if case .success = $0 { switched = true } }
+        AppSwitcher$Codex().switchTo(other) { if case .success = $0 { switched = true } }
         try expect(!switched && Fixture.desktopCalls == 0, "A concurrent switch bypassed the removal exit barrier")
         var secondFailed = false
         #if COORDINATED_CODEX_REMOVAL
@@ -1549,24 +1590,24 @@ enum Authentication {
         Fixture.desktopStopCompletion?(.success(()))
         Fixture.desktopStopCompletion = nil
         if case .success? = removed {} else { throw Failure(description: "Removal did not complete after Desktop exit") }
-        try expect(CodexProvider.readAuth(codexHome: main)?.accountID == "main", "Removal barrier lost the primary login")
+        try expect(Provider$Codex.readAuth(codexHome: main)?.accountID == "main", "Removal barrier lost the primary login")
     }
 
     private static func codexAutoCopyback(fallback: Bool) throws {
-        let main = CodexAuthSwap.baseHome
+        let main = AuthSwap$Codex.baseHome
         let profile = ProfileDirectories.codexRoot.appendingPathComponent("auto-copyback")
         try Fixture.codexLogin(main, account: "main", mode: "file")
         try Fixture.codexLogin(profile, account: "profile", mode: "auto", expired: true)
         if fallback { try Fixture.writeAuth(profile, account: "stale-other", refresh: "stale-other", expired: false) }
-        try CodexAuthSwap.activate(columnID: "codex:auto-copyback", home: profile)
+        try AuthSwap$Codex.activate(columnID: "codex:auto-copyback", home: profile)
         // Native Desktop refreshed its current login while it owned the base home.
         try Fixture.writeAuth(main, account: "profile", refresh: "native-rotated-profile", expired: false)
         Fixture.denyCodexRead = true
         var switched = false
-        do { try CodexAuthSwap.restoreDefault(); switched = true } catch {}
+        do { try AuthSwap$Codex.restoreDefault(); switched = true } catch {}
         Fixture.denyCodexRead = false
-        let grant = CodexRenewal.refreshToken(profile.appendingPathComponent("auth.json"))
-        let orphanRoot = CodexAuthSwap.stashHome.deletingLastPathComponent()
+        let grant = Renewal$Codex.refreshToken(profile.appendingPathComponent("auth.json"))
+        let orphanRoot = AuthSwap$Codex.stashHome.deletingLastPathComponent()
         let orphanCount = (try? Foundation.FileManager.default.contentsOfDirectory(at: orphanRoot, includingPropertiesForKeys: nil))?
             .filter { $0.lastPathComponent.hasPrefix("orphaned-") }.count ?? 0
         print("AUDIT switch accepted: \(switched), native grant returned to profile: \(grant == "native-rotated-profile"), orphan copies: \(orphanCount)")
@@ -1584,7 +1625,7 @@ enum Authentication {
         Fixture.usageStatus = force ? 401 : 200
         let account = DiscoveredAccount(id: "codex:auto-unavailable", provider: .codex,
                                         profileName: "auto-unavailable", source: .codexHome(home))
-        let provider = CodexProvider()
+        let provider = Provider$Codex()
         _ = await provider.fetch(account)
         let deferred = Fixture.refreshCalls == 0
         Fixture.denyCodexRead = false
@@ -1594,7 +1635,7 @@ enum Authentication {
         _ = await provider.fetch(account)
         try expect(Fixture.refreshCalls == (recovery ? 1 : 0), "Unlocking Keychain did not resume renewal of its own grant")
         if recovery {
-            try expect(CodexRenewal.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated",
+            try expect(Renewal$Codex.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated",
                        "The Keychain owner's rotation was not persisted after recovery")
         }
     }
@@ -1604,22 +1645,22 @@ enum Authentication {
         let owner = ProfileDirectories.codexRoot.appendingPathComponent("base-owner")
         try Fixture.codexLogin(owner, account: "primary", mode: mode)
         if direct { Fixture.codexHome = owner.path }
-        else { try Foundation.FileManager.default.createSymbolicLink(at: CodexAuthSwap.baseHome, withDestinationURL: owner) }
+        else { try Foundation.FileManager.default.createSymbolicLink(at: AuthSwap$Codex.baseHome, withDestinationURL: owner) }
         let project = owner.appendingPathComponent("state_5.sqlite")
         try Data("synthetic-projects-and-threads".utf8).write(to: project)
-        let primary = DiscoveredAccount(id: CodexAuthSwap.defaultColumnID, provider: .codex,
-                                       profileName: "main", source: .codexHome(CodexAuthSwap.baseHome))
+        let primary = DiscoveredAccount(id: AuthSwap$Codex.defaultColumnID, provider: .codex,
+                                       profileName: "main", source: .codexHome(AuthSwap$Codex.baseHome))
         let duplicate = DiscoveredAccount(id: "codex:base-owner", provider: .codex,
                                          profileName: "base-owner", source: .codexHome(owner))
-        let store = UsageStore(providers: [.codex: CodexProvider()], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.codex: Provider$Codex()], discovery: Discovery$Real())
         store.rediscover(force: true)
         let onlyPrimary = store.discoveredAccounts.filter { $0.provider == .codex }.map(\.id) == [primary.id]
         Fixture.desktopRunning = true
-        let original = try CodexAuthSwap.authData(home: owner)
+        let original = try AuthSwap$Codex.authData(home: owner)
         // A stale menu or direct caller must not treat the physical base as an extra profile.
         var refused = false
         do { try AccountRemoval.remove(duplicate) } catch { refused = true }
-        let retained = try CodexAuthSwap.authData(home: owner) == original
+        let retained = try AuthSwap$Codex.authData(home: owner) == original
         try expect(refused && retained && Foundation.FileManager.default.fileExists(atPath: project.path),
                    "A duplicate canonical-base column deleted credentials/projects under a running Desktop")
         try expect(onlyPrimary && !AccountRemoval.isExtraProfile(primary) && !AccountRemoval.isExtraProfile(duplicate),
@@ -1633,7 +1674,7 @@ enum Authentication {
         try expect(Foundation.FileManager.default.fileExists(atPath: project.path)
                    && Foundation.FileManager.default.fileExists(atPath: owner.appendingPathComponent("config.toml").path),
                    "Primary removal deleted projects or native configuration because CODEX_HOME was inside the managed root")
-        try expect(try CodexAuthSwap.authData(home: owner) == nil, "Primary credentials were not removed")
+        try expect(try AuthSwap$Codex.authData(home: owner) == nil, "Primary credentials were not removed")
     }
 
     @MainActor
@@ -1645,24 +1686,24 @@ enum Authentication {
         try Data("synthetic-projects".utf8).write(to: project)
         let unfinished = ProfileDirectories.codexRoot.appendingPathComponent("unfinished-extra")
         try Foundation.FileManager.default.createDirectory(at: unfinished, withIntermediateDirectories: true)
-        let store = UsageStore(providers: [.codex: CodexProvider()], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.codex: Provider$Codex()], discovery: Discovery$Real())
         store.rediscover(force: true)
         let entries = RegressionProfileMenu(store: store).profiles()
-        try expect(!entries.contains { CodexAuthSwap.isBaseHome($0.url) },
+        try expect(!entries.contains { AuthSwap$Codex.isBaseHome($0.url) },
                    "The native base home was offered as an unfinished profile directory after its login was removed")
         try expect(entries.contains { $0.url.path == unfinished.path }, "A genuine unfinished extra profile disappeared from the menu")
         try expect(try String(contentsOf: project) == "synthetic-projects", "Menu discovery changed native project data")
     }
 
     private static func codexUsageSwitchSnapshot() async throws {
-        let main = CodexAuthSwap.baseHome
+        let main = AuthSwap$Codex.baseHome
         let profile = ProfileDirectories.codexRoot.appendingPathComponent("snapshot-switch")
         try Fixture.codexLogin(main, account: "main-a", mode: "file")
         try Fixture.codexLogin(profile, account: "profile-b", mode: "file")
-        let account = DiscoveredAccount(id: CodexAuthSwap.defaultColumnID, provider: .codex,
+        let account = DiscoveredAccount(id: AuthSwap$Codex.defaultColumnID, provider: .codex,
                                        profileName: "main", source: .codexHome(main))
         Fixture.pauseAuthReadPath = main.appendingPathComponent("auth.json").path
-        let fetch = Task { await CodexProvider().fetch(account) }
+        let fetch = Task { await Provider$Codex().fetch(account) }
         var paused = false
         for _ in 0..<300 {
             Fixture.lock.lock(); paused = Fixture.authReadPaused; Fixture.lock.unlock()
@@ -1671,7 +1712,7 @@ enum Authentication {
         }
         try expect(paused, "Usage did not reach the credential-read boundary")
         let switching = Task.detached {
-            try CodexAuthSwap.activate(columnID: "codex:snapshot-switch", home: profile)
+            try AuthSwap$Codex.activate(columnID: "codex:snapshot-switch", home: profile)
             Fixture.lock.lock(); Fixture.authSwitchCompleted = true; Fixture.lock.unlock()
         }
         // The old code commits B while A's read is paused. A consistent read
@@ -1685,18 +1726,18 @@ enum Authentication {
         _ = await fetch.value
         try await switching.value
         try expect(Fixture.lastCodexAccount == "main-a", "A primary-column usage request read the selected profile's credentials during a switch")
-        try expect(CodexProvider.readAuth(codexHome: main)?.accountID == "profile-b", "The switch did not complete after the usage snapshot")
+        try expect(Provider$Codex.readAuth(codexHome: main)?.accountID == "profile-b", "The switch did not complete after the usage snapshot")
     }
 
     private static func codexCanonicalBaseActivation() throws {
         let owner = ProfileDirectories.codexRoot.appendingPathComponent("base-owner")
         try Fixture.codexLogin(owner, account: "primary", mode: "keyring")
-        try Foundation.FileManager.default.createSymbolicLink(at: CodexAuthSwap.baseHome, withDestinationURL: owner)
-        let original = try CodexAuthSwap.authData(home: owner)
+        try Foundation.FileManager.default.createSymbolicLink(at: AuthSwap$Codex.baseHome, withDestinationURL: owner)
+        let original = try AuthSwap$Codex.authData(home: owner)
         var refused = false
-        do { try CodexAuthSwap.activate(columnID: "codex:base-owner", home: owner) } catch { refused = true }
-        try expect(refused && CodexAuthSwap.activeColumnID == CodexAuthSwap.defaultColumnID
-                   && CodexAuthSwap.authData(home: owner) == original,
+        do { try AuthSwap$Codex.activate(columnID: "codex:base-owner", home: owner) } catch { refused = true }
+        try expect(refused && AuthSwap$Codex.activeColumnID == AuthSwap$Codex.defaultColumnID
+                   && AuthSwap$Codex.authData(home: owner) == original,
                    "Activation created a sleeping duplicate of the native-owned base grant")
     }
 
@@ -1704,47 +1745,47 @@ enum Authentication {
     private static func codexLegacyBaseAlias() async throws {
         let owner = ProfileDirectories.codexRoot.appendingPathComponent("legacy-base")
         try Fixture.codexLogin(owner, account: "primary", mode: "keyring", expired: true)
-        try Foundation.FileManager.default.createSymbolicLink(at: CodexAuthSwap.baseHome, withDestinationURL: owner)
-        let old = try CodexAuthSwap.authData(home: owner)!
-        try Fixture.codexMode(CodexAuthSwap.stashHome, "file")
-        try old.write(to: CodexAuthSwap.stashHome.appendingPathComponent("auth.json"))
+        try Foundation.FileManager.default.createSymbolicLink(at: AuthSwap$Codex.baseHome, withDestinationURL: owner)
+        let old = try AuthSwap$Codex.authData(home: owner)!
+        try Fixture.codexMode(AuthSwap$Codex.stashHome, "file")
+        try old.write(to: AuthSwap$Codex.stashHome.appendingPathComponent("auth.json"))
         UserDefaults.standard.set("codex:legacy-base", forKey: "codexAppAccountID")
         UserDefaults.standard.set(owner.path, forKey: "codexAppAccountHome")
         UserDefaults.standard.set("file", forKey: "codexAppStashStore")
         let native = Fixture.root.appendingPathComponent("native-response")
         try Fixture.writeAuth(native, account: "primary", refresh: "current-native-grant", expired: false)
         Fixture.codexKeychain[Fixture.codexKey(owner)] = try Data(contentsOf: native.appendingPathComponent("auth.json"))
-        let account = DiscoveredAccount(id: CodexAuthSwap.defaultColumnID, provider: .codex,
-                                       profileName: "main", source: .codexHome(CodexAuthSwap.baseHome))
-        _ = await CodexProvider().fetch(account)
-        try expect(Fixture.refreshCalls == 0 && !CodexAuthSwap.isSwapped,
+        let account = DiscoveredAccount(id: AuthSwap$Codex.defaultColumnID, provider: .codex,
+                                       profileName: "main", source: .codexHome(AuthSwap$Codex.baseHome))
+        _ = await Provider$Codex().fetch(account)
+        try expect(Fixture.refreshCalls == 0 && !AuthSwap$Codex.isSwapped,
                    "A saved canonical-base alias renewed the spent primary backup instead of using the live native home")
         let other = try Fixture.codexAccount("real-profile")
         guard case .codexHome(let home) = other.source else { fatalError() }
-        try CodexAuthSwap.activate(columnID: other.id, home: home)
-        try CodexAuthSwap.restoreDefault()
-        try expect(CodexRenewal.refreshToken(owner.appendingPathComponent("auth.json")) == "current-native-grant",
+        try AuthSwap$Codex.activate(columnID: other.id, home: home)
+        try AuthSwap$Codex.restoreDefault()
+        try expect(Renewal$Codex.refreshToken(owner.appendingPathComponent("auth.json")) == "current-native-grant",
                    "Recovery from a legacy base alias restored its stale backup over the current native login")
     }
 
     private static func codexSavePreparationFailure(auto: Bool) throws {
-        let main = CodexAuthSwap.baseHome
+        let main = AuthSwap$Codex.baseHome
         let profile = ProfileDirectories.codexRoot.appendingPathComponent("prepared-switch")
         try Fixture.codexLogin(main, account: "main-a", mode: "file")
         if auto { try Fixture.codexMode(main, "auto"); Fixture.denyCodexWrite = true }
         try Fixture.codexLogin(profile, account: "profile-b", mode: "file")
         Fixture.denyCredentialChmodHome = main.path
         var failed = false
-        do { try CodexAuthSwap.activate(columnID: "codex:prepared-switch", home: profile) } catch { failed = true }
-        let actual = CodexProvider.readAuth(codexHome: main)?.accountID
-        let marker = CodexAuthSwap.activeColumnID
+        do { try AuthSwap$Codex.activate(columnID: "codex:prepared-switch", home: profile) } catch { failed = true }
+        let actual = Provider$Codex.readAuth(codexHome: main)?.accountID
+        let marker = AuthSwap$Codex.activeColumnID
         Fixture.denyCredentialChmodHome = nil
         Fixture.denyCodexWrite = false
-        try CodexAuthSwap.activate(columnID: "codex:prepared-switch", home: profile)
-        try CodexAuthSwap.restoreDefault()
-        let restored = CodexProvider.readAuth(codexHome: main)?.accountID
+        try AuthSwap$Codex.activate(columnID: "codex:prepared-switch", home: profile)
+        try AuthSwap$Codex.restoreDefault()
+        let restored = Provider$Codex.readAuth(codexHome: main)?.accountID
         print("Preparation refused: \(failed), actual owner after refusal: \(actual ?? "nil"), restored owner: \(restored ?? "nil")")
-        try expect(failed && actual == "main-a" && marker == CodexAuthSwap.defaultColumnID && restored == "main-a",
+        try expect(failed && actual == "main-a" && marker == AuthSwap$Codex.defaultColumnID && restored == "main-a",
                    "A partial credential save changed ownership before commit and retry overwrote the primary backup")
         let leftovers = try Foundation.FileManager.default.contentsOfDirectory(atPath: main.path)
         try expect(!leftovers.contains { $0.hasPrefix(".auth-") }, "Failed credential preparation retained temporary secrets")
@@ -1755,7 +1796,7 @@ enum Authentication {
                                                  replacement: Bool = false, nativeLock: Bool = false) async throws {
         let account: DiscoveredAccount
         let home: URL
-        let claude = ClaudeProvider(), provider = CodexProvider()
+        let claude = Provider$Claude(), provider = Provider$Codex()
         var renewal: Task<FetchOutcome, Never>?
         if codex {
             home = ProfileDirectories.codexRoot.appendingPathComponent("rollback-collision")
@@ -1804,7 +1845,7 @@ enum Authentication {
                 nativeInode = (try! Foundation.FileManager.default.attributesOfItem(atPath: native.path)[.systemFileNumber] as! NSNumber).uint64Value
             }
         }
-        let store = UsageStore(providers: [.claude: claude, .codex: provider], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.claude: claude, .codex: provider], discovery: Discovery$Real())
         store.rediscover(force: true)
         var failed = false
         do { try store.removeAccount(id: account.id) } catch { failed = true }
@@ -1812,10 +1853,10 @@ enum Authentication {
         Fixture.denyKeychainDelete = false
         let accessible: Bool
         if codex {
-            accessible = CodexProvider.readAuth(codexHome: home)?.accountID == (replacement ? "replacement" : "retained")
+            accessible = Provider$Codex.readAuth(codexHome: home)?.accountID == (replacement ? "replacement" : "retained")
         } else {
             guard case .claudeKeychain(let service, _) = account.source else { fatalError() }
-            accessible = ClaudeKeychain.credentials(service: service)?.refreshToken == (replacement ? "synthetic-refresh-replacement" : "synthetic-refresh-file-owner")
+            accessible = AuthStorage$Claude.credentials(service: service)?.refreshToken == (replacement ? "synthetic-refresh-replacement" : "synthetic-refresh-file-owner")
         }
         // Check visibility before the pending writer resumes, so a fresh save
         // cannot conceal a broken rollback that orphaned the original profile.
@@ -1836,11 +1877,11 @@ enum Authentication {
         if pending {
             if codex {
                 _ = await provider.fetch(account)
-                try expect(CodexRenewal.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated", "Rollback discarded the pending Codex rotation")
+                try expect(Renewal$Codex.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated", "Rollback discarded the pending Codex rotation")
             } else {
                 _ = await claude.fetch(account)
                 guard case .claudeKeychain(let service, _) = account.source else { fatalError() }
-                try expect(ClaudeKeychain.credentials(service: service)?.refreshToken == "synthetic-rotated", "Rollback discarded the pending Claude rotation")
+                try expect(AuthStorage$Claude.credentials(service: service)?.refreshToken == "synthetic-rotated", "Rollback discarded the pending Claude rotation")
             }
             try expect(Fixture.refreshCalls == 1, "Rollback retried a refresh POST instead of preserving the pending grant")
         }
@@ -1859,13 +1900,13 @@ enum Authentication {
     }
 
     private static func codexStoreRead(_ mode: String, missing: Bool = false, denied: Bool = false) throws {
-        let home = CodexAuthSwap.baseHome
+        let home = AuthSwap$Codex.baseHome
         try Fixture.codexLogin(home, account: "secure", mode: "keyring")
         if missing { Fixture.codexKeychain = [:] }
         Fixture.denyCodexRead = denied
         try Fixture.writeAuth(home, account: "stale-file", refresh: "stale-file-refresh", expired: false)
         try Fixture.codexMode(home, mode)
-        let auth = CodexProvider.readAuth(codexHome: home)
+        let auth = Provider$Codex.readAuth(codexHome: home)
         if mode == "ephemeral" || mode == "unknown" || mode == "keyring" && denied {
             try expect(auth == nil, "Persistent file credentials bypassed the selected Codex storage mode")
         } else {
@@ -1876,25 +1917,25 @@ enum Authentication {
     }
 
     private static func codexStoreDiscovery(symlink: Bool = false) throws {
-        let main = CodexAuthSwap.baseHome
+        let main = AuthSwap$Codex.baseHome
         let profile = ProfileDirectories.codexRoot.appendingPathComponent("secure")
         try Fixture.codexLogin(main, account: "main", mode: "keyring")
         try Fixture.codexLogin(profile, account: "profile", mode: "keyring")
         if symlink {
             let alias = Fixture.root.appendingPathComponent("codex-alias")
             try Foundation.FileManager.default.createSymbolicLink(at: alias, withDestinationURL: profile)
-            try expect(CodexProvider.readAuth(codexHome: alias)?.accountID == "profile", "Keychain service key ignored the canonical CODEX_HOME")
+            try expect(Provider$Codex.readAuth(codexHome: alias)?.accountID == "profile", "Keychain service key ignored the canonical CODEX_HOME")
         }
         let reads = Fixture.codexSecretReads
-        let accounts = RealDiscovery().discover().filter { $0.provider == .codex }
-        try expect(Set(accounts.map(\.id)) == [CodexAuthSwap.defaultColumnID, "codex:secure"], "Keychain-only Codex accounts were not discovered")
+        let accounts = Discovery$Real().discover().filter { $0.provider == .codex }
+        try expect(Set(accounts.map(\.id)) == [AuthSwap$Codex.defaultColumnID, "codex:secure"], "Keychain-only Codex accounts were not discovered")
         try expect(Fixture.codexSecretReads == reads, "Discovery read credential secrets instead of metadata")
-        try expect(CodexProvider.readAuth(codexHome: main)?.accountID == "main", "Keychain primary account could not be read")
+        try expect(Provider$Codex.readAuth(codexHome: main)?.accountID == "main", "Keychain primary account could not be read")
     }
 
     @MainActor
     private static func codexStoreSwitch(baseMode: String = "keyring", profileMode: String = "keyring", fallback: Bool = false) throws {
-        let main = CodexAuthSwap.baseHome
+        let main = AuthSwap$Codex.baseHome
         let profile = ProfileDirectories.codexRoot.appendingPathComponent("secure")
         try Fixture.codexLogin(main, account: "main", mode: fallback ? "file" : baseMode)
         try Fixture.codexMode(main, baseMode)
@@ -1902,11 +1943,11 @@ enum Authentication {
         Fixture.denyCodexWrite = fallback
         let projects = main.appendingPathComponent("synthetic-projects")
         try Data("preserved".utf8).write(to: projects)
-        ClaudeCLISelection.isEnabled = false // Claude's setting cannot change Codex switching.
-        do { try CodexAuthSwap.activate(columnID: "codex:secure", home: profile) }
+        CLISelection$Claude.isEnabled = false // Claude's setting cannot change Codex switching.
+        do { try AuthSwap$Codex.activate(columnID: "codex:secure", home: profile) }
         catch { throw Failure(description: "Codex switch rejected an existing persistent Keychain profile") }
-        try expect(CodexProvider.readAuth(codexHome: main)?.accountID == "profile", "Desktop/CLI did not select the profile in the base backend")
-        try expect(CodexProvider.readAuth(codexHome: CodexAuthSwap.stashHome)?.accountID == "main", "Main credentials were not retained in their backend")
+        try expect(Provider$Codex.readAuth(codexHome: main)?.accountID == "profile", "Desktop/CLI did not select the profile in the base backend")
+        try expect(Provider$Codex.readAuth(codexHome: AuthSwap$Codex.stashHome)?.accountID == "main", "Main credentials were not retained in their backend")
         try Fixture.codexLogin(main, account: "profile", mode: fallback ? "file" : baseMode, expired: false)
         try Fixture.codexMode(main, baseMode)
         // Model native refresh while this profile owns the Desktop/CLI base home.
@@ -1920,9 +1961,9 @@ enum Authentication {
         } else {
             try Fixture.writeAuth(main, account: "profile", refresh: "native-rotated", expired: false)
         }
-        try CodexAuthSwap.restoreDefault()
-        try expect(CodexProvider.readAuth(codexHome: main)?.accountID == "main", "Main account did not restore")
-        try expect(CodexRenewal.refreshToken(profile.appendingPathComponent("auth.json")) == "native-rotated", "Native refreshed profile credentials were not returned to their selected backend")
+        try AuthSwap$Codex.restoreDefault()
+        try expect(Provider$Codex.readAuth(codexHome: main)?.accountID == "main", "Main account did not restore")
+        try expect(Renewal$Codex.refreshToken(profile.appendingPathComponent("auth.json")) == "native-rotated", "Native refreshed profile credentials were not returned to their selected backend")
         try expect(try String(contentsOf: projects) == "preserved", "Switch changed Desktop projects")
         if baseMode != "file" && !fallback { try expect(!Foundation.FileManager.default.fileExists(atPath: main.appendingPathComponent("auth.json").path), "Switch exported base Keychain credentials to auth.json") }
         if profileMode != "file" { try expect(!Foundation.FileManager.default.fileExists(atPath: profile.appendingPathComponent("auth.json").path), "Switch exported profile Keychain credentials to auth.json") }
@@ -1933,15 +1974,15 @@ enum Authentication {
         try Fixture.codexLogin(home, account: "secure", mode: mode, expired: true)
         let account = DiscoveredAccount(id: "codex:secure", provider: .codex, profileName: "secure", source: .codexHome(home))
         Fixture.denyCodexWrite = denied
-        _ = await CodexProvider().fetch(account)
+        _ = await Provider$Codex().fetch(account)
         try expect(Fixture.refreshCalls == 1, "Sleeping Keychain profile was not renewed")
         if denied {
-            try expect(CodexRenewal.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-refresh-secure", "Denied persistence did not preserve the stored grant")
+            try expect(Renewal$Codex.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-refresh-secure", "Denied persistence did not preserve the stored grant")
             Fixture.denyCodexWrite = false
         }
-        let outcome = await CodexProvider().fetch(account)
+        let outcome = await Provider$Codex().fetch(account)
         if case .success = outcome {} else { throw Failure(description: "Keychain renewal did not recover persistence") }
-        try expect(Fixture.refreshCalls == 1 && CodexRenewal.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated", "Keychain persistence lost tokens or repeated the refresh POST")
+        try expect(Fixture.refreshCalls == 1 && Renewal$Codex.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated", "Keychain persistence lost tokens or repeated the refresh POST")
         try expect(!Foundation.FileManager.default.fileExists(atPath: home.appendingPathComponent("auth.json").path), "Keychain renewal wrote plaintext credentials")
     }
 
@@ -1960,7 +2001,7 @@ enum Authentication {
     }
 
     private static func codexStoreSettings(requirements: Bool = false, managed: Bool = false) throws {
-        let home = CodexAuthSwap.baseHome
+        let home = AuthSwap$Codex.baseHome
         try Fixture.codexLogin(home, account: "secure", mode: "keyring")
         try Fixture.writeAuth(home, account: "stale", refresh: "stale", expired: false)
         if requirements || managed {
@@ -1976,20 +2017,20 @@ enum Authentication {
             let text = "description = \"\"\"\ncli_auth_credentials_store = 'file'\n\"\"\"\n\"cli_auth_credentials_store\" = 'keyring' # root\n[other]\ncli_auth_credentials_store = 'file'\n"
             try Data(text.utf8).write(to: home.appendingPathComponent("config.toml"))
         }
-        try expect(CodexProvider.readAuth(codexHome: home)?.accountID == "secure", "Codex ignored root/managed storage settings or parsed a nested/string value as root")
+        try expect(Provider$Codex.readAuth(codexHome: home)?.accountID == "secure", "Codex ignored root/managed storage settings or parsed a nested/string value as root")
     }
 
     private static func codexStoreEncryptedBackend() throws {
-        let home = CodexAuthSwap.baseHome
+        let home = AuthSwap$Codex.baseHome
         try Fixture.writeAuth(home, account: "stale", refresh: "stale", expired: false)
         try Data("cli_auth_credentials_store = 'keyring'\n[features]\nsecret_auth_storage = true\n".utf8)
             .write(to: home.appendingPathComponent("config.toml"))
-        try expect(CodexProvider.readAuth(codexHome: home) == nil,
+        try expect(Provider$Codex.readAuth(codexHome: home) == nil,
                    "Encrypted secrets mode was mistaken for a direct Keychain or file login")
     }
 
     private static func codexStoreEphemeralSwitch(alreadyActive: Bool = false) throws {
-        let main = CodexAuthSwap.baseHome
+        let main = AuthSwap$Codex.baseHome
         let profile = ProfileDirectories.codexRoot.appendingPathComponent("file")
         try Fixture.writeAuth(main, account: "stale-main", refresh: "stale", expired: false)
         try Fixture.codexMode(main, "ephemeral")
@@ -1999,29 +2040,29 @@ enum Authentication {
             UserDefaults.standard.set("codex:file", forKey: "codexAppAccountID")
             UserDefaults.standard.set(profile.path, forKey: "codexAppAccountHome")
         }
-        let previousID = CodexAuthSwap.activeColumnID
+        let previousID = AuthSwap$Codex.activeColumnID
         var failed = false
-        do { try CodexAuthSwap.activate(columnID: "codex:file", home: profile) } catch { failed = true }
-        try expect(failed && CodexAuthSwap.activeColumnID == previousID,
+        do { try AuthSwap$Codex.activate(columnID: "codex:file", home: profile) } catch { failed = true }
+        try expect(failed && AuthSwap$Codex.activeColumnID == previousID,
                    "Ephemeral mode allowed a persistent Desktop/CLI switch")
         try expect(try Data(contentsOf: main.appendingPathComponent("auth.json")) == before, "Ephemeral mode mutated a persistent cache")
     }
 
     @MainActor
     private static func profileIdentity() throws {
-        let main = CodexAuthSwap.baseHome
+        let main = AuthSwap$Codex.baseHome
         let extra = ProfileDirectories.codexRoot.appendingPathComponent("default")
         try Fixture.writeAuth(main, account: "synthetic-main", refresh: "main-refresh")
         try Fixture.writeAuth(extra, account: "synthetic-extra", refresh: "extra-refresh")
-        let accounts = RealDiscovery().discover()
+        let accounts = Discovery$Real().discover()
         try expect(accounts.count == 2, "Expected both Codex accounts")
         try expect(Set(accounts.map(\.id)).count == 2, "Main and default profile share one ID")
         try expect(accounts.filter(\.isActive).count == 1, "Two accounts marked active")
         let profile = accounts.first { $0.profileName == "default" }!
-        try CodexAuthSwap.activate(columnID: profile.id, home: extra)
-        try expect(CodexProvider.readAuth(codexHome: main)?.accountID == "synthetic-extra", "Wrong account activated")
-        try CodexAuthSwap.restoreDefault()
-        try expect(CodexProvider.readAuth(codexHome: main)?.accountID == "synthetic-main", "Main sign-in not restored")
+        try AuthSwap$Codex.activate(columnID: profile.id, home: extra)
+        try expect(Provider$Codex.readAuth(codexHome: main)?.accountID == "synthetic-extra", "Wrong account activated")
+        try AuthSwap$Codex.restoreDefault()
+        try expect(Provider$Codex.readAuth(codexHome: main)?.accountID == "synthetic-main", "Main sign-in not restored")
         try AccountRemoval.remove(profile)
         try expect(Foundation.FileManager.default.fileExists(atPath: main.appendingPathComponent("auth.json").path),
                    "Removing default profile removed main sign-in")
@@ -2032,55 +2073,55 @@ enum Authentication {
     private static func lostResponse() async throws {
         let account = try Fixture.codexAccount("lost")
         Fixture.response = .lost
-        _ = await CodexProvider().fetch(account)
-        _ = await CodexProvider().fetch(account)
+        _ = await Provider$Codex().fetch(account)
+        _ = await Provider$Codex().fetch(account)
         try expect(Fixture.refreshCalls == 1, "Lost response reused refresh token: \(Fixture.refreshCalls) POSTs")
     }
 
     private static func profileCollision() throws {
         let names = ["default", "profile:default", "profile:profile:default", "work"]
-        try Fixture.writeAuth(CodexAuthSwap.baseHome, account: "synthetic-main", refresh: "main-refresh")
+        try Fixture.writeAuth(AuthSwap$Codex.baseHome, account: "synthetic-main", refresh: "main-refresh")
         for name in names {
             try Fixture.writeAuth(ProfileDirectories.codexRoot.appendingPathComponent(name),
                                   account: "synthetic-" + name, refresh: "refresh-" + name)
         }
-        let accounts = RealDiscovery().discover()
+        let accounts = Discovery$Real().discover()
         try expect(accounts.count == names.count + 1, "Imported profiles missing")
         try expect(Set(accounts.map(\.id)).count == accounts.count, "Imported profiles share an ID")
-        try expect(CodexAuthSwap.profileColumnID("work") == "codex:work", "Existing ordinary profile ID changed")
+        try expect(AuthSwap$Codex.profileColumnID("work") == "codex:work", "Existing ordinary profile ID changed")
         for name in names {
             let account = accounts.first { $0.profileName == name }!
             guard case .codexHome(let home) = account.source else { continue }
-            try CodexAuthSwap.activate(columnID: account.id, home: home)
-            try expect(CodexProvider.readAuth(codexHome: CodexAuthSwap.baseHome)?.accountID == "synthetic-" + name,
+            try AuthSwap$Codex.activate(columnID: account.id, home: home)
+            try expect(Provider$Codex.readAuth(codexHome: AuthSwap$Codex.baseHome)?.accountID == "synthetic-" + name,
                        "Switching imported profile chose another account")
-            try expect(RealDiscovery().discover().filter(\.isActive).count == 1, "Multiple imported profiles active")
+            try expect(Discovery$Real().discover().filter(\.isActive).count == 1, "Multiple imported profiles active")
         }
-        try CodexAuthSwap.restoreDefault()
+        try AuthSwap$Codex.restoreDefault()
         let imported = accounts.first { $0.profileName == "profile:default" }!
         try AccountRemoval.remove(imported)
-        try expect(RealDiscovery().discover().count == names.count, "Wrong number of profiles after removal")
-        try expect(CodexProvider.readAuth(codexHome: CodexAuthSwap.baseHome)?.accountID == "synthetic-main",
+        try expect(Discovery$Real().discover().count == names.count, "Wrong number of profiles after removal")
+        try expect(Provider$Codex.readAuth(codexHome: AuthSwap$Codex.baseHome)?.accountID == "synthetic-main",
                    "Imported profile removal changed main account")
     }
 
     private static func profileActiveMigration() throws {
         let name = "profile:default"
         let home = ProfileDirectories.codexRoot.appendingPathComponent(name)
-        try Fixture.writeAuth(CodexAuthSwap.baseHome, account: "synthetic-main", refresh: "main-refresh")
+        try Fixture.writeAuth(AuthSwap$Codex.baseHome, account: "synthetic-main", refresh: "main-refresh")
         try Fixture.writeAuth(home, account: "synthetic-imported", refresh: "imported-refresh")
         try Fixture.writeAuth(ProfileDirectories.codexRoot.appendingPathComponent("default"),
                               account: "synthetic-default-profile", refresh: "default-refresh")
-        try CodexAuthSwap.activate(columnID: CodexAuthSwap.profileColumnID(name), home: home)
+        try AuthSwap$Codex.activate(columnID: AuthSwap$Codex.profileColumnID(name), home: home)
         UserDefaults.standard.set("codex:" + name, forKey: "codexAppAccountID")
-        let accounts = RealDiscovery().discover()
+        let accounts = Discovery$Real().discover()
         try expect(accounts.filter(\.isActive).count == 1, "Legacy active ID marks two profiles active")
         let active = accounts.first(where: \.isActive)!
         try expect(active.profileName == name, "Legacy active ID migrated to the wrong profile")
-        try CodexAuthSwap.restoreDefault()
-        try expect(CodexProvider.readAuth(codexHome: home)?.accountID == "synthetic-imported",
+        try AuthSwap$Codex.restoreDefault()
+        try expect(Provider$Codex.readAuth(codexHome: home)?.accountID == "synthetic-imported",
                    "Legacy migration saved live credentials to the wrong profile")
-        try expect(CodexProvider.readAuth(codexHome: CodexAuthSwap.baseHome)?.accountID == "synthetic-main",
+        try expect(Provider$Codex.readAuth(codexHome: AuthSwap$Codex.baseHome)?.accountID == "synthetic-main",
                    "Legacy migration did not restore main account")
     }
 
@@ -2091,7 +2132,7 @@ enum Authentication {
         try Fixture.writeAuth(home, account: "synthetic-imported", refresh: "imported-refresh")
         UserDefaults.standard.set(["codex:" + name], forKey: "hiddenColumns")
         UserDefaults.standard.set(["codex:" + name: "Private account"], forKey: "columnNames")
-        let store = UsageStore(providers: [:], discovery: RealDiscovery())
+        let store = UsageStore(providers: [:], discovery: Discovery$Real())
         store.rediscover(force: true)
         try expect(store.columns.count == 1, "Imported profile missing")
         try expect(store.visibleColumns.isEmpty, "Previously hidden imported profile became visible")
@@ -2102,17 +2143,17 @@ enum Authentication {
     private static func profileSettingsExisting() throws {
         let name = "profile:work"
         let home = ProfileDirectories.codexRoot.appendingPathComponent(name)
-        let currentID = CodexAuthSwap.profileColumnID(name)
+        let currentID = AuthSwap$Codex.profileColumnID(name)
         try Fixture.writeAuth(home, account: "synthetic-imported", refresh: "imported-refresh")
         UserDefaults.standard.set(["codex:" + name], forKey: "hiddenColumns")
         UserDefaults.standard.set(["codex:" + name: "Legacy name", currentID: "Current name",
                                    "claude:unrelated": "Unrelated name"], forKey: "columnNames")
-        let first = UsageStore(providers: [:], discovery: RealDiscovery())
+        let first = UsageStore(providers: [:], discovery: Discovery$Real())
         first.rediscover(force: true)
         try expect(first.columns[0].customName == "Current name", "Current custom name was overwritten")
         first.setCustomName("Edited name", for: currentID)
         first.setHidden(currentID, hidden: false)
-        let restarted = UsageStore(providers: [:], discovery: RealDiscovery())
+        let restarted = UsageStore(providers: [:], discovery: Discovery$Real())
         restarted.rediscover(force: true)
         try expect(restarted.visibleColumns.count == 1, "Repeated migration hid a profile the user unhid")
         try expect(restarted.columns[0].customName == "Edited name", "Repeated migration replaced the user's edit")
@@ -2128,7 +2169,7 @@ enum Authentication {
         let legacyID = "codex:profile:default"
         UserDefaults.standard.set([legacyID], forKey: "hiddenColumns")
         UserDefaults.standard.set([legacyID: "Shared legacy name"], forKey: "columnNames")
-        let store = UsageStore(providers: [:], discovery: RealDiscovery())
+        let store = UsageStore(providers: [:], discovery: Discovery$Real())
         store.rediscover(force: true)
         try expect(store.columns.count == 2, "Colliding legacy profiles missing")
         try expect(store.visibleColumns.isEmpty, "Legacy collision revealed a hidden account")
@@ -2144,7 +2185,7 @@ enum Authentication {
         }
         UserDefaults.standard.set(["codex:profile:work"], forKey: "hiddenColumns")
         UserDefaults.standard.set(["codex:profile:work": "First profile"], forKey: "columnNames")
-        let store = UsageStore(providers: [:], discovery: RealDiscovery())
+        let store = UsageStore(providers: [:], discovery: Discovery$Real())
         store.rediscover(force: true)
         try expect(store.visibleColumns.map(\.profileName) == ["profile:profile:work"],
                    "Nested ID migration copied hidden state to another profile")
@@ -2159,61 +2200,61 @@ enum Authentication {
         guard case .codexHome(let home) = account.source else { return }
         try Foundation.FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: home.path)
         defer { try? Foundation.FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: home.path) }
-        _ = await CodexProvider().fetch(account)
+        _ = await Provider$Codex().fetch(account)
         try expect(Fixture.refreshCalls == 1, "Write failure reused refresh token: \(Fixture.refreshCalls) POSTs")
-        try expect(CodexRenewal.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-refresh-save",
+        try expect(Renewal$Codex.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-refresh-save",
                    "Fixture did not produce a real write failure")
         try Foundation.FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: home.path)
-        let outcome = await CodexProvider().fetch(account)
+        let outcome = await Provider$Codex().fetch(account)
         if case .success = outcome {} else { throw Failure(description: "Pending tokens not recovered after restoring write access") }
         try expect(Fixture.refreshCalls == 1, "Saving pending tokens made another refresh request")
-        try expect(CodexRenewal.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated",
+        try expect(Renewal$Codex.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated",
                    "Rotated tokens were lost")
     }
 
     private static func temporaryResponse() async throws {
         let account = try Fixture.codexAccount("temporary")
         Fixture.response = .temporary
-        _ = await CodexProvider().fetch(account)
+        _ = await Provider$Codex().fetch(account)
         try expect(Fixture.refreshCalls == 1, "Temporary response retried in the same fetch")
-        _ = await CodexProvider().fetch(account)
+        _ = await Provider$Codex().fetch(account)
         try expect(Fixture.refreshCalls == 2, "Explicit temporary response blocked later renewal")
     }
 
     private static func unreadableResponse() async throws {
         let account = try Fixture.codexAccount("unreadable")
         Fixture.response = .unreadable
-        _ = await CodexProvider().fetch(account)
-        _ = await CodexProvider().fetch(account)
+        _ = await Provider$Codex().fetch(account)
+        _ = await Provider$Codex().fetch(account)
         try expect(Fixture.refreshCalls == 1, "Unreadable success response reused refresh token")
     }
 
     private static func concurrentRefresh() async throws {
         let account = try Fixture.codexAccount("concurrent")
         Fixture.response = .delayedLost
-        async let first = CodexProvider().fetch(account)
-        async let second = CodexProvider().fetch(account)
+        async let first = Provider$Codex().fetch(account)
+        async let second = Provider$Codex().fetch(account)
         _ = await (first, second)
         try expect(Fixture.refreshCalls == 1, "Concurrent fetches reused refresh token: \(Fixture.refreshCalls) POSTs")
     }
 
     private static func claudeLoginChanged() async throws {
         let old = Fixture.claudeLogin("old-login", expired: true)
-        let expected = ClaudeKeychain.parse(old)!
-        let fresh = ClaudeOAuth.Tokens(accessToken: "synthetic-stale", expiresAt: Date().addingTimeInterval(3_600),
+        let expected = AuthStorage$Claude.parse(old)!
+        let fresh = OAuth$Claude.Tokens(accessToken: "synthetic-stale", expiresAt: Date().addingTimeInterval(3_600),
                                        refreshToken: "synthetic-stale-refresh", refreshTokenExpiresAt: nil, scopes: nil)
         Fixture.keychain = Fixture.claudeLogin("new-login", expired: false)
         #if LEGACY_CLAUDE_SAVE
-        _ = ClaudeKeychain.save(service: Fixture.service, tokens: fresh)
+        _ = AuthStorage$Claude.save(service: Fixture.service, tokens: fresh)
         #else
-        _ = ClaudeKeychain.save(service: Fixture.service, tokens: fresh, expected: expected)
+        _ = AuthStorage$Claude.save(service: Fixture.service, tokens: fresh, expected: expected)
         #endif
-        try expect(ClaudeKeychain.parse(Fixture.keychain)?.accessToken == "synthetic-new-login",
+        try expect(AuthStorage$Claude.parse(Fixture.keychain)?.accessToken == "synthetic-new-login",
                    "Stale refresh response overwrote newer Keychain login")
 
         Fixture.keychain = old
         Fixture.response = .changedClaude
-        let outcome = await ClaudeProvider().fetch(Fixture.claudeAccount)
+        let outcome = await Provider$Claude().fetch(Fixture.claudeAccount)
         if case .success = outcome {} else { throw Failure(description: "New CLI login not used for usage") }
         try expect(Fixture.lastAuthorization == "Bearer synthetic-new-login", "Stale response cached after CLI login")
         try expect(Fixture.keychain["unknown"] as? String == "preserved", "Unrelated Keychain fields lost")
@@ -2222,7 +2263,7 @@ enum Authentication {
     private static func claudePendingChanged() async throws {
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.failKeychainSave = true
-        let provider = ClaudeProvider()
+        let provider = Provider$Claude()
         let renewal = Task { await provider.fetch(Fixture.claudeAccount) }
         try await waitForFailedSave()
         Fixture.lock.lock()
@@ -2232,7 +2273,7 @@ enum Authentication {
         _ = await renewal.value
         _ = await provider.fetch(Fixture.claudeAccount)
         try expect(Fixture.refreshCalls == 1, "Pending save made another refresh request")
-        try expect(ClaudeKeychain.parse(Fixture.keychain)?.accessToken == "synthetic-new-login",
+        try expect(AuthStorage$Claude.parse(Fixture.keychain)?.accessToken == "synthetic-new-login",
                    "Pending save replaced newer CLI login")
         try expect(Fixture.lastAuthorization == "Bearer synthetic-new-login", "Old cached tokens survived CLI login")
     }
@@ -2241,12 +2282,12 @@ enum Authentication {
         try Foundation.FileManager.default.createDirectory(at: Fixture.storageDirectory, withIntermediateDirectories: true)
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.changeLoginAfterRead = afterRead
-        let outcome = await ClaudeProvider().fetch(Fixture.claudeAccount)
+        let outcome = await Provider$Claude().fetch(Fixture.claudeAccount)
         if Fixture.pendingCLILogin { Fixture.tryCLILogin() }
         try expect(Fixture.keychainReads >= afterRead, "Target Keychain read did not happen")
         if case .success = outcome {} else { throw Failure(description: "Usage did not complete") }
         try expect(!Fixture.pendingCLILogin, "CLI could not acquire the released storage lock")
-        try expect(ClaudeKeychain.parse(Fixture.keychain)?.accessToken == "synthetic-new-login",
+        try expect(AuthStorage$Claude.parse(Fixture.keychain)?.accessToken == "synthetic-new-login",
                    "Keychain write replaced a concurrent CLI login after read \(afterRead)")
     }
 
@@ -2257,7 +2298,7 @@ enum Authentication {
                                                              ofItemAtPath: Fixture.storageLock.path)
         }
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
-        try expect(!ClaudeKeychain.canWrite(service: Fixture.service), "CLI-owned lock allowed a Keychain write")
+        try expect(!AuthStorage$Claude.canWrite(service: Fixture.service), "CLI-owned lock allowed a Keychain write")
         try expect(Fixture.keychainWrites == 0, "Busy storage lock still wrote credentials")
         try expect(Foundation.FileManager.default.fileExists(atPath: Fixture.storageLock.path),
                    "Another process's storage lock was removed")
@@ -2267,7 +2308,7 @@ enum Authentication {
         try Foundation.FileManager.default.createDirectory(at: Fixture.storageDirectory, withIntermediateDirectories: true)
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.replaceLockAfterRead = 1
-        try expect(!ClaudeKeychain.canWrite(service: Fixture.service), "Lost storage lock allowed a Keychain write")
+        try expect(!AuthStorage$Claude.canWrite(service: Fixture.service), "Lost storage lock allowed a Keychain write")
         try expect(Fixture.keychainWrites == 0, "Credentials written after storage lock changed owner")
         try expect(Foundation.FileManager.default.fileExists(atPath: Fixture.storageLock.path),
                    "Releasing a lost lock removed the CLI's replacement lock")
@@ -2277,7 +2318,7 @@ enum Authentication {
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.slowKeychainRead = true
         let started = Date()
-        let writer = Task.detached { ClaudeKeychain.canWrite(service: Fixture.service) }
+        let writer = Task.detached { AuthStorage$Claude.canWrite(service: Fixture.service) }
         try await Task.sleep(nanoseconds: 5_800_000_000)
         let attributes = try? Foundation.FileManager.default.attributesOfItem(atPath: Fixture.storageLock.path)
         let touched = attributes?[.modificationDate] as? Date
@@ -2294,10 +2335,10 @@ enum Authentication {
         try Foundation.FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
         try Foundation.FileManager.default.createDirectory(at: Fixture.storageLock, withIntermediateDirectories: true)
         let suffix = SHA256.hash(data: Data(profile.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
-        let service = ClaudeKeychain.baseService + "-" + suffix
+        let service = AuthStorage$Claude.baseService + "-" + suffix
         Fixture.expectedLock = profile.appendingPathComponent(".storage-write.lock")
         Fixture.keychain = Fixture.claudeLogin("work", expired: true)
-        try expect(ClaudeKeychain.canWrite(service: service), "Main profile's lock blocked a separate profile")
+        try expect(AuthStorage$Claude.canWrite(service: service), "Main profile's lock blocked a separate profile")
         try expect(Fixture.observedProfileLock, "Extra profile write did not acquire that profile's CLI lock")
         try expect(Foundation.FileManager.default.fileExists(atPath: Fixture.storageLock.path),
                    "Extra profile write removed main profile's lock")
@@ -2307,7 +2348,7 @@ enum Authentication {
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.response = writeBoundary ? .renewed : .nativeLogin
         Fixture.loginAtWriteBoundary = writeBoundary
-        let outcome = await ClaudeProvider().fetch(Fixture.claudeAccount)
+        let outcome = await Provider$Claude().fetch(Fixture.claudeAccount)
         if case .success = outcome {} else { throw Failure(description: "Renewal did not complete") }
         try expect(Fixture.nativeLoginPending, "Native CLI login entered during the refresh HTTP request")
         try expect(Fixture.oauthHeldDuringPOST && Fixture.oauthHeldDuringWrite,
@@ -2316,14 +2357,14 @@ enum Authentication {
         try expect(Fixture.interactionAllowed, "Legacy Keychain interaction policy was not restored")
         Fixture.tryNativeLogin()
         try expect(!Fixture.nativeLoginPending, "OAuth locks were not released after saving")
-        try expect(ClaudeKeychain.parse(Fixture.keychain)?.accessToken == "synthetic-new-login",
+        try expect(AuthStorage$Claude.parse(Fixture.keychain)?.accessToken == "synthetic-new-login",
                    "CLI login after renewal did not survive")
     }
 
     private static func claudeNoWritePermission() async throws {
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.denyNoninteractiveWrite = true
-        let outcome = await ClaudeProvider().fetch(Fixture.claudeAccount)
+        let outcome = await Provider$Claude().fetch(Fixture.claudeAccount)
         if case .failure = outcome {} else { throw Failure(description: "Missing write permission did not defer renewal") }
         try expect(Fixture.refreshCalls == 0, "Renewal spent a refresh token without noninteractive write permission")
         try expect(Fixture.interactionAllowed, "Failed Keychain preflight did not restore interaction policy")
@@ -2334,7 +2375,7 @@ enum Authentication {
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.response = .slowRenewed
         let started = Date()
-        let renewal = Task { await ClaudeProvider().fetch(Fixture.claudeAccount) }
+        let renewal = Task { await Provider$Claude().fetch(Fixture.claudeAccount) }
         try await Task.sleep(nanoseconds: 5_800_000_000)
         var touched = true
         for path in [Fixture.oauthLock, Fixture.legacyLock] {
@@ -2353,7 +2394,7 @@ enum Authentication {
         let path = legacy ? Fixture.legacyLock : Fixture.oauthLock
         try Foundation.FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
-        _ = await ClaudeProvider().fetch(Fixture.claudeAccount)
+        _ = await Provider$Claude().fetch(Fixture.claudeAccount)
         try expect(Fixture.refreshCalls == 0 && Fixture.keychainWrites == 0,
                    "Renewal entered a CLI-owned OAuth critical section")
         try expect(Foundation.FileManager.default.fileExists(atPath: path.path), "CLI's OAuth lock was removed")
@@ -2367,7 +2408,7 @@ enum Authentication {
         try Foundation.FileManager.default.createDirectory(at: Fixture.storageDirectory, withIntermediateDirectories: true)
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.loginBeforeOAuth = true
-        _ = await ClaudeProvider().fetch(Fixture.claudeAccount)
+        _ = await Provider$Claude().fetch(Fixture.claudeAccount)
         try expect(Fixture.refreshCalls == 0, "Used credentials read before acquiring the OAuth locks")
         try expect(Fixture.lastAuthorization == "Bearer synthetic-new-login", "Did not adopt the login committed before lock acquisition")
     }
@@ -2375,7 +2416,7 @@ enum Authentication {
     private static func claudeConcurrentRefresh() async throws {
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.response = .delayedRenewed
-        let provider = ClaudeProvider()
+        let provider = Provider$Claude()
         async let first = provider.fetch(Fixture.claudeAccount)
         async let second = provider.fetch(Fixture.claudeAccount)
         let outcomes = await [first, second]
@@ -2388,15 +2429,15 @@ enum Authentication {
     private static func claudeOAuthLost() async throws {
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.replaceOAuthDuringPOST = true
-        _ = await ClaudeProvider().fetch(Fixture.claudeAccount)
+        _ = await Provider$Claude().fetch(Fixture.claudeAccount)
         try expect(Fixture.keychainWrites == 1, "Saved credentials after losing the OAuth lease")
-        try expect(ClaudeKeychain.parse(Fixture.keychain)?.accessToken == "synthetic-old-login", "Lost lease changed credentials")
+        try expect(AuthStorage$Claude.parse(Fixture.keychain)?.accessToken == "synthetic-old-login", "Lost lease changed credentials")
         try expect(Foundation.FileManager.default.fileExists(atPath: Fixture.oauthLock.path), "Released another OAuth lock owner")
     }
 
     private static func claudeCacheLogin() async throws {
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: false)
-        let provider = ClaudeProvider()
+        let provider = Provider$Claude()
         _ = await provider.fetch(Fixture.claudeAccount)
         Fixture.keychain = Fixture.claudeLogin("new-login", expired: false)
         _ = await provider.fetch(Fixture.claudeAccount)
@@ -2407,10 +2448,10 @@ enum Authentication {
     private static func claudeNetworkRecovery() async throws {
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.response = .lost
-        let provider = ClaudeProvider()
+        let provider = Provider$Claude()
         let failed = await provider.fetch(Fixture.claudeAccount)
         if case .failure = failed {} else { throw Failure(description: "Network error incorrectly requested login") }
-        try expect(ClaudeKeychain.parse(Fixture.keychain)?.refreshToken == "synthetic-refresh-old-login", "Network failure erased credentials")
+        try expect(AuthStorage$Claude.parse(Fixture.keychain)?.refreshToken == "synthetic-refresh-old-login", "Network failure erased credentials")
         try expect(!Fixture.holdsOAuthLocks, "Network error leaked OAuth locks")
         Fixture.response = .renewed
         let recovered = await provider.fetch(Fixture.claudeAccount)
@@ -2420,14 +2461,14 @@ enum Authentication {
 
     private static func claudeRefreshNoRetry() async throws {
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
-        _ = await ClaudeProvider().fetch(Fixture.claudeAccount)
+        _ = await Provider$Claude().fetch(Fixture.claudeAccount)
         try expect(!Fixture.allowHTTPRetry, "Rotating Claude refresh POST enabled automatic HTTP retries")
     }
 
     private static func claudeRefreshForbidden() async throws {
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.response = .forbidden
-        let outcome = await ClaudeProvider().fetch(Fixture.claudeAccount)
+        let outcome = await Provider$Claude().fetch(Fixture.claudeAccount)
         if case .failure = outcome {} else { throw Failure(description: "Regional/proxy 403 incorrectly requested login") }
         try expect(!Fixture.holdsOAuthLocks, "Forbidden response leaked OAuth locks")
     }
@@ -2435,7 +2476,7 @@ enum Authentication {
     private static func claudeUsageForbidden() async throws {
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: false)
         Fixture.usageStatus = 403
-        let provider = ClaudeProvider()
+        let provider = Provider$Claude()
         _ = await provider.fetch(Fixture.claudeAccount)
         _ = await provider.fetch(Fixture.claudeAccount)
         try expect(Fixture.refreshCalls == 0, "Usage 403 caused unnecessary refresh-token rotation")
@@ -2446,13 +2487,13 @@ enum Authentication {
         try Foundation.FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
         Fixture.expectedOAuthDirectory = profile
         let suffix = SHA256.hash(data: Data(profile.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
-        let service = ClaudeKeychain.baseService + "-" + suffix
+        let service = AuthStorage$Claude.baseService + "-" + suffix
         let account = DiscoveredAccount(id: "claude:work", provider: .claude, profileName: "work",
                                         source: .claudeKeychain(service: service, configDir: profile))
         try Foundation.FileManager.default.createDirectory(at: Fixture.storageDirectory, withIntermediateDirectories: true)
         try Foundation.FileManager.default.createDirectory(at: Fixture.storageDirectory.appendingPathComponent(".oauth_refresh.lock"), withIntermediateDirectories: true)
         Fixture.keychain = Fixture.claudeLogin("work", expired: true)
-        let outcome = await ClaudeProvider().fetch(account)
+        let outcome = await Provider$Claude().fetch(account)
         if case .success = outcome {} else { throw Failure(description: "Main OAuth lock blocked a separate profile") }
         try expect(Fixture.oauthHeldDuringPOST && Fixture.oauthHeldDuringWrite, "Profile did not use its own OAuth locks")
         try expect(!Fixture.holdsOAuthLocks, "Profile OAuth locks were not released")
@@ -2462,7 +2503,7 @@ enum Authentication {
     @MainActor
     private static func switchSuccessfully(_ account: DiscoveredAccount) throws -> NSWorkspace.OpenConfiguration {
         var result: Result<Void, Error>?
-        ClaudeAppSwitcher().switchTo(account) { result = $0 }
+        AppSwitcher$Claude().switchTo(account) { result = $0 }
         guard let result else { throw Failure(description: "Fixture did not complete Desktop launch") }
         try result.get()
         let config = NSWorkspace.OpenConfiguration()
@@ -2529,7 +2570,7 @@ enum Authentication {
     private static func claudePersistBeforeUnlock() async throws {
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.failKeychainSave = true
-        let provider = ClaudeProvider()
+        let provider = Provider$Claude()
         let renewal = Task { await provider.fetch(Fixture.claudeAccount) }
         try await waitForFailedSave()
         // Let the old implementation finish and release its leases.
@@ -2543,14 +2584,14 @@ enum Authentication {
         try expect(!cleared, "CLI consumed the obsolete grant before rotated credentials were saved")
         if case .success = outcome {} else { throw Failure(description: "Failed persistence did not recover within the same renewal") }
         try expect(Fixture.refreshCalls == 1, "Persistence recovery spent another refresh token")
-        try expect(ClaudeKeychain.parse(Fixture.keychain)?.refreshToken == "synthetic-rotated", "Rotated credentials were not saved")
+        try expect(AuthStorage$Claude.parse(Fixture.keychain)?.refreshToken == "synthetic-rotated", "Rotated credentials were not saved")
         try expect(!Fixture.holdsOAuthLocks, "Successful persistence leaked OAuth locks")
     }
 
     private static func claudeQuitPending() async throws {
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.failKeychainSave = true
-        let provider = ClaudeProvider()
+        let provider = Provider$Claude()
         let renewal = Task { await provider.fetch(Fixture.claudeAccount) }
         try await waitForFailedSave()
         #if CLAUDE_TERMINATION_DRAIN
@@ -2574,7 +2615,7 @@ enum Authentication {
     private static func claudeQuitInFlight() async throws {
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.response = .delayedRenewed
-        let provider = ClaudeProvider()
+        let provider = Provider$Claude()
         let renewal = Task { await provider.fetch(Fixture.claudeAccount) }
         for _ in 0..<200 {
             Fixture.lock.lock()
@@ -2589,7 +2630,7 @@ enum Authentication {
         let ready = true
         #endif
         Fixture.lock.lock()
-        let durableAtQuit = ClaudeKeychain.parse(Fixture.keychain)?.refreshToken == "synthetic-rotated"
+        let durableAtQuit = AuthStorage$Claude.parse(Fixture.keychain)?.refreshToken == "synthetic-rotated"
         Fixture.lock.unlock()
         _ = await renewal.value
         try expect(ready && durableAtQuit, "Normal termination left a refresh POST in flight before its tokens were saved")
@@ -2653,13 +2694,13 @@ enum Authentication {
         }
         Fixture.desktopFails = true
         var result: Result<Void, Error>?
-        ClaudeAppSwitcher().switchTo(account) { result = $0 }
+        AppSwitcher$Claude().switchTo(account) { result = $0 }
         if case .failure? = result {} else { throw Failure(description: "Desktop launch failure was not reported") }
         let selected = try? String(contentsOf: pointer)
         try expect(selected == (first ? "\n" : "/previous/cli/profile\n"), "Failed Desktop launch changed CLI account or broke first-use CLI routing")
         try expect(UserDefaults.standard.string(forKey: "currentClaudeAppAccount") == "previous-desktop", "Failed launch committed the Desktop marker")
         Fixture.desktopFails = false
-        ClaudeAppSwitcher().switchTo(account) { result = $0 }
+        AppSwitcher$Claude().switchTo(account) { result = $0 }
         if case .success? = result {} else { throw Failure(description: "Failure left subsequent account switches blocked") }
         try expect((try? String(contentsOf: pointer)) == (enabled ? target : "/previous/cli/profile\n"), "Successful switch ignored the CLI setting")
     }
@@ -2672,9 +2713,9 @@ enum Authentication {
         Fixture.holdDesktopCompletion = true
         var first: Result<Void, Error>?
         var second: Result<Void, Error>?
-        ClaudeAppSwitcher().switchTo(Fixture.claudeAccount) { first = $0 }
+        AppSwitcher$Claude().switchTo(Fixture.claudeAccount) { first = $0 }
         try expect((try String(contentsOf: pointer)) == "/previous/cli/profile\n", "Pending Desktop launch exposed an uncommitted CLI selection")
-        ClaudeAppSwitcher().switchTo(Fixture.claudeAccount) { second = $0 }
+        AppSwitcher$Claude().switchTo(Fixture.claudeAccount) { second = $0 }
         try expect(Fixture.desktopCalls == 1, "Concurrent switches entered Desktop restart twice")
         if case .failure? = second {} else { throw Failure(description: "Concurrent switch was not rejected") }
         Fixture.desktopCompletion?(.success(()))
@@ -2688,7 +2729,7 @@ enum Authentication {
         try Data("/previous/cli/profile\n".utf8).write(to: pointer)
         Fixture.holdDesktopCompletion = true
         var result: Result<Void, Error>?
-        ClaudeAppSwitcher().switchTo(Fixture.claudeAccount) { result = $0 }
+        AppSwitcher$Claude().switchTo(Fixture.claudeAccount) { result = $0 }
         UserDefaults.standard.set(false, forKey: "switchClaudeCLI")
         Fixture.desktopCompletion?(.success(()))
         if case .success? = result {} else { throw Failure(description: "Desktop switch did not complete") }
@@ -2703,7 +2744,7 @@ enum Authentication {
         try Data("/previous/cli/profile\n".utf8).write(to: pointer)
         Fixture.holdDesktopCompletion = true
         var result: Result<Void, Error>?
-        ClaudeAppSwitcher().switchTo(Fixture.claudeAccount) { result = $0 }
+        AppSwitcher$Claude().switchTo(Fixture.claudeAccount) { result = $0 }
         try expect((try String(contentsOf: pointer)) == "/previous/cli/profile\n", "Pending Desktop launch changed CLI routing")
         UserDefaults.standard.set(true, forKey: "switchClaudeCLI")
         Fixture.desktopCompletion?(fails ? .failure(Failure(description: "Synthetic launch failure")) : .success(()))
@@ -2730,8 +2771,8 @@ enum Authentication {
         Fixture.response = .heldRenewed
         Fixture.failKeychainSave = pending
         Fixture.denyKeychainDelete = denied
-        let provider = ClaudeProvider()
-        let store = UsageStore(providers: [.claude: provider], discovery: RealDiscovery())
+        let provider = Provider$Claude()
+        let store = UsageStore(providers: [.claude: provider], discovery: Discovery$Real())
         store.rediscover(force: true)
         try expect(store.account(for: account.id) != nil, "Fixture did not discover the removable Claude profile")
         let renewal = Task { await provider.fetch(account) }
@@ -2772,7 +2813,7 @@ enum Authentication {
         try expect(ready, "A deleted Claude profile permanently blocked normal termination")
         try expect(Fixture.refreshCalls == 1, "Removal started another refresh POST")
         if denied {
-            try expect(Fixture.keychainExists && ClaudeKeychain.parse(Fixture.keychain)?.refreshToken == "synthetic-rotated",
+            try expect(Fixture.keychainExists && AuthStorage$Claude.parse(Fixture.keychain)?.refreshToken == "synthetic-rotated",
                        "Failed deletion discarded the pending rotated grant")
         } else if !readded {
             try expect(!Fixture.keychainExists && !Foundation.FileManager.default.fileExists(atPath: profile.path),
@@ -2791,7 +2832,7 @@ enum Authentication {
         Fixture.expectedOAuthDirectory = profile
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.response = .heldRenewed
-        let provider = ClaudeProvider()
+        let provider = Provider$Claude()
         let old = Task { await provider.fetch(account) }
         var started = false
         for _ in 0..<200 {
@@ -2820,7 +2861,7 @@ enum Authentication {
         let retry = await provider.fetch(account)
         if case .success = retry {} else { throw Failure(description: "Replacement login control failed") }
         try expect(Fixture.refreshCalls == (expired ? 2 : 1), "Replacement login duplicated or skipped its refresh")
-        try expect(ClaudeKeychain.parse(Fixture.keychain)?.refreshToken == (expired ? "synthetic-rotated" : "synthetic-refresh-readded-login"),
+        try expect(AuthStorage$Claude.parse(Fixture.keychain)?.refreshToken == (expired ? "synthetic-rotated" : "synthetic-refresh-readded-login"),
                    "Late old response changed replacement credentials")
         if expired {
             try expect(Fixture.refreshInput == "synthetic-refresh-readded-login", "Replacement renewed the removed login")
@@ -2846,8 +2887,8 @@ enum Authentication {
         Fixture.expectedOAuthDirectory = profile
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.response = .heldRenewed
-        let provider = ClaudeProvider()
-        let store = UsageStore(providers: [.claude: provider], discovery: RealDiscovery())
+        let provider = Provider$Claude()
+        let store = UsageStore(providers: [.claude: provider], discovery: Discovery$Real())
         store.rediscover(force: true)
         let renewal = Task { await provider.fetch(account) }
         var started = false
@@ -2906,8 +2947,8 @@ enum Authentication {
     private static func claudeRemoveDuringOAuthLock() async throws {
         let (profile, account) = try claudeRemovableProfile()
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
-        let provider = ClaudeProvider()
-        let store = UsageStore(providers: [.claude: provider], discovery: RealDiscovery())
+        let provider = Provider$Claude()
+        let store = UsageStore(providers: [.claude: provider], discovery: Discovery$Real())
         store.rediscover(force: true)
         Fixture.pauseProfileSnapshot = true
         let renewal = Task { await provider.fetch(account) }
@@ -2949,7 +2990,7 @@ enum Authentication {
         } else {
             (profile, account) = try claudeRemovableProfile()
         }
-        if !enabled { ClaudeCLISelection.isEnabled = false }
+        if !enabled { CLISelection$Claude.isEnabled = false }
         let previous = Fixture.root.appendingPathComponent("previous-cli")
         try Foundation.FileManager.default.createDirectory(at: previous, withIntermediateDirectories: true)
         let pointer = DesktopApp.supportDirectory.appendingPathComponent("claude-cli/selected-profile")
@@ -2958,11 +2999,11 @@ enum Authentication {
         try Data(original.utf8).write(to: pointer)
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: false)
         Fixture.denyKeychainDelete = denied
-        let store = UsageStore(providers: [.claude: ClaudeProvider()], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.claude: Provider$Claude()], discovery: Discovery$Real())
         store.rediscover(force: true)
         Fixture.holdDesktopCompletion = true
         var result: Result<Void, Error>?
-        ClaudeAppSwitcher().switchTo(account) { result = $0 }
+        AppSwitcher$Claude().switchTo(account) { result = $0 }
         try expect(Fixture.desktopCompletion != nil, "Desktop launch was not held")
         try expect(try String(contentsOf: pointer) == original, "Staging changed CLI selection before launch")
         let launchedDirectory = try desktopDirectory(Fixture.desktopArguments)
@@ -2993,7 +3034,7 @@ enum Authentication {
         try expect(UserDefaults.standard.string(forKey: "currentClaudeAppAccount") == launchedDirectory.lastPathComponent,
                    "Successful Desktop launch lost the marker for its actual data directory")
         if readded {
-            try expect(ClaudeAppSwitcher().isOpenInApp(columnID: account.id) == false,
+            try expect(AppSwitcher$Claude().isOpenInApp(columnID: account.id) == false,
                        "A launch prepared for the removed account marked its replacement as open")
         }
     }
@@ -3003,8 +3044,8 @@ enum Authentication {
         let (profile, account) = try claudeRemovableProfile()
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: false)
         Fixture.holdFirstUsage = true
-        let provider = ClaudeProvider()
-        let store = UsageStore(providers: [.claude: provider], discovery: RealDiscovery())
+        let provider = Provider$Claude()
+        let store = UsageStore(providers: [.claude: provider], discovery: Discovery$Real())
         store.rediscover(force: true)
         store.refreshAll(force: true)
         var started = false
@@ -3055,7 +3096,7 @@ enum Authentication {
         let service = Fixture.service + "-unmapped"
         Fixture.discoveredClaudeService = service
         Fixture.keychain = Fixture.claudeLogin("unmapped-login", expired: false)
-        let store = UsageStore(providers: [.claude: ClaudeProvider()], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.claude: Provider$Claude()], discovery: Discovery$Real())
         store.rediscover(force: true)
         var failed = false
         do { try store.removeAccount(id: "claude:" + service) } catch { failed = true }
@@ -3085,7 +3126,7 @@ enum Authentication {
         // Native secureStorage.mutate has passed its token comparison. Its backend
         // will complete the already-prepared security add-generic-password -U.
         let prepared = Fixture.claudeLogin("native-renewed", expired: false)
-        let store = UsageStore(providers: [.claude: ClaudeProvider()], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.claude: Provider$Claude()], discovery: Discovery$Real())
         store.rediscover(force: true)
         var removed = false
         do { try store.removeAccount(id: account.id); removed = true } catch {}
@@ -3112,7 +3153,7 @@ enum Authentication {
     private static func claudeRecoveryReplacement() async throws {
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.replaceMarkedOwnerAfterRead = true
-        _ = await ClaudeProvider().fetch(Fixture.claudeAccount)
+        _ = await Provider$Claude().fetch(Fixture.claudeAccount)
         try expect(Fixture.markedOwnerReplacementObserved, "Native contender did not replace both marked directories")
         try expect(Foundation.FileManager.default.fileExists(atPath: Fixture.oauthLock.path)
                    && Foundation.FileManager.default.fileExists(atPath: Fixture.legacyLock.path),
@@ -3140,7 +3181,7 @@ enum Authentication {
         } else {
             (profile, account) = try claudeRemovableProfile()
         }
-        if !enabled { ClaudeCLISelection.isEnabled = false }
+        if !enabled { CLISelection$Claude.isEnabled = false }
         let pointer = DesktopApp.supportDirectory.appendingPathComponent("claude-cli/selected-profile")
         try Foundation.FileManager.default.createDirectory(at: pointer.deletingLastPathComponent(), withIntermediateDirectories: true)
         let original = Fixture.root.appendingPathComponent("previous-cli").path + "\n"
@@ -3152,7 +3193,7 @@ enum Authentication {
         try Data("account-a".utf8).write(to: session)
         let unrelated = directory.deletingLastPathComponent().appendingPathComponent("another-account")
         try Data("other".utf8).write(to: unrelated)
-        let store = UsageStore(providers: [.claude: ClaudeProvider()], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.claude: Provider$Claude()], discovery: Discovery$Real())
         store.rediscover(force: true)
         Fixture.denyKeychainDelete = denied
         var failed = false
@@ -3171,7 +3212,7 @@ enum Authentication {
         if let profile { try Foundation.FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true) }
         Fixture.keychain = Fixture.claudeLogin("account-b", expired: false)
         Fixture.keychainExists = true
-        try expect(ClaudeAppSwitcher().isOpenInApp(columnID: account.id) == false,
+        try expect(AppSwitcher$Claude().isOpenInApp(columnID: account.id) == false,
                    "The retired Desktop session was shown as the re-added account")
         let second = try switchSuccessfully(account)
         let replacement = try desktopDirectory(second.arguments)
@@ -3180,20 +3221,20 @@ enum Authentication {
         try expect(try String(contentsOf: pointer) == (enabled ? (profile?.path ?? "") + "\n" : original),
                    "Re-added Desktop switch did not respect Switch CLI")
         try expect(try String(contentsOf: unrelated) == "other", "Deletion changed another Desktop account")
-        try expect(ClaudeAppSwitcher().isOpenInApp(columnID: account.id) == true, "Replacement Desktop was not marked open")
+        try expect(AppSwitcher$Claude().isOpenInApp(columnID: account.id) == true, "Replacement Desktop was not marked open")
     }
 
     private static func claudeNativePublish() async throws {
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
         Fixture.nativeAcquisitionAtPublish = true
-        _ = await ClaudeProvider().fetch(Fixture.claudeAccount)
+        _ = await Provider$Claude().fetch(Fixture.claudeAccount)
         try expect(Fixture.nativeAcquisitionObserved, "Fixture did not acquire the native path before publication")
         try expect(Foundation.FileManager.default.fileExists(atPath: Fixture.oauthLock.path), "Publication replaced the native owner's lock")
         try expect(Fixture.refreshCalls == 0 && Fixture.keychainWrites == 0, "A competing native owner did not defer renewal")
     }
 
     private static func claudeCrashLegacyOwner() throws {
-        guard let lease = ClaudeKeychain.refreshLock(service: Fixture.service) else {
+        guard let lease = AuthStorage$Claude.refreshLock(service: Fixture.service) else {
             throw Failure(description: "Could not acquire fixture OAuth locks")
         }
         withExtendedLifetime(lease) {
@@ -3214,7 +3255,7 @@ enum Authentication {
     }
 
     private static func claudeCrashOwner(live: Bool) throws {
-        guard let lease = ClaudeKeychain.refreshLock(service: Fixture.service) else {
+        guard let lease = AuthStorage$Claude.refreshLock(service: Fixture.service) else {
             throw Failure(description: "Could not acquire fixture OAuth locks")
         }
         withExtendedLifetime(lease) {
@@ -3226,7 +3267,7 @@ enum Authentication {
 
     private static func claudeRecoverOwner(expectBusy: Bool) async throws {
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
-        let outcome = await ClaudeProvider().fetch(Fixture.claudeAccount)
+        let outcome = await Provider$Claude().fetch(Fixture.claudeAccount)
         if expectBusy {
             try expect(Fixture.refreshCalls == 0 && Fixture.keychainWrites == 0, "Recovery stole an active or replacement owner's lock")
             try expect(Fixture.holdsOAuthLocks, "Busy owner lost its OAuth locks")
@@ -3255,15 +3296,15 @@ enum Authentication {
             // A stale file alias may be refused or remove only a missing service.
             _ = try? AccountRemoval.remove(duplicate)
             try expect(Foundation.FileManager.default.fileExists(atPath: settings.path)
-                       && ClaudeKeychain.credentials(service: Fixture.service) != nil,
+                       && AuthStorage$Claude.credentials(service: Fixture.service) != nil,
                        "A stale alias column removed the main Claude login and configuration")
             try expect(!AccountRemoval.isExtraProfile(duplicate), "A canonical main alias was classified as disposable")
         } else {
-            let found = RealDiscovery().discover().filter { $0.provider == .claude }
+            let found = Discovery$Real().discover().filter { $0.provider == .claude }
             try expect(found.map(\.id) == ["claude:" + Fixture.service],
                        "One physical main Claude home was discovered as two file-backed logins")
         }
-        let store = UsageStore(providers: [.claude: ClaudeProvider()], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.claude: Provider$Claude()], discovery: Discovery$Real())
         store.rediscover(force: true)
         try expect(!RegressionProfileMenu(store: store).profiles().contains { $0.url.path == owner.path },
                    "The main Claude home was offered as an unfinished extra profile")
@@ -3284,7 +3325,7 @@ enum Authentication {
         Fixture.denyClaudeRead = !preflight && !malformed
         Fixture.denyClaudeReadAt = preflight ? 3 : 0
         Fixture.malformedClaudeRead = malformed
-        let provider = ClaudeProvider()
+        let provider = Provider$Claude()
         _ = await provider.fetch(account)
         let unchanged = try JSONSerialization.data(withJSONObject: Fixture.keychain, options: [.sortedKeys]) == originalKeychain
         try expect(Fixture.refreshCalls == 0 && unchanged && (try Data(contentsOf: file)) == originalFile,
@@ -3295,7 +3336,7 @@ enum Authentication {
         let result = await provider.fetch(account)
         if case .success = result {} else { throw Failure(description: "Claude renewal did not resume after Keychain recovery") }
         try expect(Fixture.refreshCalls == 1 && Fixture.refreshInput == "synthetic-refresh-keychain-owner"
-                   && ClaudeKeychain.parse(Fixture.keychain)?.refreshToken == "synthetic-rotated",
+                   && AuthStorage$Claude.parse(Fixture.keychain)?.refreshToken == "synthetic-rotated",
                    "Recovered Keychain login did not renew using its own grant")
         try expect(try Data(contentsOf: file) == originalFile, "Keychain recovery changed the unrelated fallback")
     }
@@ -3305,28 +3346,28 @@ enum Authentication {
         let physical = Fixture.root.appendingPathComponent("physical-profiles")
         let profile = physical.appendingPathComponent("linked-owner")
         try Fixture.codexLogin(profile, account: "linked-owner", mode: mode)
-        try Fixture.codexLogin(CodexAuthSwap.baseHome, account: "primary", mode: "file")
+        try Fixture.codexLogin(AuthSwap$Codex.baseHome, account: "primary", mode: "file")
         try Foundation.FileManager.default.createSymbolicLink(at: ProfileDirectories.codexRoot, withDestinationURL: physical)
         let logical = ProfileDirectories.codexRoot.appendingPathComponent("linked-owner")
-        let store = UsageStore(providers: [.codex: CodexProvider()], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.codex: Provider$Codex()], discovery: Discovery$Real())
         store.rediscover(force: true)
         let id = "codex:linked-owner"
         guard let account = store.account(for: id), case .codexHome(let discovered) = account.source else {
             throw Failure(description: "A symlinked Codex profile root hid a valid login")
         }
-        try expect(discovered.path == logical.path && CodexProvider.readAuth(codexHome: logical)?.accountID == "linked-owner",
+        try expect(discovered.path == logical.path && Provider$Codex.readAuth(codexHome: logical)?.accountID == "linked-owner",
                    "Discovery did not retain the logical profile path and canonical Keychain identity")
-        try CodexAuthSwap.activate(columnID: id, home: logical)
-        try expect(CodexProvider.readAuth(codexHome: CodexAuthSwap.baseHome)?.accountID == "linked-owner",
+        try AuthSwap$Codex.activate(columnID: id, home: logical)
+        try expect(Provider$Codex.readAuth(codexHome: AuthSwap$Codex.baseHome)?.accountID == "linked-owner",
                    "A profile under a symlinked root could not activate")
-        try CodexAuthSwap.restoreDefault()
-        try expect(CodexProvider.readAuth(codexHome: CodexAuthSwap.baseHome)?.accountID == "primary",
+        try AuthSwap$Codex.restoreDefault()
+        try expect(Provider$Codex.readAuth(codexHome: AuthSwap$Codex.baseHome)?.accountID == "primary",
                    "Switching under a symlinked root lost the primary login")
         Fixture.denyCodexDelete = mode == "keyring"
         if Fixture.denyCodexDelete {
             var refused = false
             do { try store.removeAccount(id: id) } catch { refused = true }
-            try expect(refused && CodexProvider.readAuth(codexHome: logical)?.accountID == "linked-owner",
+            try expect(refused && Provider$Codex.readAuth(codexHome: logical)?.accountID == "linked-owner",
                        "Refused deletion did not restore the symlinked profile")
         }
         Fixture.denyCodexDelete = false
@@ -3334,7 +3375,7 @@ enum Authentication {
         try expect(!Foundation.FileManager.default.fileExists(atPath: profile.path), "Removal left the profile name occupied")
         try Fixture.codexLogin(logical, account: "replacement", mode: mode)
         store.rediscover(force: true)
-        try expect(store.account(for: id) != nil && CodexProvider.readAuth(codexHome: logical)?.accountID == "replacement",
+        try expect(store.account(for: id) != nil && Provider$Codex.readAuth(codexHome: logical)?.accountID == "replacement",
                    "A profile under a symlinked root could not be re-added")
     }
 
@@ -3353,7 +3394,7 @@ enum Authentication {
         }
         Fixture.holdFirstUsage = true
         defer { Fixture.lock.lock(); Fixture.releaseFirstUsage = true; Fixture.lock.unlock() }
-        let store = UsageStore(providers: [.codex: CodexProvider(), .claude: ClaudeProvider()], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.codex: Provider$Codex(), .claude: Provider$Claude()], discovery: Discovery$Real())
         store.rediscover(force: true)
         store.setCustomName("old-owner-name", for: account.id)
         store.refreshAll()
@@ -3396,7 +3437,7 @@ enum Authentication {
     private static func claudeUnsupportedCLI() async throws {
         Fixture.cliVersion = "2.0.0"
         Fixture.keychain = Fixture.claudeLogin("old-login", expired: true)
-        let outcome = await ClaudeProvider().fetch(Fixture.claudeAccount)
+        let outcome = await Provider$Claude().fetch(Fixture.claudeAccount)
         if case .reauth = outcome {} else { throw Failure(description: "Unsupported CLI did not defer renewal to CLI login") }
         try expect(Fixture.refreshCalls == 0 && Fixture.keychainWrites == 0,
                    "Unsupported CLI's credentials were renewed or written without a shared protocol")
@@ -3411,7 +3452,7 @@ enum Authentication {
         Fixture.holdFirstUsage = true
         Fixture.firstUsageStatus = 401
         defer { Fixture.lock.lock(); Fixture.releaseFirstUsage = true; Fixture.lock.unlock() }
-        let provider = CodexProvider()
+        let provider = Provider$Codex()
         let old = Task { await provider.fetch(account) }
         for _ in 0..<200 {
             if Fixture.usageCalls == 1 { break }
@@ -3432,16 +3473,16 @@ enum Authentication {
     }
 
     private static func codexCopybackRelogin(mode: String = "keyring", baseMode: String = "file", legacy: Bool = false) throws {
-        let base = CodexAuthSwap.baseHome
+        let base = AuthSwap$Codex.baseHome
         let profile = ProfileDirectories.codexRoot.appendingPathComponent("same-account")
         let other = ProfileDirectories.codexRoot.appendingPathComponent("other")
         try Fixture.codexLogin(base, account: "primary", mode: baseMode)
         try Fixture.codexLogin(profile, account: "same-account", mode: mode)
         try Fixture.codexLogin(other, account: "other", mode: "file")
-        try CodexAuthSwap.activate(columnID: "codex:same-account", home: profile)
+        try AuthSwap$Codex.activate(columnID: "codex:same-account", home: profile)
         if legacy { UserDefaults.standard.removeObject(forKey: "codexAppSourceAuth") }
-        let oldNative = try CodexAuthSwap.authData(home: base)
-        var replacement = try JSONSerialization.jsonObject(with: CodexAuthSwap.authData(home: profile)!) as! [String: Any]
+        let oldNative = try AuthSwap$Codex.authData(home: base)
+        var replacement = try JSONSerialization.jsonObject(with: AuthSwap$Codex.authData(home: profile)!) as! [String: Any]
         var tokens = replacement["tokens"] as! [String: Any]
         tokens["refresh_token"] = "new-cli-session-grant"
         tokens["access_token"] = "new-cli-session-access"
@@ -3449,42 +3490,42 @@ enum Authentication {
         let expected = try JSONSerialization.data(withJSONObject: replacement)
         if mode == "file" { try expected.write(to: profile.appendingPathComponent("auth.json"), options: .atomic) }
         else { Fixture.codexKeychain[Fixture.codexKey(profile)] = expected }
-        try CodexAuthSwap.activate(columnID: "codex:other", home: other)
-        let actual = CodexRenewal.refreshToken(profile.appendingPathComponent("auth.json"))
+        try AuthSwap$Codex.activate(columnID: "codex:other", home: other)
+        let actual = Renewal$Codex.refreshToken(profile.appendingPathComponent("auth.json"))
         print("Profile grant after a completed CLI re-login and Desktop switch: \(actual ?? "nil")")
         try expect(actual == "new-cli-session-grant", "Copyback replaced a completed CLI re-login for the same account with the old Desktop session")
-        let archives = try Foundation.FileManager.default.contentsOfDirectory(at: CodexAuthSwap.stashHome.deletingLastPathComponent(), includingPropertiesForKeys: nil)
+        let archives = try Foundation.FileManager.default.contentsOfDirectory(at: AuthSwap$Codex.stashHome.deletingLastPathComponent(), includingPropertiesForKeys: nil)
             .filter { $0.lastPathComponent.hasPrefix("orphaned-") }
-        let retained = archives.contains { (try? CodexAuthSwap.authData(home: $0)) == oldNative }
+        let retained = archives.contains { (try? AuthSwap$Codex.authData(home: $0)) == oldNative }
         try expect(retained, "The current native session was not recoverable from its original storage backend")
-        try CodexAuthSwap.activate(columnID: "codex:same-account", home: profile)
-        try expect(CodexRenewal.refreshToken(base.appendingPathComponent("auth.json")) == "new-cli-session-grant", "A later switch did not use the completed CLI re-login")
-        try CodexAuthSwap.restoreDefault()
-        try expect(CodexProvider.readAuth(codexHome: base)?.accountID == "primary", "Preserving a newer CLI login lost the primary backup")
+        try AuthSwap$Codex.activate(columnID: "codex:same-account", home: profile)
+        try expect(Renewal$Codex.refreshToken(base.appendingPathComponent("auth.json")) == "new-cli-session-grant", "A later switch did not use the completed CLI re-login")
+        try AuthSwap$Codex.restoreDefault()
+        try expect(Provider$Codex.readAuth(codexHome: base)?.accountID == "primary", "Preserving a newer CLI login lost the primary backup")
     }
 
     @MainActor
     private static func codexRemovalSelectionRollback(mode: String = "keyring", primary: Bool = false,
                                                        nativeProgress: Bool = false) async throws {
-        let base = CodexAuthSwap.baseHome
+        let base = AuthSwap$Codex.baseHome
         let profile = ProfileDirectories.codexRoot.appendingPathComponent("active-denied")
         try Fixture.codexLogin(base, account: "primary", mode: primary ? "keyring" : "file")
         try Fixture.codexLogin(profile, account: "selected", mode: mode)
         let id = "codex:active-denied"
-        try CodexAuthSwap.activate(columnID: id, home: profile)
+        try AuthSwap$Codex.activate(columnID: id, home: profile)
         if nativeProgress { try Fixture.writeAuth(base, account: "selected", refresh: "native-progress", expired: false) }
-        let expected = try CodexAuthSwap.authData(home: base)
+        let expected = try AuthSwap$Codex.authData(home: base)
         Fixture.desktopRunning = true
         Fixture.denyCodexDelete = mode != "file" || primary
         Fixture.denyCredentialFileRemoval = mode == "file" && !primary
-        let store = UsageStore(providers: [.codex: CodexProvider()], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.codex: Provider$Codex()], discovery: Discovery$Real())
         store.rediscover(force: true)
         let result: Result<Void, Error> = await withCheckedContinuation { c in
-            store.removeAccount(id: primary ? CodexAuthSwap.defaultColumnID : id) { c.resume(returning: $0) }
+            store.removeAccount(id: primary ? AuthSwap$Codex.defaultColumnID : id) { c.resume(returning: $0) }
         }
         let failed: Bool
         if case .failure = result { failed = true } else { failed = false }
-        try expect(failed && CodexAuthSwap.activeColumnID == id && (try CodexAuthSwap.authData(home: base)) == expected,
+        try expect(failed && AuthSwap$Codex.activeColumnID == id && (try AuthSwap$Codex.authData(home: base)) == expected,
                    "A refused account deletion changed the CLI login and active selection instead of rolling them back")
         Fixture.denyCodexDelete = false
         Fixture.denyCredentialFileRemoval = false
@@ -3494,12 +3535,12 @@ enum Authentication {
             try Fixture.writeAuth(base, account: "selected", refresh: "native-after-rollback", expired: false)
             let other = ProfileDirectories.codexRoot.appendingPathComponent("after-rollback")
             try Fixture.codexLogin(other, account: "other", mode: "file")
-            try CodexAuthSwap.activate(columnID: "codex:after-rollback", home: other)
-            try expect(CodexRenewal.refreshToken(profile.appendingPathComponent("auth.json")) == "native-after-rollback",
+            try AuthSwap$Codex.activate(columnID: "codex:after-rollback", home: other)
+            try expect(Renewal$Codex.refreshToken(profile.appendingPathComponent("auth.json")) == "native-after-rollback",
                        "Selection rollback restored an obsolete source identity and stranded a later native rotation")
         }
-        try CodexAuthSwap.restoreDefault()
-        try expect(CodexProvider.readAuth(codexHome: base)?.accountID == "primary", "Failed removal discarded the only primary backup")
+        try AuthSwap$Codex.restoreDefault()
+        try expect(Provider$Codex.readAuth(codexHome: base)?.accountID == "primary", "Failed removal discarded the only primary backup")
     }
 
     @MainActor
@@ -3533,7 +3574,7 @@ enum Authentication {
         try expect(retained, "Deleting a managed parent profile removed the native main home nested beneath it")
         if codex { Fixture.codexKeychain[Fixture.codexKey(parent)] = nil }
         else { try Foundation.FileManager.default.removeItem(at: parent.appendingPathComponent(".credentials.json")) }
-        let store = UsageStore(providers: [.codex: CodexProvider(), .claude: ClaudeProvider()], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.codex: Provider$Codex(), .claude: Provider$Claude()], discovery: Discovery$Real())
         store.rediscover(force: true)
         try expect(!RegressionProfileMenu(store: store).profiles().contains { $0.url.path == parent.path },
                    "An unfinished parent profile containing the main home was offered for destructive deletion")
@@ -3547,7 +3588,7 @@ enum Authentication {
         Fixture.usageStatus = 403
         Fixture.usageErrorBody = Data(#"{"error":{"code":"unsupported_country_region_territory"}}"#.utf8)
         Fixture.response = .forbidden
-        let outcome = await CodexProvider().fetch(account)
+        let outcome = await Provider$Codex().fetch(account)
         let asksForLogin: Bool
         if case .reauth = outcome { asksForLogin = true } else { asksForLogin = false }
         print("Usage region denial refresh POSTs: \(Fixture.refreshCalls); asks for login: \(asksForLogin)")
@@ -3573,15 +3614,15 @@ enum Authentication {
             Fixture.onlyClaudeService = nil
             Fixture.claudeEntries = [Fixture.service: primary, service: Fixture.keychain]
             try JSONSerialization.data(withJSONObject: primary).write(to: file)
-            ClaudeCLISelection.isEnabled = false
+            CLISelection$Claude.isEnabled = false
         }
         let fallbackBefore = shared ? try Data(contentsOf: file) : nil
-        let store = UsageStore(providers: [.claude: ClaudeProvider()], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.claude: Provider$Claude()], discovery: Discovery$Real())
         store.rediscover(force: true)
         let account = store.account(for: "claude:" + service)
-        try expect(account != nil && ClaudeKeychain.contains(service: Fixture.service) == shared,
+        try expect(account != nil && AuthStorage$Claude.contains(service: Fixture.service) == shared,
                    "Fixture did not expose exactly one genuine hashed Keychain login")
-        try expect(ClaudeKeychain.configPath(for: service) == owner.path,
+        try expect(AuthStorage$Claude.configPath(for: service) == owner.path,
                    "The hashed Keychain service did not resolve to its exact native CLI path")
         var failed = false
         do { try store.removeAccount(id: "claude:" + service) } catch { failed = true }
@@ -3590,9 +3631,9 @@ enum Authentication {
         try expect(!failed && removed && Foundation.FileManager.default.fileExists(atPath: settings.path),
                    "Canonical main protection made a genuine independent hashed Keychain login undeletable")
         if shared {
-            try expect(ClaudeKeychain.credentials(service: Fixture.service)?.refreshToken == "synthetic-refresh-primary-owner"
+            try expect(AuthStorage$Claude.credentials(service: Fixture.service)?.refreshToken == "synthetic-refresh-primary-owner"
                        && (try Data(contentsOf: file)) == fallbackBefore
-                       && !ClaudeCLISelection.isEnabled,
+                       && !CLISelection$Claude.isEnabled,
                        "Removing a hashed service changed the main login, fallback file or Switch CLI setting")
         }
     }
@@ -3605,7 +3646,7 @@ enum Authentication {
         let native = Fixture.storageDirectory.appendingPathComponent("settings.json")
         try Foundation.FileManager.default.createDirectory(at: native.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("preserve-main-config".utf8).write(to: native)
-        let store = UsageStore(providers: [.claude: ClaudeProvider()], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.claude: Provider$Claude()], discovery: Discovery$Real())
         store.rediscover(force: true)
         let menu = RegressionProfileMenu(store: store)
         try expect(menu.profiles().contains { $0.url.path == directory.path }, "Fixture did not expose an unfinished profile")
@@ -3618,7 +3659,7 @@ enum Authentication {
         let pointer = DesktopApp.supportDirectory.appendingPathComponent("claude-cli/selected-profile")
         try Foundation.FileManager.default.createDirectory(at: pointer.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("/previous-cli-profile\n".utf8).write(to: pointer)
-        ClaudeCLISelection.isEnabled = false
+        CLISelection$Claude.isEnabled = false
         let hash = SHA256.hash(data: Data(directory.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
         let service = Fixture.service + "-" + hash
         let current = directory.appendingPathComponent(".oauth_refresh.lock")
@@ -3671,12 +3712,12 @@ enum Authentication {
             try expect(Fixture.claudeEntries?[service] != nil, "Refused unfinished-profile deletion removed Keychain data")
         }
         if state == "file" {
-            try expect(ClaudeKeychain.credentials(service: service)?.refreshToken == "synthetic-refresh-completed-file-login",
+            try expect(AuthStorage$Claude.credentials(service: service)?.refreshToken == "synthetic-refresh-completed-file-login",
                        "A completed fallback login was removed through a stale unfinished-profile menu")
         }
         try expect(try String(contentsOf: native) == "preserve-main-config"
                    && (try String(contentsOf: pointer)) == "/previous-cli-profile\n"
-                   && !ClaudeCLISelection.isEnabled && Fixture.desktopCalls == 0 && Fixture.desktopStops == 0,
+                   && !CLISelection$Claude.isEnabled && Fixture.desktopCalls == 0 && Fixture.desktopStops == 0,
                    "Unfinished-profile removal changed native settings, Desktop or CLI routing")
         if succeeds {
             try expect(!Foundation.FileManager.default.fileExists(atPath: physical.appendingPathComponent(".oauth_refresh.lock").path)
@@ -3692,39 +3733,39 @@ enum Authentication {
     @MainActor
     private static func codexBackupRemovalRefusal(mode: String = "keyring", primary: Bool = true,
                                                  targetDenied: Bool = false) async throws {
-        let base = CodexAuthSwap.baseHome
+        let base = AuthSwap$Codex.baseHome
         let profile = ProfileDirectories.codexRoot.appendingPathComponent("selected-for-primary-delete")
         let id = "codex:selected-for-primary-delete"
         try Fixture.codexLogin(base, account: "primary-to-delete", mode: mode)
         try Fixture.codexLogin(profile, account: "selected", mode: "file")
-        try CodexAuthSwap.activate(columnID: id, home: profile)
-        let backup = CodexAuthSwap.stashHome
-        let expectedSelected = try CodexAuthSwap.authData(home: base)
-        let expectedPrimary = try CodexAuthSwap.authData(home: backup)
+        try AuthSwap$Codex.activate(columnID: id, home: profile)
+        let backup = AuthSwap$Codex.stashHome
+        let expectedSelected = try AuthSwap$Codex.authData(home: base)
+        let expectedPrimary = try AuthSwap$Codex.authData(home: backup)
         try expect(expectedPrimary != nil, "Fixture did not preserve a primary backup")
         if mode == "keyring" { Fixture.denyCodexDeleteAccount = Fixture.codexKey(targetDenied ? base : backup) }
         else { Fixture.denyCredentialFileRemovalPath = (targetDenied ? base : backup).appendingPathComponent("auth.json").path }
         Fixture.desktopRunning = true
-        let store = UsageStore(providers: [.codex: CodexProvider()], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.codex: Provider$Codex()], discovery: Discovery$Real())
         store.rediscover(force: true)
         let result: Result<Void, Error> = await withCheckedContinuation { c in
-            store.removeAccount(id: primary ? CodexAuthSwap.defaultColumnID : id) { c.resume(returning: $0) }
+            store.removeAccount(id: primary ? AuthSwap$Codex.defaultColumnID : id) { c.resume(returning: $0) }
         }
         let failed: Bool
         if case .failure = result { failed = true } else { failed = false }
-        print("Codex backup removal mode=\(mode), primary=\(primary), targetDenied=\(targetDenied), failure=\(failed), active=\(CodexAuthSwap.activeColumnID)")
-        try expect(failed && CodexAuthSwap.activeColumnID == id
-                   && (try CodexAuthSwap.authData(home: base)) == expectedSelected
-                   && (try CodexAuthSwap.authData(home: backup)) == expectedPrimary
-                   && store.account(for: CodexAuthSwap.defaultColumnID) != nil && store.account(for: id) != nil
+        print("Codex backup removal mode=\(mode), primary=\(primary), targetDenied=\(targetDenied), failure=\(failed), active=\(AuthSwap$Codex.activeColumnID)")
+        try expect(failed && AuthSwap$Codex.activeColumnID == id
+                   && (try AuthSwap$Codex.authData(home: base)) == expectedSelected
+                   && (try AuthSwap$Codex.authData(home: backup)) == expectedPrimary
+                   && store.account(for: AuthSwap$Codex.defaultColumnID) != nil && store.account(for: id) != nil
                    && Foundation.FileManager.default.fileExists(atPath: profile.path),
                    "A refused backup or target deletion reported success, changed selection, hid a live backup or removed the selected profile")
         try expect(Fixture.desktopStops == 1 && Fixture.desktopCalls == 0,
                    "Removal did not wait for Desktop exit without launching it")
         Fixture.denyCodexDeleteAccount = nil
         Fixture.denyCredentialFileRemovalPath = nil
-        try CodexAuthSwap.restoreDefault()
-        try expect(CodexProvider.readAuth(codexHome: base)?.accountID == "primary-to-delete",
+        try AuthSwap$Codex.restoreDefault()
+        try expect(Provider$Codex.readAuth(codexHome: base)?.accountID == "primary-to-delete",
                    "A refused deletion lost the recoverable primary login")
         try expect(mode == "file" || Fixture.codexKeychain[Fixture.codexKey(backup)] == nil,
                    "Successful restoration did not remove the primary Keychain backup")
@@ -3747,18 +3788,18 @@ enum Authentication {
         let file = directory.appendingPathComponent(".credentials.json")
         let fallbackData = try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("second-owner", expired: false))
         if fallback { try fallbackData.write(to: file) }
-        let store = UsageStore(providers: [.claude: ClaudeProvider()], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.claude: Provider$Claude()], discovery: Discovery$Real())
         store.rediscover(force: true)
         guard let survivor = store.account(for: "claude:" + second) else { throw Failure(description: "Fixture did not discover the second Keychain owner") }
         try expect(store.account(for: "claude:" + first) != nil
-                   && ClaudeKeychain.configPath(for: second) == directory.path + "/",
+                   && AuthStorage$Claude.configPath(for: second) == directory.path + "/",
                    "Fixture did not expose independent native path variants")
         let pointer = DesktopApp.supportDirectory.appendingPathComponent("claude-cli/selected-profile")
         try Foundation.FileManager.default.createDirectory(at: pointer.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("/previous-cli-profile\n".utf8).write(to: pointer)
-        ClaudeCLISelection.isEnabled = switchCLI
+        CLISelection$Claude.isEnabled = switchCLI
         var switched: Result<Void, Error>?
-        ClaudeAppSwitcher().switchTo(survivor) { switched = $0 }
+        AppSwitcher$Claude().switchTo(survivor) { switched = $0 }
         if case .success? = switched {} else { throw Failure(description: "The surviving account did not switch Desktop before removal") }
         let expectedPointer = switchCLI ? directory.path + "/\n" : "/previous-cli-profile\n"
         try expect(try String(contentsOf: pointer) == expectedPointer, "CLI did not honor Switch CLI before removal")
@@ -3766,15 +3807,15 @@ enum Authentication {
         var failed = false
         do { try store.removeAccount(id: "claude:" + first) } catch { failed = true }
         let retained = Foundation.FileManager.default.fileExists(atPath: settings.path)
-        let route = ClaudeKeychain.configPath(for: second)
+        let route = AuthStorage$Claude.configPath(for: second)
         print("Shared extra removal failed=\(failed), config retained=\(retained), route=\(route ?? "nil"), survivor retained=\(Fixture.claudeEntries?[second] != nil)")
         try expect(failed == metadataDenied && retained && route == directory.path + "/"
                    && Fixture.claudeEntries?[second] != nil
                    && (Fixture.claudeEntries?[first] != nil) == metadataDenied,
                    "Removing one Claude owner destroyed another account's config/route or ignored unavailable ownership metadata")
         if fallback { try expect(try Data(contentsOf: file) == fallbackData, "Shared removal changed another login's fallback file") }
-        try expect(try String(contentsOf: pointer) == expectedPointer && ClaudeCLISelection.isEnabled == switchCLI
-                   && ClaudeAppSwitcher().isOpenInApp(columnID: survivor.id) == true,
+        try expect(try String(contentsOf: pointer) == expectedPointer && CLISelection$Claude.isEnabled == switchCLI
+                   && AppSwitcher$Claude().isOpenInApp(columnID: survivor.id) == true,
                    "Shared removal changed the survivor's Desktop/CLI selection")
         Fixture.denyClaudeMetadata = false
         if !metadataDenied {
@@ -3794,7 +3835,7 @@ enum Authentication {
         let directory = file.deletingLastPathComponent()
         let hash = SHA256.hash(data: Data((directory.path + "/").utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
         let service = Fixture.service + "-" + hash
-        let store = UsageStore(providers: [.claude: ClaudeProvider()], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.claude: Provider$Claude()], discovery: Discovery$Real())
         store.rediscover(force: true)
         try expect(store.account(for: account.id) != nil, "Fixture did not discover the original file login")
         let before = try Data(contentsOf: file)
@@ -3802,7 +3843,7 @@ enum Authentication {
         var failed = false
         do { try store.removeAccount(id: account.id) } catch { failed = true }
         try expect(failed && (try Data(contentsOf: file)) == before && Fixture.claudeEntries?[service] != nil
-                   && ClaudeKeychain.configPath(for: service) == directory.path + "/",
+                   && AuthStorage$Claude.configPath(for: service) == directory.path + "/",
                    "A stale file-only column deleted a newly shared directory or falsely reported removing the ambiguous fallback")
     }
 
@@ -3817,7 +3858,7 @@ enum Authentication {
         Fixture.claudeEntries = [service: Fixture.claudeLogin("pending-owner", expired: true)]
         let account = DiscoveredAccount(id: "claude:" + service, provider: .claude, profileName: "retry-after-collision",
                                         source: .claudeKeychain(service: service, configDir: directory))
-        guard let lease = ClaudeKeychain.refreshLock(service: service) else { throw Failure(description: "Fixture could not acquire the renewal lease") }
+        guard let lease = AuthStorage$Claude.refreshLock(service: service) else { throw Failure(description: "Fixture could not acquire the renewal lease") }
         defer { lease.release() }
         let foreign = directory.appendingPathComponent(".oauth_refresh.lock")
         Fixture.beforeCredentialDelete = {
@@ -3852,7 +3893,7 @@ enum Authentication {
         let (_, account) = try claudeRemovableProfile()
         Fixture.keychain = Fixture.claudeLogin("retry-owner", expired: false)
         guard case .claudeKeychain(let service, _) = account.source,
-              let lease = ClaudeKeychain.refreshLock(service: service) else { throw Failure(description: "Fixture could not acquire the lease") }
+              let lease = AuthStorage$Claude.refreshLock(service: service) else { throw Failure(description: "Fixture could not acquire the lease") }
         defer { lease.release() }
         Fixture.denyKeychainDelete = true
         var failed = false
@@ -3865,79 +3906,79 @@ enum Authentication {
 
     @MainActor
     private static func codexRestoreBackupRefusal(mode: String, nativeProgress: Bool = false) throws {
-        let base = CodexAuthSwap.baseHome
+        let base = AuthSwap$Codex.baseHome
         let profile = ProfileDirectories.codexRoot.appendingPathComponent("other-before-main-delete")
         let id = "codex:other-before-main-delete"
         try Fixture.codexLogin(base, account: "primary-to-delete", mode: mode)
         try Fixture.codexLogin(profile, account: "other", mode: "file")
-        try CodexAuthSwap.activate(columnID: id, home: profile)
-        let backup = CodexAuthSwap.stashHome
+        try AuthSwap$Codex.activate(columnID: id, home: profile)
+        let backup = AuthSwap$Codex.stashHome
         if nativeProgress { try writeNativeCodexGrant(base, grant: "native-before-refused-restore") }
-        let selected = try CodexAuthSwap.authData(home: base)
-        let primary = try CodexAuthStorage(home: backup).load()?.data
+        let selected = try AuthSwap$Codex.authData(home: base)
+        let primary = try AuthStorage$Codex(home: backup).load()?.data
         if mode == "file" { Fixture.denyCredentialFileRemovalPath = backup.appendingPathComponent("auth.json").path }
         else { Fixture.denyCodexDeleteAccount = Fixture.codexKey(backup) }
         var refused = false
-        do { try CodexAuthSwap.restoreDefault() } catch { refused = true }
-        print("Restore mode=\(mode), refused=\(refused), active=\(CodexAuthSwap.activeColumnID)")
-        try expect(refused && CodexAuthSwap.activeColumnID == id
-                   && (try CodexAuthSwap.authData(home: base)) == selected
-                   && (try CodexAuthStorage(home: backup).load()?.data) == primary,
+        do { try AuthSwap$Codex.restoreDefault() } catch { refused = true }
+        print("Restore mode=\(mode), refused=\(refused), active=\(AuthSwap$Codex.activeColumnID)")
+        try expect(refused && AuthSwap$Codex.activeColumnID == id
+                   && (try AuthSwap$Codex.authData(home: base)) == selected
+                   && (try AuthStorage$Codex(home: backup).load()?.data) == primary,
                    "Restore reported success after refused cleanup or lost the selected login/primary backup")
         Fixture.denyCodexDeleteAccount = nil
         Fixture.denyCredentialFileRemovalPath = nil
         if nativeProgress {
             try writeNativeCodexGrant(base, grant: "native-after-refused-restore")
-            try CodexAuthSwap.restoreDefault()
-            try expect(CodexRenewal.refreshToken(profile.appendingPathComponent("auth.json")) == "native-after-refused-restore",
+            try AuthSwap$Codex.restoreDefault()
+            try expect(Renewal$Codex.refreshToken(profile.appendingPathComponent("auth.json")) == "native-after-refused-restore",
                        "Refused restore discarded the updated copyback identity for a later native rotation")
-        } else { try CodexAuthSwap.restoreDefault() }
-        let store = UsageStore(providers: [.codex: CodexProvider()], discovery: RealDiscovery())
+        } else { try AuthSwap$Codex.restoreDefault() }
+        let store = UsageStore(providers: [.codex: Provider$Codex()], discovery: Discovery$Real())
         store.rediscover(force: true)
-        try store.removeAccount(id: CodexAuthSwap.defaultColumnID)
-        try expect(try CodexAuthStorage(home: backup).load() == nil,
+        try store.removeAccount(id: AuthSwap$Codex.defaultColumnID)
+        try expect(try AuthStorage$Codex(home: backup).load() == nil,
                    "A prior cleanup refusal hid a live backup from later primary removal")
     }
 
     private static func writeNativeCodexGrant(_ home: URL, grant: String) throws {
-        var root = try JSONSerialization.jsonObject(with: CodexAuthSwap.authData(home: home)!) as! [String: Any]
+        var root = try JSONSerialization.jsonObject(with: AuthSwap$Codex.authData(home: home)!) as! [String: Any]
         var tokens = root["tokens"] as! [String: Any]
         tokens["refresh_token"] = grant
         root["tokens"] = tokens
-        try CodexAuthStorage(home: home).save(JSONSerialization.data(withJSONObject: root))
+        try AuthStorage$Codex(home: home).save(JSONSerialization.data(withJSONObject: root))
     }
 
     @MainActor
     private static func codexLegacyBackupRemoval(mode: String, denied: Bool = false) throws {
-        let base = CodexAuthSwap.baseHome
+        let base = AuthSwap$Codex.baseHome
         let profile = ProfileDirectories.codexRoot.appendingPathComponent("legacy-hidden-backup")
         try Fixture.codexLogin(base, account: "legacy-primary", mode: mode)
         try Fixture.codexLogin(profile, account: "other", mode: "file")
-        try CodexAuthSwap.activate(columnID: "codex:legacy-hidden-backup", home: profile)
-        let backup = CodexAuthSwap.stashHome
-        let primary = try CodexAuthStorage(home: backup).load()!
+        try AuthSwap$Codex.activate(columnID: "codex:legacy-hidden-backup", home: profile)
+        let backup = AuthSwap$Codex.stashHome
+        let primary = try AuthStorage$Codex(home: backup).load()!
         // Model state persisted by the old successful restore with refused cleanup.
-        try CodexAuthStorage(home: base).save(primary.data)
+        try AuthStorage$Codex(home: base).save(primary.data)
         for key in ["codexAppAccountID", "codexAppAccountHome", "codexAppStashStore", "codexAppSourceAuth"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
         if denied { Fixture.denyCodexDeleteAccount = Fixture.codexKey(backup) }
-        let store = UsageStore(providers: [.codex: CodexProvider()], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.codex: Provider$Codex()], discovery: Discovery$Real())
         store.rediscover(force: true)
         var failed = false
-        do { try store.removeAccount(id: CodexAuthSwap.defaultColumnID) } catch { failed = true }
-        let remaining = try CodexAuthStorage(home: backup).load()?.data
+        do { try store.removeAccount(id: AuthSwap$Codex.defaultColumnID) } catch { failed = true }
+        let remaining = try AuthStorage$Codex(home: backup).load()?.data
         print("Legacy backup mode=\(mode), denied=\(denied), removal failed=\(failed), backup retained=\(remaining != nil)")
         try expect(failed == denied && (remaining != nil) == denied,
                    "Primary removal ignored an untracked native backup or its deletion refusal")
         if denied {
-            try expect((try CodexAuthSwap.authData(home: base)) == primary.data
-                       && store.account(for: CodexAuthSwap.defaultColumnID) != nil,
+            try expect((try AuthSwap$Codex.authData(home: base)) == primary.data
+                       && store.account(for: AuthSwap$Codex.defaultColumnID) != nil,
                        "Refused legacy-backup cleanup removed the primary login or column")
             Fixture.denyCodexDeleteAccount = nil
-            try store.removeAccount(id: CodexAuthSwap.defaultColumnID)
+            try store.removeAccount(id: AuthSwap$Codex.defaultColumnID)
         }
-        try expect(try CodexAuthStorage(home: backup).load() == nil, "Successful primary removal retained legacy backup credentials")
+        try expect(try AuthStorage$Codex(home: backup).load() == nil, "Successful primary removal retained legacy backup credentials")
     }
 
     @MainActor
@@ -3956,7 +3997,7 @@ enum Authentication {
         let first = service(directory.path)
         let settings = directory.appendingPathComponent("settings.json")
         try Data("shared-settings".utf8).write(to: settings)
-        let provider = ClaudeProvider()
+        let provider = Provider$Claude()
         if action == "remove" {
             Fixture.claudeEntries = [first: Fixture.claudeLogin("first", expired: false),
                                     selected: Fixture.claudeLogin("selected", expired: false)]
@@ -3965,7 +4006,7 @@ enum Authentication {
             Fixture.discoveredClaudeService = selected
             Fixture.keychain = Fixture.claudeLogin("selected", expired: action == "renew")
         }
-        let store = UsageStore(providers: [.claude: provider], discovery: RealDiscovery())
+        let store = UsageStore(providers: [.claude: provider], discovery: Discovery$Real())
         store.rediscover(force: true)
         guard let account = store.account(for: "claude:" + selected) else {
             throw Failure(description: "Fixture did not discover the physical trailing-path login")
@@ -3977,7 +4018,7 @@ enum Authentication {
             if case .success = outcome {} else { throw Failure(description: "Physical trailing-path credentials could not renew") }
             try expect(Fixture.refreshCalls == 1 && Fixture.observedProfileLock
                        && Fixture.oauthHeldDuringPOST && Fixture.oauthHeldDuringWrite
-                       && ClaudeKeychain.parse(Fixture.keychain)?.refreshToken == "synthetic-rotated",
+                       && AuthStorage$Claude.parse(Fixture.keychain)?.refreshToken == "synthetic-rotated",
                        "Physical trailing-path renewal lost its grant or native lease protection")
             try expect(!Foundation.FileManager.default.fileExists(atPath: Fixture.oauthLock.path)
                        && !Foundation.FileManager.default.fileExists(atPath: Fixture.legacyLock.path),
@@ -3988,7 +4029,7 @@ enum Authentication {
         try Foundation.FileManager.default.createDirectory(at: pointer.deletingLastPathComponent(), withIntermediateDirectories: true)
         let previous = "/previous-cli-profile\n"
         try Data(previous.utf8).write(to: pointer)
-        if !switchCLI { ClaudeCLISelection.isEnabled = false }
+        if !switchCLI { CLISelection$Claude.isEnabled = false }
         if action == "remove" {
             let file = directory.appendingPathComponent(".credentials.json")
             let data = try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("selected", expired: false))
@@ -4002,7 +4043,7 @@ enum Authentication {
         _ = try switchSuccessfully(account)
         try expect(try String(contentsOf: pointer) == (switchCLI ? path + "\n" : previous),
                    "Physical trailing-path switching changed the service hash or ignored Switch CLI")
-        try expect(ClaudeAppSwitcher().isOpenInApp(columnID: account.id) == true,
+        try expect(AppSwitcher$Claude().isOpenInApp(columnID: account.id) == true,
                    "Physical trailing-path Desktop selection was not recorded")
         if action == "remove" {
             try store.removeAccount(id: account.id)
@@ -4021,7 +4062,7 @@ enum Authentication {
     @MainActor
     private static func codexAutoFallbackRollback(failure: String, backupMode: String = "file",
                                                   nativeProgress: Bool = false) async throws {
-        let base = CodexAuthSwap.baseHome
+        let base = AuthSwap$Codex.baseHome
         let profile = ProfileDirectories.codexRoot.appendingPathComponent("auto-selected")
         let id = "codex:auto-selected"
         if backupMode == "keyring" { try Fixture.codexLogin(base, account: "primary", mode: "auto") }
@@ -4031,17 +4072,17 @@ enum Authentication {
         }
         try Fixture.codexLogin(profile, account: "selected", mode: "keyring")
         Fixture.denyCodexWrite = backupMode == "file"
-        try CodexAuthSwap.activate(columnID: id, home: profile)
+        try AuthSwap$Codex.activate(columnID: id, home: profile)
         Fixture.denyCodexWrite = false
         if backupMode == "keyring" {
             // A native auto file fallback survives until Keychain recovers.
-            let selected = try CodexAuthSwap.authData(home: base)!
+            let selected = try AuthSwap$Codex.authData(home: base)!
             Fixture.codexKeychain[Fixture.codexKey(base)] = nil
             try selected.write(to: base.appendingPathComponent("auth.json"))
         }
-        let backup = CodexAuthSwap.stashHome
-        let selected = try CodexAuthStorage(home: base).load(verifyingOwner: true)!
-        let primary = try CodexAuthStorage(home: backup).load(verifyingOwner: true)!
+        let backup = AuthSwap$Codex.stashHome
+        let selected = try AuthStorage$Codex(home: base).load(verifyingOwner: true)!
+        let primary = try AuthStorage$Codex(home: backup).load(verifyingOwner: true)!
         try expect(selected.backend == .file && primary.backend == (backupMode == "file" ? .file : .keyring),
                    "Fixture did not establish the original auto fallback and backup backends")
         let account = DiscoveredAccount(id: id, provider: .codex, profileName: "auto-selected", source: .codexHome(profile))
@@ -4054,22 +4095,22 @@ enum Authentication {
         do {
             if failure == "selected" { try AccountRemoval.remove(account) }
             else if failure == "primary" {
-                try AccountRemoval.remove(DiscoveredAccount(id: CodexAuthSwap.defaultColumnID, provider: .codex,
+                try AccountRemoval.remove(DiscoveredAccount(id: AuthSwap$Codex.defaultColumnID, provider: .codex,
                                                            profileName: "main", source: .codexHome(base)))
-            } else { try CodexAuthSwap.restoreDefault() }
+            } else { try AuthSwap$Codex.restoreDefault() }
         } catch { refused = true }
         let shouldFail = failure != "none"
-        let actual = CodexProvider.readAuth(codexHome: base)?.accountID
+        let actual = Provider$Codex.readAuth(codexHome: base)?.accountID
         print("Auto fallback operation=\(failure), backup=\(backupMode), refused=\(refused), live owner=\(actual ?? "nil")")
-        try expect(refused == shouldFail && CodexAuthSwap.activeColumnID == (shouldFail ? id : CodexAuthSwap.defaultColumnID)
+        try expect(refused == shouldFail && AuthSwap$Codex.activeColumnID == (shouldFail ? id : AuthSwap$Codex.defaultColumnID)
                    && actual == (shouldFail ? "selected" : "primary"),
                    "Auto rollback left a different native owner above the selected file fallback")
         if shouldFail {
-            try expect((try CodexAuthSwap.authData(home: base)) == selected.data
-                       && (try CodexAuthSwap.authData(home: backup)) == primary.data
-                       && (try CodexAuthSwap.authData(home: profile)) == selected.data,
+            try expect((try AuthSwap$Codex.authData(home: base)) == selected.data
+                       && (try AuthSwap$Codex.authData(home: backup)) == primary.data
+                       && (try AuthSwap$Codex.authData(home: profile)) == selected.data,
                        "Refused auto rollback lost the selected grant, primary backup or profile copyback")
-            let outcome = await CodexProvider().fetch(account)
+            let outcome = await Provider$Codex().fetch(account)
             if case .success = outcome {} else { throw Failure(description: "Rolled-back selection could not fetch usage") }
             try expect(Fixture.lastCodexAccount == "selected" && Fixture.refreshCalls == 0,
                        "Usage read a different account or renewed active native credentials after rollback")
@@ -4077,14 +4118,176 @@ enum Authentication {
         Fixture.denyCredentialFileRemovalPath = nil
         Fixture.denyCodexDeleteAccount = nil
         if nativeProgress { try writeNativeCodexGrant(base, grant: "native-after-auto-rollback") }
-        if shouldFail { try CodexAuthSwap.restoreDefault() }
-        try expect(CodexAuthSwap.activeColumnID == CodexAuthSwap.defaultColumnID
-                   && CodexProvider.readAuth(codexHome: base)?.accountID == "primary"
-                   && (try CodexAuthSwap.authData(home: backup)) == nil,
+        if shouldFail { try AuthSwap$Codex.restoreDefault() }
+        try expect(AuthSwap$Codex.activeColumnID == AuthSwap$Codex.defaultColumnID
+                   && Provider$Codex.readAuth(codexHome: base)?.accountID == "primary"
+                   && (try AuthSwap$Codex.authData(home: backup)) == nil,
                    "Auto rollback could not retry restoration and clean the primary backup")
         if nativeProgress {
-            try expect(CodexRenewal.refreshToken(profile.appendingPathComponent("auth.json")) == "native-after-auto-rollback",
+            try expect(Renewal$Codex.refreshToken(profile.appendingPathComponent("auth.json")) == "native-after-auto-rollback",
                        "Auto rollback lost the source identity for subsequent native copyback")
+        }
+    }
+
+    @MainActor
+    private static func codexNativeCanonical(action: String, mode: String = "keyring") async throws {
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("native-canonical")
+        try Fixture.writeAuth(home, account: "native-owner", refresh: "native-refresh", expired: action == "renew")
+        let file = home.appendingPathComponent("auth.json")
+        let original = try Data(contentsOf: file)
+        let key = Fixture.codexKey(home)
+        Fixture.codexKeychain[key] = original
+        try Foundation.FileManager.default.removeItem(at: file)
+        try Fixture.codexMode(home, mode)
+        let account = DiscoveredAccount(id: "codex:native-canonical", provider: .codex,
+                                        profileName: "native-canonical", source: .codexHome(home))
+        if mode != "keyring" {
+            try Fixture.writeAuth(home, account: "file-owner", refresh: "file-refresh", expired: false)
+        }
+        switch action {
+        case "read":
+            let expected = mode == "file" ? "file-owner" : "native-owner"
+            let actual = Provider$Codex.readAuth(codexHome: home)?.accountID
+            print("Native mode=\(mode), expected owner=\(expected), actual=\(actual ?? "nil")")
+            try expect(actual == expected, "Native canonical Keychain ownership disagrees with Codex storage selection")
+            try expect(Discovery$Real().discover().contains { $0.id == account.id }, "Native canonical login was hidden from discovery")
+        case "save":
+            try Fixture.writeAuth(home, account: "updated-owner", refresh: "updated-refresh", expired: false)
+            let updated = try Data(contentsOf: file)
+            try Foundation.FileManager.default.removeItem(at: file)
+            try AuthStorage$Codex(home: home).save(updated)
+            try expect(Fixture.codexKeychain[key] == updated && Fixture.codexKeychain.count == 1,
+                       "Save created a shadow Keychain entry instead of updating the native canonical owner")
+        case "remove":
+            try AccountRemoval.remove(account)
+            try expect(Fixture.codexKeychain[key] == nil && !Foundation.FileManager.default.fileExists(atPath: home.path),
+                       "Successful removal left the real native Keychain login or its profile intact")
+        case "renew":
+            let outcome = await Provider$Codex().fetch(account)
+            if case .success = outcome {} else { throw Failure(description: "Native canonical Keychain login could not renew") }
+            try expect(Fixture.refreshCalls == 1 && Fixture.codexKeychain.count == 1
+                       && Fixture.codexKeychain[key] != original
+                       && Renewal$Codex.refreshToken(file) == "synthetic-rotated",
+                       "Native canonical renewal lost its grant or wrote a shadow Keychain entry")
+        case "switch":
+            let base = AuthSwap$Codex.baseHome
+            try Fixture.codexLogin(base, account: "primary", mode: "file")
+            try AuthSwap$Codex.activate(columnID: account.id, home: home)
+            try expect(Provider$Codex.readAuth(codexHome: base)?.accountID == "native-owner",
+                       "Switch did not publish the native canonical Keychain login")
+            try AuthSwap$Codex.restoreDefault()
+            try expect(Provider$Codex.readAuth(codexHome: base)?.accountID == "primary"
+                       && Fixture.codexKeychain[key] == original,
+                       "Native canonical copyback lost the selected login or primary account")
+        default: throw Failure(description: "Unknown canonical scenario")
+        }
+    }
+
+    @MainActor
+    private static func codexRetarget(action: String, reuseGrant: Bool = true) async throws {
+        let first = Fixture.root.appendingPathComponent("physical-a")
+        let second = Fixture.root.appendingPathComponent("physical-b")
+        for root in [first, second] { try Foundation.FileManager.default.createDirectory(at: root, withIntermediateDirectories: true) }
+        try Foundation.FileManager.default.createSymbolicLink(at: ProfileDirectories.codexRoot, withDestinationURL: first)
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("retargeted")
+        try Fixture.writeAuth(home, account: "original", refresh: "original-refresh", expired: action != "usage")
+        let file = home.appendingPathComponent("auth.json")
+        let original = try Data(contentsOf: file)
+        let account = DiscoveredAccount(id: "codex:retargeted", provider: .codex, profileName: "retargeted", source: .codexHome(home))
+        let provider = Provider$Codex()
+        let store = UsageStore(providers: [.codex: provider], discovery: Discovery$Real())
+        store.rediscover(force: true)
+        if action == "usage" {
+            Fixture.holdFirstUsage = true
+            Fixture.firstUsageStatus = 401
+        } else if action == "pending" { Fixture.failCodexFileWrite = true }
+        else { Fixture.response = .heldRenewed }
+        let request = Task { await provider.fetch(account) }
+        if action == "usage" {
+            var started = false
+            for _ in 0..<200 {
+                Fixture.lock.lock(); started = Fixture.usageCalls > 0; Fixture.lock.unlock()
+                if started { break }
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+            try expect(started, "Fixture did not pause the original usage request")
+        } else {
+            try await waitForRefresh(1)
+            if action == "pending" { _ = await request.value }
+        }
+        try Foundation.FileManager.default.removeItem(at: ProfileDirectories.codexRoot)
+        try Foundation.FileManager.default.createSymbolicLink(at: ProfileDirectories.codexRoot, withDestinationURL: second)
+        try Fixture.writeAuth(home, account: "replacement", refresh: "replacement-refresh", expired: false)
+        if ["remove", "usage"].contains(action) {
+            try store.removeAccount(id: account.id)
+            if action == "usage" {
+                // Return to the old physical path: only the logical generation
+                // can distinguish this re-addition from the retired usage request.
+                try Foundation.FileManager.default.removeItem(at: ProfileDirectories.codexRoot)
+                try Foundation.FileManager.default.createSymbolicLink(at: ProfileDirectories.codexRoot, withDestinationURL: first)
+            } else { try Fixture.writeAuth(home, account: "replacement", refresh: "replacement-refresh", expired: false) }
+        }
+        if reuseGrant { try original.write(to: file) }
+        let expected = try Data(contentsOf: file)
+        if action == "usage" {
+            Fixture.lock.lock(); Fixture.releaseFirstUsage = true; Fixture.lock.unlock()
+        } else if action == "pending" {
+            Fixture.failCodexFileWrite = false
+            let ready = await Renewal$Codex.shared.prepareForTermination(timeout: 2)
+            try expect(ready, "Pinned rotation could not become durable after retargeting")
+        } else { Fixture.releaseRefresh() }
+        _ = await request.value
+        let actual = try Data(contentsOf: file)
+        try expect(actual == expected, "Retired or redirected request changed a replacement profile after symlink retargeting")
+        if ["inflight", "pending"].contains(action) {
+            let originalFile = first.appendingPathComponent("retargeted/auth.json")
+            try expect(Renewal$Codex.refreshToken(originalFile) == "synthetic-rotated" && Fixture.refreshCalls == 1,
+                       "Retargeting lost the original owner's only rotated grant or replayed its refresh")
+        } else if action == "usage" {
+            try expect(Fixture.refreshCalls == 0, "Retired usage spent the re-added profile's refresh grant after an ABA retarget")
+        } else { try expect(Fixture.refreshCalls == 1, "Removal replayed a retired refresh grant") }
+    }
+
+    @MainActor
+    private static func claudeStubOwnership(state: String) async throws {
+        let service = Fixture.service
+        let id = "claude:" + service
+        Fixture.onlyClaudeService = service
+        Fixture.discoveredClaudeService = service
+        Fixture.claudeMetadataDate = Date(timeIntervalSince1970: 1)
+        try Foundation.FileManager.default.createDirectory(at: Fixture.storageDirectory, withIntermediateDirectories: true)
+        let stub: [String: Any] = ["trustedDeviceToken": "synthetic-stub"]
+        let store = UsageStore(providers: [.claude: Provider$Claude()], discovery: Discovery$Real())
+        if ["race", "same-date", "later"].contains(state) {
+            Fixture.keychain = stub
+            if state != "later" { Fixture.changeLoginAfterRead = 2 }
+            Fixture.preserveClaudeMetadataDate = state == "same-date"
+            store.start()
+            for _ in 0..<200 {
+                try await Task.sleep(nanoseconds: 1_000_000)
+                if store.columns.isEmpty { break }
+            }
+            if state == "later" {
+                try expect(store.columns.isEmpty, "A genuine native stub did not leave discovery")
+                Fixture.keychain = Fixture.claudeLogin("new-login", expired: false)
+                Fixture.claudeMetadataDate = Date(timeIntervalSince1970: 2)
+            }
+        } else {
+            Fixture.keychain = state == "genuine" ? stub : Fixture.claudeLogin("new-login", expired: false)
+            UserDefaults.standard.set([service: Fixture.claudeMetadataDate!.timeIntervalSince1970], forKey: "claudeKeychainStubs")
+            if ["denied", "malformed"].contains(state) {
+                try JSONSerialization.data(withJSONObject: stub).write(to: Fixture.storageDirectory.appendingPathComponent(".credentials.json"))
+                Fixture.denyClaudeRead = state == "denied"
+                Fixture.malformedClaudeRead = state == "malformed"
+            }
+        }
+        store.rediscover(force: true)
+        let visible = store.account(for: id) != nil
+        print("Stub state=\(state), account visible=\(visible)")
+        try expect(visible == (state != "genuine"), "Stub cache hid a newer/unreadable preferred login or retained a genuine stub")
+        if !["race", "same-date", "later"].contains(state) {
+            try expect(Fixture.noninteractiveClaudeReads == Fixture.keychainReads && Fixture.interactionAllowed,
+                       "Stub verification enabled a Keychain prompt or left interaction disabled")
         }
     }
 

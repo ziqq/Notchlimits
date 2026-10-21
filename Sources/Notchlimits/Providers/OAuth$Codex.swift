@@ -9,8 +9,8 @@ import Foundation
 /// В отличие от Claude, refresh-токен здесь одноразовый: повторное
 /// использование сервер считает утечкой (`refresh_token_reused`) и отзывает
 /// вход. Поэтому продлеваем только спящие входы — те, что сейчас не в
-/// `~/.codex`, где ими владеют приложение и CLI (см. `CodexRenewal`).
-enum CodexOAuth {
+/// `~/.codex`, где ими владеют приложение и CLI (см. `Renewal$Codex`).
+enum OAuth$Codex {
 
     static let tokenURL = URL(string: "https://auth.openai.com/oauth/token")!
     static let clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -96,9 +96,9 @@ enum CodexOAuth {
 /// пользуется. Профиль, на который приложение давно не переключали, тихо
 /// протухал, и чтобы его оживить, приходилось переключать приложение —
 /// с перезапуском и оборванными задачами. Теперь продлеваем сами, заранее.
-actor CodexRenewal {
+actor Renewal$Codex {
 
-    static let shared = CodexRenewal()
+    static let shared = Renewal$Codex()
 
     /// CLI продлевает раз в 8 дней из 10 — то есть за 2 дня до конца.
     static let window: TimeInterval = 2 * 24 * 3600
@@ -117,9 +117,9 @@ actor CodexRenewal {
     }
 
     private struct Pending {
-        let renewal: CodexAuthSwap.Renewal
+        let renewal: AuthSwap$Codex.Renewal
         let usedRefreshToken: String
-        let tokens: CodexOAuth.Tokens
+        let tokens: OAuth$Codex.Tokens
     }
 
     /// Учитываем и запрос в полёте: actor допускает другой вызов на время await.
@@ -131,22 +131,22 @@ actor CodexRenewal {
 
     /// `force` — продлить, даже если срок ещё не подошёл (usage ответил 401).
     func renew(columnID: String, home: URL, force: Bool,
-               expected: CodexAuthSwap.AuthSnapshot? = nil) async -> Result {
+               expected: AuthSwap$Codex.AuthSnapshot? = nil) async -> Result {
         if let saved = pending[columnID] {
             if let result = persist(saved, columnID: columnID) { return result }
         }
         guard !terminating else { return .skipped }
-        let renewal: CodexAuthSwap.Renewal
+        let renewal: AuthSwap$Codex.Renewal
         do {
-            guard let source = try CodexAuthSwap.beginRenewal(columnID: columnID, home: home, expected: expected) else { return .skipped }
+            guard let source = try AuthSwap$Codex.beginRenewal(columnID: columnID, home: home, expected: expected) else { return .skipped }
             renewal = source
         } catch { return .unavailable }
         defer {
-            if pending[columnID]?.renewal.id != renewal.id { CodexAuthSwap.finishRenewal(renewal) }
+            if pending[columnID]?.renewal.id != renewal.id { AuthSwap$Codex.finishRenewal(renewal) }
         }
         guard let refreshToken = Self.refreshToken(in: renewal.record.data),
               Self.shouldRenew(isBaseHome: false,
-                               expiresAt: CodexProvider.parseAuth(renewal.record.data)?.expiresAt,
+                               expiresAt: Provider$Codex.parseAuth(renewal.record.data)?.expiresAt,
                                force: force, now: Date())
         else { return .skipped }
         if let result = attempts[refreshToken] { return result }
@@ -154,8 +154,8 @@ actor CodexRenewal {
         inFlight.insert(renewal.id)
         defer { inFlight.remove(renewal.id) }
 
-        let response = await CodexOAuth.refresh(refreshToken: refreshToken)
-        guard CodexAuthSwap.isCurrent(renewal) else { return .skipped }
+        let response = await OAuth$Codex.refresh(refreshToken: refreshToken)
+        guard AuthSwap$Codex.isCurrent(renewal) else { return .skipped }
         switch response {
         case .success(let tokens):
             let saved = Pending(renewal: renewal, usedRefreshToken: refreshToken, tokens: tokens)
@@ -164,7 +164,7 @@ actor CodexRenewal {
         case .rejected:
             attempts[refreshToken] = .rejected
             // Пока мы ходили, файл мог обновить CLI в этом профиле.
-            let current = CodexAuthSwap.liveHome(columnID: columnID, home: home)
+            let current = AuthSwap$Codex.liveHome(columnID: columnID, home: home)
             if let latest = Self.refreshToken(current.appendingPathComponent("auth.json")),
                latest != refreshToken {
                 return .renewed
@@ -198,11 +198,11 @@ actor CodexRenewal {
     /// A changed login or retired generation discards only its own pending response.
     private func persist(_ saved: Pending, columnID: String) -> Result? {
         do {
-            let stored = try CodexAuthSwap.storeRenewed(saved.renewal,
+            let stored = try AuthSwap$Codex.storeRenewed(saved.renewal,
                                                        usedRefreshToken: saved.usedRefreshToken,
                                                        tokens: saved.tokens)
             if pending[columnID]?.renewal.id == saved.renewal.id { pending[columnID] = nil }
-            CodexAuthSwap.finishRenewal(saved.renewal)
+            AuthSwap$Codex.finishRenewal(saved.renewal)
             if stored {
                 attempts[saved.usedRefreshToken] = saved.tokens.refreshToken.map {
                     $0 != saved.usedRefreshToken ? .uncertain : nil
@@ -229,7 +229,7 @@ actor CodexRenewal {
     }
 
     static func refreshToken(_ file: URL) -> String? {
-        guard let data = try? CodexAuthSwap.authData(home: file.deletingLastPathComponent()) else { return nil }
+        guard let data = try? AuthSwap$Codex.authData(home: file.deletingLastPathComponent()) else { return nil }
         return refreshToken(in: data)
     }
 
