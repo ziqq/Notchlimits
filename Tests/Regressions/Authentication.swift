@@ -711,6 +711,17 @@ enum Authentication {
     static func main() async {
         do {
             switch CommandLine.arguments[1] {
+            case "claude-physical-trailing-switch": try await claudePhysicalTrailingPath(action: "switch")
+            case "claude-physical-trailing-renewal": try await claudePhysicalTrailingPath(action: "renew")
+            case "claude-physical-trailing-shared": try await claudePhysicalTrailingPath(action: "remove")
+            case "claude-physical-trailing-shared-off": try await claudePhysicalTrailingPath(action: "remove", switchCLI: false)
+            case "claude-physical-trailing-shared-fallback": try await claudePhysicalTrailingPath(action: "remove", fallback: true)
+            case "codex-auto-fallback-restore-file-refusal": try await codexAutoFallbackRollback(failure: "restore")
+            case "codex-auto-fallback-restore-keyring-refusal": try await codexAutoFallbackRollback(failure: "restore", backupMode: "keyring")
+            case "codex-auto-fallback-selected-refusal": try await codexAutoFallbackRollback(failure: "selected")
+            case "codex-auto-fallback-primary-refusal": try await codexAutoFallbackRollback(failure: "primary")
+            case "codex-auto-fallback-native-progress": try await codexAutoFallbackRollback(failure: "restore", nativeProgress: true)
+            case "codex-auto-fallback-restore-success": try await codexAutoFallbackRollback(failure: "none")
             case "claude-borrowed-foreign-current": try claudeBorrowedForeignCurrent()
             case "claude-borrowed-normal-retry": try claudeBorrowedNormalRetry()
             case "claude-shared-extra": try await claudeSharedExtraDirectory()
@@ -3927,6 +3938,154 @@ enum Authentication {
             try store.removeAccount(id: CodexAuthSwap.defaultColumnID)
         }
         try expect(try CodexAuthStorage(home: backup).load() == nil, "Successful primary removal retained legacy backup credentials")
+    }
+
+    @MainActor
+    private static func claudePhysicalTrailingPath(action: String, switchCLI: Bool = true,
+                                                   fallback: Bool = false) async throws {
+        let physical = Fixture.root.appendingPathComponent("physical-profiles")
+        try Foundation.FileManager.default.createDirectory(at: physical, withIntermediateDirectories: true)
+        try Foundation.FileManager.default.createSymbolicLink(at: ProfileDirectories.claudeRoot, withDestinationURL: physical)
+        let directory = ProfileDirectories.claudeRoot.appendingPathComponent("work")
+        try Foundation.FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let path = directory.resolvingSymlinksInPath().path + "/"
+        func service(_ path: String) -> String {
+            Fixture.service + "-" + SHA256.hash(data: Data(path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
+        }
+        let selected = service(path)
+        let first = service(directory.path)
+        let settings = directory.appendingPathComponent("settings.json")
+        try Data("shared-settings".utf8).write(to: settings)
+        let provider = ClaudeProvider()
+        if action == "remove" {
+            Fixture.claudeEntries = [first: Fixture.claudeLogin("first", expired: false),
+                                    selected: Fixture.claudeLogin("selected", expired: false)]
+        } else {
+            Fixture.onlyClaudeService = selected
+            Fixture.discoveredClaudeService = selected
+            Fixture.keychain = Fixture.claudeLogin("selected", expired: action == "renew")
+        }
+        let store = UsageStore(providers: [.claude: provider], discovery: RealDiscovery())
+        store.rediscover(force: true)
+        guard let account = store.account(for: "claude:" + selected) else {
+            throw Failure(description: "Fixture did not discover the physical trailing-path login")
+        }
+        if action == "renew" {
+            Fixture.expectedOAuthDirectory = directory
+            Fixture.expectedLock = directory.appendingPathComponent(".storage-write.lock")
+            let outcome = await provider.fetch(account)
+            if case .success = outcome {} else { throw Failure(description: "Physical trailing-path credentials could not renew") }
+            try expect(Fixture.refreshCalls == 1 && Fixture.observedProfileLock
+                       && Fixture.oauthHeldDuringPOST && Fixture.oauthHeldDuringWrite
+                       && ClaudeKeychain.parse(Fixture.keychain)?.refreshToken == "synthetic-rotated",
+                       "Physical trailing-path renewal lost its grant or native lease protection")
+            try expect(!Foundation.FileManager.default.fileExists(atPath: Fixture.oauthLock.path)
+                       && !Foundation.FileManager.default.fileExists(atPath: Fixture.legacyLock.path),
+                       "Physical trailing-path renewal stranded OAuth locks")
+            return
+        }
+        let pointer = DesktopApp.supportDirectory.appendingPathComponent("claude-cli/selected-profile")
+        try Foundation.FileManager.default.createDirectory(at: pointer.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let previous = "/previous-cli-profile\n"
+        try Data(previous.utf8).write(to: pointer)
+        if !switchCLI { ClaudeCLISelection.isEnabled = false }
+        if action == "remove" {
+            let file = directory.appendingPathComponent(".credentials.json")
+            let data = try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("selected", expired: false))
+            if fallback { try data.write(to: file) }
+            try store.removeAccount(id: "claude:" + first)
+            try expect(Foundation.FileManager.default.fileExists(atPath: settings.path)
+                       && Fixture.claudeEntries?[selected] != nil && Fixture.claudeEntries?[first] == nil,
+                       "Removing a logical path owner destroyed the physical trailing-path owner's configuration")
+            if fallback { try expect(try Data(contentsOf: file) == data, "Shared removal changed the survivor's fallback") }
+        }
+        _ = try switchSuccessfully(account)
+        try expect(try String(contentsOf: pointer) == (switchCLI ? path + "\n" : previous),
+                   "Physical trailing-path switching changed the service hash or ignored Switch CLI")
+        try expect(ClaudeAppSwitcher().isOpenInApp(columnID: account.id) == true,
+                   "Physical trailing-path Desktop selection was not recorded")
+        if action == "remove" {
+            try store.removeAccount(id: account.id)
+            try expect(!Foundation.FileManager.default.fileExists(atPath: directory.path)
+                       && Fixture.claudeEntries?[selected] == nil, "The last physical owner could not remove its profile")
+            try Foundation.FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            Fixture.claudeEntries = [selected: Fixture.claudeLogin("replacement", expired: false)]
+            store.rediscover(force: true)
+            guard let replacement = store.account(for: account.id) else { throw Failure(description: "Physical trailing-path profile could not be re-added") }
+            _ = try switchSuccessfully(replacement)
+            try expect(try String(contentsOf: pointer) == (switchCLI ? path + "\n" : previous),
+                       "Re-added physical profile ignored its exact CLI path or setting")
+        }
+    }
+
+    @MainActor
+    private static func codexAutoFallbackRollback(failure: String, backupMode: String = "file",
+                                                  nativeProgress: Bool = false) async throws {
+        let base = CodexAuthSwap.baseHome
+        let profile = ProfileDirectories.codexRoot.appendingPathComponent("auto-selected")
+        let id = "codex:auto-selected"
+        if backupMode == "keyring" { try Fixture.codexLogin(base, account: "primary", mode: "auto") }
+        else {
+            try Fixture.writeAuth(base, account: "primary", refresh: "primary-refresh", expired: false)
+            try Fixture.codexMode(base, "auto")
+        }
+        try Fixture.codexLogin(profile, account: "selected", mode: "keyring")
+        Fixture.denyCodexWrite = backupMode == "file"
+        try CodexAuthSwap.activate(columnID: id, home: profile)
+        Fixture.denyCodexWrite = false
+        if backupMode == "keyring" {
+            // A native auto file fallback survives until Keychain recovers.
+            let selected = try CodexAuthSwap.authData(home: base)!
+            Fixture.codexKeychain[Fixture.codexKey(base)] = nil
+            try selected.write(to: base.appendingPathComponent("auth.json"))
+        }
+        let backup = CodexAuthSwap.stashHome
+        let selected = try CodexAuthStorage(home: base).load(verifyingOwner: true)!
+        let primary = try CodexAuthStorage(home: backup).load(verifyingOwner: true)!
+        try expect(selected.backend == .file && primary.backend == (backupMode == "file" ? .file : .keyring),
+                   "Fixture did not establish the original auto fallback and backup backends")
+        let account = DiscoveredAccount(id: id, provider: .codex, profileName: "auto-selected", source: .codexHome(profile))
+        if failure == "restore" {
+            if backupMode == "file" { Fixture.denyCredentialFileRemovalPath = backup.appendingPathComponent("auth.json").path }
+            else { Fixture.denyCodexDeleteAccount = Fixture.codexKey(backup) }
+        } else if failure == "selected" { Fixture.denyCodexDeleteAccount = Fixture.codexKey(profile) }
+        else if failure == "primary" { Fixture.denyCodexDeleteAccount = Fixture.codexKey(base) }
+        var refused = false
+        do {
+            if failure == "selected" { try AccountRemoval.remove(account) }
+            else if failure == "primary" {
+                try AccountRemoval.remove(DiscoveredAccount(id: CodexAuthSwap.defaultColumnID, provider: .codex,
+                                                           profileName: "main", source: .codexHome(base)))
+            } else { try CodexAuthSwap.restoreDefault() }
+        } catch { refused = true }
+        let shouldFail = failure != "none"
+        let actual = CodexProvider.readAuth(codexHome: base)?.accountID
+        print("Auto fallback operation=\(failure), backup=\(backupMode), refused=\(refused), live owner=\(actual ?? "nil")")
+        try expect(refused == shouldFail && CodexAuthSwap.activeColumnID == (shouldFail ? id : CodexAuthSwap.defaultColumnID)
+                   && actual == (shouldFail ? "selected" : "primary"),
+                   "Auto rollback left a different native owner above the selected file fallback")
+        if shouldFail {
+            try expect((try CodexAuthSwap.authData(home: base)) == selected.data
+                       && (try CodexAuthSwap.authData(home: backup)) == primary.data
+                       && (try CodexAuthSwap.authData(home: profile)) == selected.data,
+                       "Refused auto rollback lost the selected grant, primary backup or profile copyback")
+            let outcome = await CodexProvider().fetch(account)
+            if case .success = outcome {} else { throw Failure(description: "Rolled-back selection could not fetch usage") }
+            try expect(Fixture.lastCodexAccount == "selected" && Fixture.refreshCalls == 0,
+                       "Usage read a different account or renewed active native credentials after rollback")
+        }
+        Fixture.denyCredentialFileRemovalPath = nil
+        Fixture.denyCodexDeleteAccount = nil
+        if nativeProgress { try writeNativeCodexGrant(base, grant: "native-after-auto-rollback") }
+        if shouldFail { try CodexAuthSwap.restoreDefault() }
+        try expect(CodexAuthSwap.activeColumnID == CodexAuthSwap.defaultColumnID
+                   && CodexProvider.readAuth(codexHome: base)?.accountID == "primary"
+                   && (try CodexAuthSwap.authData(home: backup)) == nil,
+                   "Auto rollback could not retry restoration and clean the primary backup")
+        if nativeProgress {
+            try expect(CodexRenewal.refreshToken(profile.appendingPathComponent("auth.json")) == "native-after-auto-rollback",
+                       "Auto rollback lost the source identity for subsequent native copyback")
+        }
     }
 
 }

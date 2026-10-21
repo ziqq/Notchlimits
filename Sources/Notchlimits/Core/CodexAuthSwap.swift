@@ -118,8 +118,7 @@ enum CodexAuthSwap {
             // Do not forget a refused backup cleanup or report a completed switch.
             if !keepBackup {
                 do { try storage(at: stashHome).delete() } catch {
-                    if let previous { try base.save(previous.data, backend: previous.backend) }
-                    else { try base.delete() }
+                    try base.restore(previous)
                     throw error
                 }
             }
@@ -292,8 +291,7 @@ enum CodexAuthSwap {
             } catch {
                 if let primary = removedBackup { try backup.save(primary.data, backend: primary.backend) }
                 if restore {
-                    if let selected { try base.save(selected.data, backend: selected.backend) }
-                    else { try base.delete() }
+                    try base.restore(selected)
                     for (name, value) in zip(keys, saved) {
                         if let value { UserDefaults.standard.set(value, forKey: name) }
                         else { UserDefaults.standard.removeObject(forKey: name) }
