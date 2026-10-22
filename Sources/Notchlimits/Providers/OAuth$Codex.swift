@@ -155,6 +155,16 @@ actor Renewal$Codex {
         defer { inFlight.remove(renewal.id) }
 
         let response = await OAuth$Codex.refresh(refreshToken: refreshToken)
+        // Grant reuse depends on the server response, even when removal retired
+        // its destination. Only a known temporary refusal permits another POST.
+        switch response {
+        case .success, .uncertain:
+            attempts[refreshToken] = .uncertain
+        case .rejected:
+            attempts[refreshToken] = .rejected
+        case .unavailable:
+            attempts[refreshToken] = nil
+        }
         guard AuthSwap$Codex.isCurrent(renewal) else { return .skipped }
         switch response {
         case .success(let tokens):
@@ -162,7 +172,6 @@ actor Renewal$Codex {
             pending[columnID] = saved
             return persist(saved, columnID: columnID) ?? .renewed
         case .rejected:
-            attempts[refreshToken] = .rejected
             // Пока мы ходили, файл мог обновить CLI в этом профиле.
             let current = AuthSwap$Codex.liveHome(columnID: columnID, home: home)
             if let latest = Self.refreshToken(current.appendingPathComponent("auth.json")),
@@ -171,10 +180,8 @@ actor Renewal$Codex {
             }
             return .rejected
         case .unavailable:
-            attempts[refreshToken] = nil
             return .unavailable
         case .uncertain:
-            attempts[refreshToken] = .uncertain
             return .uncertain
         }
     }

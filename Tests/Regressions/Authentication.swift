@@ -173,7 +173,7 @@ private enum Fixture {
         }
     }
 
-    enum Response { case renewed, lost, temporary, unreadable, delayedLost, changedClaude, nativeLogin, forbidden, delayedRenewed, slowRenewed, heldRenewed }
+    enum Response { case renewed, lost, temporary, unreadable, delayedLost, changedClaude, nativeLogin, forbidden, delayedRenewed, slowRenewed, heldRenewed, heldTemporary, heldLost, heldRejected }
     static var response: Response = .renewed
 
     static func didRefresh() {
@@ -663,6 +663,13 @@ struct HTTPClient {
         case .delayedLost:
             try? await Task.sleep(nanoseconds: 50_000_000)
             return .failure(.transport("synthetic lost response"))
+        case .heldTemporary, .heldLost, .heldRejected:
+            while Fixture.refreshIsPaused() { try? await Task.sleep(nanoseconds: 10_000_000) }
+            switch Fixture.response {
+            case .heldTemporary: return .success(Response(status: 429, data: Data(), retryAfter: 120))
+            case .heldLost: return .failure(.transport("synthetic lost response"))
+            default: return .success(Response(status: 400, data: Data(#"{"error":"refresh_token_reused"}"#.utf8), retryAfter: nil))
+            }
         case .temporary:
             return .success(Response(status: 429, data: Data(), retryAfter: 120))
         case .unreadable:
@@ -732,6 +739,31 @@ enum Authentication {
     static func main() async {
         do {
             switch CommandLine.arguments[1] {
+            case "codex-rollback-implicit-file-keyring": try codexRollbackStorageMode(originalMode: "keyring")
+            case "codex-rollback-implicit-file-auto": try codexRollbackStorageMode(originalMode: "auto")
+            case "codex-rollback-explicit-file-control": try codexRollbackStorageMode(replacementConfig: true)
+            case "codex-rollback-metadata-only-control": try codexRollbackStorageMode(replacementAuth: false)
+            case "claude-primary-shared-preserves-fallback": try claudePrimarySharedFallback()
+            case "claude-primary-shared-cli-off": try claudePrimarySharedFallback(switchCLI: false)
+            case "claude-primary-shared-metadata-denied": try claudePrimarySharedFallback(failure: "metadata")
+            case "claude-primary-shared-stale-file-owner": try claudePrimarySharedFallback(failure: "stale")
+            case "claude-primary-shared-delete-denied-control": try claudePrimarySharedFallback(failure: "delete")
+            case "claude-primary-shared-lone-control": try claudePrimarySharedFallback(shared: false)
+            case "codex-backup-alias-fence-file": try await codexBackupPhysicalFence(mode: "file")
+            case "codex-backup-alias-fence-keyring": try await codexBackupPhysicalFence(mode: "keyring")
+            case "codex-backup-alias-fence-auto": try await codexBackupPhysicalFence(mode: "auto")
+            case "codex-backup-direct-fence-control": try await codexBackupPhysicalFence(alias: false)
+            case "codex-backup-unrelated-switch-control": try await codexBackupPhysicalFence(action: "unrelated")
+            case "codex-backup-alias-pending-file": try await codexBackupPhysicalFence(mode: "file", action: "pending")
+            case "codex-backup-alias-pending-keyring": try await codexBackupPhysicalFence(mode: "keyring", action: "pending")
+            case "codex-backup-alias-primary-removal": try await codexBackupPhysicalFence(action: "remove")
+            case "codex-retired-temporary-same-grant": try await codexRetiredResponse()
+            case "codex-current-temporary-control": try await codexRetiredResponse(remove: false)
+            case "codex-retired-temporary-new-grant-control": try await codexRetiredResponse(sameGrant: false)
+            case "codex-retired-success-no-replay": try await codexRetiredResponse(response: "success")
+            case "codex-retired-lost-no-replay": try await codexRetiredResponse(response: "lost")
+            case "codex-retired-rejected-no-replay": try await codexRetiredResponse(response: "rejected")
+            case "codex-retired-success-new-grant-control": try await codexRetiredResponse(response: "success", sameGrant: false)
             case "codex-rollback-new-cli-file": try codexRollbackNewLogin(replacement: "file")
             case "codex-rollback-new-cli-symlink": try codexRollbackNewLogin(replacement: "symlink")
             case "codex-rollback-missing-file-control": try codexRollbackNewLogin(replacement: "none")
@@ -4500,6 +4532,178 @@ enum Authentication {
         _ = await old.value
         if case .success = await provider.fetch(account) {} else { throw Failure(description: "Late usage poisoned current Claude credentials") }
         try expect(Fixture.refreshCalls == (mode == "current" ? 1 : 0), "A retired usage 401 spent a replacement Claude refresh grant")
+    }
+
+
+    @MainActor
+    private static func codexRollbackStorageMode(originalMode: String = "keyring",
+                                                  replacementConfig: Bool = false,
+                                                  replacementAuth: Bool = true) throws {
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("rollback-storage-mode")
+        try Fixture.codexLogin(home, account: "old-keyring-owner", mode: originalMode)
+        let account = DiscoveredAccount(id: "codex:rollback-storage-mode", provider: .codex,
+                                        profileName: "rollback-storage-mode", source: .codexHome(home))
+        Fixture.denyCodexDelete = true
+        Fixture.beforeCredentialDelete = {
+            if replacementAuth {
+                try! Fixture.writeAuth(home, account: "replacement-file-owner", refresh: "replacement-file-grant", expired: false)
+            } else {
+                try! Foundation.FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+                try! Data("new-cli-settings".utf8).write(to: home.appendingPathComponent("settings.json"))
+            }
+            if replacementConfig { try! Fixture.codexMode(home, "file") }
+        }
+        var failed = false
+        do { try AccountRemoval.remove(account) } catch { failed = true }
+        try expect(failed, "Credential deletion refusal was not propagated")
+        try expect(Provider$Codex.readAuth(codexHome: home)?.accountID == (replacementAuth ? "replacement-file-owner" : "old-keyring-owner"),
+                   "Rollback hid the replacement CLI login behind old storage settings or lost the old login")
+        try expect(try AuthStorage$Codex(home: home).mode.rawValue == (replacementAuth ? "file" : originalMode),
+                   "Rollback changed the effective storage backend of its surviving owner")
+        if !replacementAuth {
+            try expect(try String(contentsOf: home.appendingPathComponent("settings.json")) == "new-cli-settings",
+                       "Rollback replaced concurrent CLI metadata")
+        }
+    }
+
+    @MainActor
+    private static func claudePrimarySharedFallback(switchCLI: Bool = true, failure: String = "",
+                                                     shared: Bool = true) throws {
+        let owner = ProfileDirectories.claudeRoot.appendingPathComponent("primary-shared-owner")
+        try Foundation.FileManager.default.createDirectory(at: owner, withIntermediateDirectories: true)
+        try Foundation.FileManager.default.createSymbolicLink(at: Fixture.storageDirectory, withDestinationURL: owner)
+        let hash = SHA256.hash(data: Data(owner.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
+        let survivor = Fixture.service + "-" + hash
+        let original = Fixture.claudeLogin("primary-owner", expired: false)
+        let other = Fixture.claudeLogin("surviving-hashed-owner", expired: false)
+        Fixture.claudeEntries = shared ? [Fixture.service: original, survivor: other] : [Fixture.service: original]
+        let file = owner.appendingPathComponent(".credentials.json")
+        let fallback = try JSONSerialization.data(withJSONObject: shared ? other : original)
+        try fallback.write(to: file)
+        let settings = owner.appendingPathComponent("settings.json")
+        try Data("preserve-native-settings".utf8).write(to: settings)
+        let store = UsageStore(providers: [.claude: Provider$Claude()], discovery: Discovery$Real())
+        store.rediscover(force: true)
+        guard let primary = store.account(for: "claude:" + Fixture.service) else { throw Failure(description: "Primary fixture was not discovered") }
+        let pointer = DesktopApp.supportDirectory.appendingPathComponent("claude-cli/selected-profile")
+        try Foundation.FileManager.default.createDirectory(at: pointer.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("/previous-cli-profile\n".utf8).write(to: pointer)
+        CLISelection$Claude.isEnabled = switchCLI
+        if shared {
+            guard let selected = store.account(for: "claude:" + survivor) else { throw Failure(description: "Survivor fixture was not discovered") }
+            var result: Result<Void, Error>?
+            AppSwitcher$Claude().switchTo(selected) { result = $0 }
+            if case .success? = result {} else { throw Failure(description: "Survivor Desktop switch failed") }
+        }
+        let selectedPointer = try String(contentsOf: pointer)
+        if failure == "metadata" { Fixture.denyClaudeMetadata = true }
+        if failure == "delete" { Fixture.denyKeychainDelete = true }
+        if failure == "stale" { Fixture.claudeEntries?[Fixture.service] = nil }
+        var failed = false
+        do { try store.removeAccount(id: primary.id) } catch { failed = true }
+        try expect(failed == !failure.isEmpty, "Shared primary removal ignored an unavailable or stale credential owner")
+        try expect((Fixture.claudeEntries?[Fixture.service] != nil) == ["metadata", "delete"].contains(failure),
+                   "Removal changed a refused primary Keychain login")
+        if !failed {
+            store.rediscover(force: true)
+            try expect(store.account(for: primary.id) == nil, "A shared fallback resurrected the removed primary column")
+        }
+        if shared {
+            try expect(Fixture.claudeEntries?[survivor] != nil && (try? Data(contentsOf: file)) == fallback,
+                       "Removing primary Claude deleted a surviving owner's common fallback")
+            try expect(AppSwitcher$Claude().isOpenInApp(columnID: "claude:" + survivor) == true,
+                       "Primary removal changed the surviving Desktop selection")
+        } else {
+            try expect(!Foundation.FileManager.default.fileExists(atPath: file.path), "Lone primary removal retained its own fallback login")
+        }
+        try expect(try String(contentsOf: pointer) == selectedPointer && CLISelection$Claude.isEnabled == switchCLI
+                   && String(contentsOf: settings) == "preserve-native-settings",
+                   "Primary removal changed native settings or Switch CLI selection")
+    }
+
+    @MainActor
+    private static func codexBackupPhysicalFence(mode: String = "file", alias: Bool = true,
+                                                  action: String = "restore") async throws {
+        let base = AuthSwap$Codex.baseHome
+        let selected = ProfileDirectories.codexRoot.appendingPathComponent("selected")
+        let other = ProfileDirectories.codexRoot.appendingPathComponent("previous-owner")
+        let next = ProfileDirectories.codexRoot.appendingPathComponent("next-selected")
+        try Fixture.codexLogin(base, account: "primary", mode: mode, expired: true)
+        try Fixture.codexLogin(selected, account: "selected", mode: mode)
+        try Fixture.codexLogin(next, account: "next-selected", mode: mode)
+        try Fixture.codexLogin(other, account: "previous-owner", mode: mode, expired: true)
+        try expect(Discovery$Real().discover().contains { $0.id == "codex:previous-owner" }, "Alias owner fixture was not discovered")
+        try AuthSwap$Codex.activate(columnID: "codex:selected", home: selected)
+        try Foundation.FileManager.default.removeItem(at: other)
+        try Foundation.FileManager.default.createSymbolicLink(at: other, withDestinationURL: AuthSwap$Codex.stashHome)
+        let before = try AuthSwap$Codex.authData(home: base)
+        let pending = action == "pending"
+        if pending {
+            Fixture.failCodexFileWrite = mode == "file"
+            Fixture.denyCodexWrite = mode != "file"
+        }
+        Fixture.response = pending ? .renewed : .heldRenewed
+        let request = Task {
+            await Renewal$Codex.shared.renew(columnID: alias ? "codex:previous-owner" : AuthSwap$Codex.defaultColumnID,
+                                            home: alias ? other : base, force: false)
+        }
+        try await waitForRefresh(1)
+        if pending {
+            try expect(await request.value == .unavailable, "Accepted refresh did not reach pending persistence")
+            Fixture.failCodexFileWrite = false; Fixture.denyCodexWrite = false
+        }
+        var refused = false
+        do {
+            if action == "remove" {
+                try AccountRemoval.remove(DiscoveredAccount(id: AuthSwap$Codex.defaultColumnID, provider: .codex,
+                                                           profileName: "primary", source: .codexHome(base)))
+            } else if action == "unrelated" {
+                try AuthSwap$Codex.activate(columnID: "codex:next-selected", home: next)
+            } else { try AuthSwap$Codex.restoreDefault() }
+        } catch { refused = true }
+        let retained = try AuthSwap$Codex.authData(home: base)
+        Fixture.releaseRefresh()
+        if !pending { try expect(await request.value == .renewed, "A fenced primary refresh lost its rotated grant") }
+        try expect(refused == (action != "unrelated"), "An actual backup owner bypassed its mutation fence or blocked an unrelated switch")
+        if action != "unrelated" { try expect(retained == before, "A refused operation changed the native selected owner") }
+        else { try expect(Provider$Codex.readAuth(codexHome: base)?.accountID == "next-selected", "Unrelated selection did not reach Desktop/CLI storage") }
+        if pending { try expect(await Renewal$Codex.shared.prepareForTermination(timeout: 2), "Pending accepted grant did not drain") }
+        try AuthSwap$Codex.restoreDefault()
+        let data = try AuthSwap$Codex.authData(home: base)!
+        let tokens = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["tokens"] as? [String: Any]
+        try expect(Provider$Codex.parseAuth(data)?.accountID == "primary"
+                   && tokens?["refresh_token"] as? String == "synthetic-rotated" && Fixture.refreshCalls == 1,
+                   "Primary restoration lost its rotated grant or repeated the refresh POST")
+    }
+
+    @MainActor
+    private static func codexRetiredResponse(response: String = "temporary", remove: Bool = true,
+                                              sameGrant: Bool = true) async throws {
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("retry-after-readd")
+        try Fixture.writeAuth(home, account: "original", refresh: "original-refresh", expired: true)
+        let data = try Data(contentsOf: home.appendingPathComponent("auth.json"))
+        let id = "codex:retry-after-readd"
+        let account = DiscoveredAccount(id: id, provider: .codex, profileName: "retry-after-readd", source: .codexHome(home))
+        Fixture.response = response == "temporary" ? .heldTemporary : response == "success" ? .heldRenewed : response == "lost" ? .heldLost : .heldRejected
+        let old = Task { await Renewal$Codex.shared.renew(columnID: id, home: home, force: false) }
+        try await waitForRefresh(1)
+        if remove {
+            try AccountRemoval.remove(account)
+            try Fixture.writeAuth(home, account: "replacement", refresh: "replacement-refresh", expired: true)
+            if sameGrant { try data.write(to: home.appendingPathComponent("auth.json")) }
+        }
+        Fixture.releaseRefresh()
+        let oldResult = await old.value
+        try expect(oldResult == (remove ? .skipped : .unavailable), "Retired response was published to the replacement owner")
+        if remove { try expect(Provider$Codex.readAuth(codexHome: home)?.accountID == (sameGrant ? "original" : "replacement"), "Retired response replaced re-added credentials") }
+        Fixture.response = .renewed
+        let next = await Renewal$Codex.shared.renew(columnID: id, home: home, force: false)
+        let again = await Renewal$Codex.shared.renew(columnID: id, home: home, force: false)
+        let retryable = response == "temporary" || !sameGrant
+        let expected: Renewal$Codex.Result = retryable ? .renewed : response == "rejected" ? .rejected : .uncertain
+        try expect(next == expected && Fixture.refreshCalls == (retryable ? 2 : 1),
+                   "Retired response either blocked a known retryable grant or allowed unsafe replay")
+        try expect(again == (retryable ? .skipped : expected), "Repeated renewal changed the retired grant decision")
     }
 
 }

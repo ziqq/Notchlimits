@@ -79,9 +79,18 @@ enum AuthStorage$Claude {
         for directory in directories {
             let file = directory.appendingPathComponent(".credentials.json")
             guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path) else { continue }
-            let service = directory == directories[0] ? baseService
-                : found.keys.first(where: { configDirectory(for: $0) == directory })
+            let service: String
+            if directory == directories[0] {
+                // A surviving hashed owner already accounts for this shared
+                // fallback. Do not recreate a removed primary column for it.
+                service = found.keys.contains(baseService) ? baseService
+                    : found.keys.first(where: {
+                        configDirectory(for: $0).map(ProfileDirectories.isClaudeBase) == true
+                    }) ?? baseService
+            } else {
+                service = found.keys.first(where: { configDirectory(for: $0) == directory })
                     ?? baseService + "-" + String(sha256Hex(directory.path).prefix(8))
+            }
             if found[service] == nil { found[service] = attributes[.modificationDate] as? Date }
         }
         return found

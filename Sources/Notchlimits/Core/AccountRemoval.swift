@@ -85,18 +85,16 @@ enum AccountRemoval {
         switch account.source {
         case .claudeKeychain(let service, let configDir):
             let directory = configDir ?? AuthStorage$Claude.configDirectory(for: service)
+            let owner = directory ?? (service == AuthStorage$Claude.baseService
+                ? ProfileDirectories.home.appendingPathComponent(".claude") : nil)
             do {
                 try AuthStorage$Claude.withRemovalLock(service: service, configDir: directory) { move in
-                    let shared: Bool
-                    if let directory, !ProfileDirectories.isClaudeBase(directory) {
-                        guard let owners = AuthStorage$Claude.keychainServices(in: directory) else { throw Failure.busy }
-                        shared = owners.contains { $0 != service }
-                        // A file-only login cannot claim the common fallback
-                        // after another Keychain owner has appeared.
-                        guard !shared || owners.contains(service) else { throw Failure.busy }
-                    } else {
-                        shared = service != AuthStorage$Claude.baseService && directory.map(ProfileDirectories.isClaudeBase) == true
-                    }
+                    guard let owner, let owners = AuthStorage$Claude.keychainServices(in: owner) else { throw Failure.busy }
+                    let shared = owners.contains { $0 != service }
+                        || service != AuthStorage$Claude.baseService && ProfileDirectories.isClaudeBase(owner)
+                    // A file-only login cannot claim the common fallback after
+                    // another Keychain owner has appeared, including native main.
+                    guard !shared || owners.contains(service) else { throw Failure.busy }
                     if shared {
                         // Other owners retain their shared configuration and fallback.
                         try deleteKeychainEntry(service: service)
@@ -163,13 +161,20 @@ enum AccountRemoval {
         try? manager.removeItem(at: removed)
     }
 
-    private static func restoreContents(from source: URL, to destination: URL) throws {
+    private static func restoreContents(from source: URL, to destination: URL,
+                                        isProfileRoot: Bool = true) throws {
         let sourceFD = open(source.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard sourceFD >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         defer { _ = close(sourceFD) }
         let destinationFD = open(destination.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard destinationFD >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         defer { _ = close(destinationFD) }
+        var auth = stat()
+        let replacementAuth = isProfileRoot
+            && fstatat(destinationFD, "auth.json", &auth, AT_SYMLINK_NOFOLLOW) == 0
+        if isProfileRoot && !replacementAuth && errno != ENOENT {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
         // Recover access before unrelated profile metadata can fail to merge.
         let authFiles: Set<String> = ["auth.json", ".credentials.json", "config.toml"]
         let names = try FileManager.default.contentsOfDirectory(atPath: source.path).sorted {
@@ -177,6 +182,10 @@ enum AccountRemoval {
             return $0 < $1
         }
         for name in names {
+            // A new CLI file login uses implicit file storage when it has no
+            // config. Keep the old settings staged instead of hiding that login
+            // behind its previous owner's Keychain record.
+            if replacementAuth && name == "config.toml" { continue }
             // Borrowed renewal leases still own these in the staged directory;
             // the adjacent legacy OAuth lock continues to fence native writers.
             if name.hasPrefix(".oauth_refresh.lock") || name.hasPrefix(".storage-write.lock") { continue }
@@ -187,7 +196,7 @@ enum AccountRemoval {
             let new = try current.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             if old.isDirectory == true, old.isSymbolicLink != true,
                new.isDirectory == true, new.isSymbolicLink != true {
-                try restoreContents(from: original, to: current)
+                try restoreContents(from: original, to: current, isProfileRoot: false)
             }
             // Existing files belong to the concurrent client. Retain conflicting
             // backups in the hidden directory instead of overwriting either login.

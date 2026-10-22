@@ -1061,3 +1061,78 @@ final class NSMenuItem { var representedObject: Any? }
 
     def test_claude_current_401_still_renews_control(self):
         self.check_scenario("claude-current-401-control")
+
+    def test_codex_rollback_implicit_file_keyring(self):
+        self.check_scenario("codex-rollback-implicit-file-keyring")
+
+    def test_codex_rollback_implicit_file_auto(self):
+        self.check_scenario("codex-rollback-implicit-file-auto")
+
+    def test_codex_rollback_explicit_file_control(self):
+        self.check_scenario("codex-rollback-explicit-file-control")
+
+    def test_codex_rollback_metadata_only_control(self):
+        self.check_scenario("codex-rollback-metadata-only-control")
+
+    def test_claude_primary_shared_preserves_fallback(self):
+        self.check_scenario("claude-primary-shared-preserves-fallback")
+
+    def test_claude_primary_shared_cli_off(self):
+        self.check_scenario("claude-primary-shared-cli-off")
+
+    def test_claude_primary_shared_metadata_denied(self):
+        self.check_scenario("claude-primary-shared-metadata-denied")
+
+    def test_claude_primary_shared_stale_file_owner(self):
+        self.check_scenario("claude-primary-shared-stale-file-owner")
+
+    def test_claude_primary_shared_delete_denied_control(self):
+        self.check_scenario("claude-primary-shared-delete-denied-control")
+
+    def test_claude_primary_shared_lone_control(self):
+        self.check_scenario("claude-primary-shared-lone-control")
+
+    def test_codex_backup_alias_fence_file(self):
+        self.check_scenario("codex-backup-alias-fence-file")
+
+    def test_codex_backup_alias_fence_keyring(self):
+        self.check_scenario("codex-backup-alias-fence-keyring")
+
+    def test_codex_backup_alias_fence_auto(self):
+        self.check_scenario("codex-backup-alias-fence-auto")
+
+    def test_codex_backup_direct_fence_control(self):
+        self.check_scenario("codex-backup-direct-fence-control")
+
+    def test_codex_backup_unrelated_switch_control(self):
+        self.check_scenario("codex-backup-unrelated-switch-control")
+
+    def test_codex_backup_alias_pending_file(self):
+        self.check_scenario("codex-backup-alias-pending-file")
+
+    def test_codex_backup_alias_pending_keyring(self):
+        self.check_scenario("codex-backup-alias-pending-keyring")
+
+    def test_codex_backup_alias_primary_removal(self):
+        self.check_scenario("codex-backup-alias-primary-removal")
+
+    def test_codex_retired_temporary_same_grant(self):
+        self.check_scenario("codex-retired-temporary-same-grant")
+
+    def test_codex_current_temporary_control(self):
+        self.check_scenario("codex-current-temporary-control")
+
+    def test_codex_retired_temporary_new_grant_control(self):
+        self.check_scenario("codex-retired-temporary-new-grant-control")
+
+    def test_codex_retired_success_no_replay(self):
+        self.check_scenario("codex-retired-success-no-replay")
+
+    def test_codex_retired_lost_no_replay(self):
+        self.check_scenario("codex-retired-lost-no-replay")
+
+    def test_codex_retired_rejected_no_replay(self):
+        self.check_scenario("codex-retired-rejected-no-replay")
+
+    def test_codex_retired_success_new_grant_control(self):
+        self.check_scenario("codex-retired-success-new-grant-control")
