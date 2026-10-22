@@ -119,6 +119,8 @@ enum AuthSwap$Codex {
         }
         let incoming = columnID == defaultColumnID ? stashHome : home
         let source = try storage(at: incoming)
+        try requireIdle(base)
+        try requireIdle(source)
         let payload = try source.load(verifyingOwner: true)?.data
         guard homeKey(incoming) == source.home.path else { throw Failure.busy }
         // An alias of the selected owner must not publish its old profile copy
@@ -133,7 +135,7 @@ enum AuthSwap$Codex {
         if columnID == defaultColumnID {
             // Do not forget a refused backup cleanup or report a completed switch.
             if !keepBackup {
-                do { try storage(at: stashHome).delete() } catch {
+                do { try source.delete() } catch {
                     try base.restore(previous)
                     throw error
                 }
@@ -169,6 +171,7 @@ enum AuthSwap$Codex {
         let live = liveHome(columnID: columnID, home: home)
         guard !isBaseHome(live) else { return nil }
         let source = try storage(at: live)
+        try requireIdle(source)
         // Usage may read a native auto fallback, but a refresh must not spend
         // its stale grant while the preferred Keychain owner is unavailable.
         guard let record = try source.load(verifyingOwner: true) else { return nil }
@@ -247,6 +250,7 @@ enum AuthSwap$Codex {
         if !isSwapped {
             try FileManager.default.createDirectory(at: stashHome, withIntermediateDirectories: true)
             let stash = try AuthStorage$Codex(home: stashHome, mode: live.mode)
+            try requireIdle(stash)
             if let payload { try stash.save(payload) } else { try stash.delete() }
             // A CLI re-login into our internal backup must use that same backend.
             try ("cli_auth_credentials_store = \"" + live.mode.rawValue + "\"\n")
@@ -265,6 +269,7 @@ enum AuthSwap$Codex {
            accountID(payload) == accountID(previous),
            let identity = authIdentity(previous),
            identity == (UserDefaults.standard.string(forKey: sourceAuthKey) ?? authIdentity(payload)) {
+            try requireIdle(profile)
             try profile.save(payload)
             UserDefaults.standard.set(authIdentity(payload), forKey: sourceAuthKey)
         } else {
@@ -305,10 +310,14 @@ enum AuthSwap$Codex {
         lock.lock()
         defer { lock.unlock() }
         let key = homeKey(home)
+        let target = try storage(at: home)
+        guard target.home.path == key, homeKey(home) == key else { throw Failure.busy }
         let restore = isSwapped && columnID.map { [defaultColumnID, activeColumnID].contains($0) } == true
         if restore || columnID == defaultColumnID {
             let base = try storage(at: baseHome)
             let backup = try storage(at: stashHome)
+            try requireIdle(base)
+            try requireIdle(backup)
             let keys = [activeIDKey, activeHomeKey, activePhysicalHomeKey]
             let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
             // Restore primary credentials before removing their backup. A
@@ -319,7 +328,7 @@ enum AuthSwap$Codex {
                 let primary = try backup.load(verifyingOwner: true)
                 try backup.delete()
                 removedBackup = primary
-                try operation(storage(at: home))
+                try operation(target)
             } catch {
                 if let primary = removedBackup { try backup.save(primary.data, backend: primary.backend) }
                 if restore {
@@ -334,17 +343,27 @@ enum AuthSwap$Codex {
             UserDefaults.standard.removeObject(forKey: stashStoreKey)
             UserDefaults.standard.removeObject(forKey: sourceAuthKey)
         } else {
-            try operation(storage(at: home))
+            try operation(target)
         }
         generations[key] = UUID()
         if let columnID { columnGenerations[columnID] = UUID() }
         renewals[key] = nil
         // The logical profile may have moved to another physical root while its
         // old request was in flight. Successful removal retires that owner too.
-        let retired = renewals.filter { $0.value.columnID == columnID }.map(\.key)
+        let retired = renewals.filter {
+            $0.value.columnID == columnID || $0.value.storage.home.path == target.home.path
+        }.map(\.key)
         for key in retired {
             generations[key] = UUID()
             renewals[key] = nil
+        }
+    }
+
+    /// Logical columns can route to another physical owner, notably primary's
+    /// backup. Fence the actual source/destination while its grant is in flight.
+    private static func requireIdle(_ storage: AuthStorage$Codex) throws {
+        guard !renewals.values.contains(where: { $0.storage.home.path == storage.home.path }) else {
+            throw Failure.busy
         }
     }
 
