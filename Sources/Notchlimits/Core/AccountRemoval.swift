@@ -98,6 +98,9 @@ enum AccountRemoval {
                     if shared {
                         // Other owners retain their shared configuration and fallback.
                         try deleteKeychainEntry(service: service)
+                        if service == AuthStorage$Claude.baseService {
+                            AuthStorage$Claude.recordSharedPrimaryRemoval()
+                        }
                     } else {
                         try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot, move: move) { moved in
                             try deleteClaudeCredentials(service: service, configDir: moved)

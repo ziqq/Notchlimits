@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Darwin
 
 /// Keep Desktop and CLI on the base CODEX_HOME while swapping only credentials.
 /// Projects and threads stay in place. The primary account waits in an internal
@@ -39,6 +40,8 @@ enum AuthSwap$Codex {
         let key: String
         let generation: UUID?
         let columnGeneration: UUID?
+        let sourceKey: String
+        let sourceGeneration: UUID?
         let storage: AuthStorage$Codex
         let record: AuthStorage$Codex.Record
     }
@@ -47,6 +50,8 @@ enum AuthSwap$Codex {
         let key: String
         let generation: UUID?
         let columnGeneration: UUID?
+        let sourceKey: String
+        let sourceGeneration: UUID?
     }
     private static var generations: [String: UUID] = [:]
     private static var columnGenerations: [String: UUID] = [:]
@@ -70,7 +75,7 @@ enum AuthSwap$Codex {
         if let path = UserDefaults.standard.string(forKey: activeHomeKey) {
             // Older versions could select a duplicate of the physical base home.
             // Its backup is the same grant, so it must never become a sleeping login.
-            if activeOwnerPath == homeKey(baseHome) { return defaultColumnID }
+            if let owner = activeOwnerPath, isBaseHome(URL(fileURLWithPath: owner)) { return defaultColumnID }
             let name = URL(fileURLWithPath: path).lastPathComponent
             if name.hasPrefix("profile:"), id == "codex:\(name)" {
                 return profileColumnID(name)
@@ -90,15 +95,85 @@ enum AuthSwap$Codex {
     static func liveHome(columnID: String, home: URL) -> URL {
         guard isSwapped else { return home }
         if columnID == defaultColumnID { return stashHome }
-        if columnID == activeColumnID || homeKey(home) == activeOwnerPath { return baseHome }
+        if columnID == activeColumnID { return baseHome }
+        if let owner = activeOwnerPath,
+           (try? sameOwner(home, URL(fileURLWithPath: owner))) == true { return baseHome }
         return home
     }
 
     static func isBaseHome(_ url: URL) -> Bool {
-        homeKey(url) == homeKey(baseHome)
+        (try? sameOwner(url, baseHome)) == true
     }
 
     private static func homeKey(_ home: URL) -> String { AuthStorage$Codex.canonicalPath(home) }
+
+    /// Keychain keeps native realpath keys. Only file grants share an owner
+    /// across Data-volume firmlink spellings of the same physical directory.
+    private static func fileOwnerKey(_ home: URL) -> String? {
+        var info = stat()
+        guard home.path.withCString({ Darwin.lstat($0, &info) }) == 0,
+              info.st_mode & S_IFMT == S_IFDIR else { return nil }
+        return "file:\(info.st_dev):\(info.st_ino)"
+    }
+
+    private static func usesFile(_ storage: AuthStorage$Codex) throws -> Bool {
+        switch storage.mode {
+        case .file: return true
+        case .auto: return try storage.load(verifyingOwner: true)?.backend == .file
+        case .keyring, .ephemeral: return false
+        }
+    }
+
+    private static func sameOwner(_ first: URL, _ second: URL) throws -> Bool {
+        if homeKey(first) == homeKey(second) { return true }
+        return try sameOwner(storage(at: first), storage(at: second))
+    }
+
+    private static func sameOwner(_ first: AuthStorage$Codex, _ second: AuthStorage$Codex) throws -> Bool {
+        if first.home.path == second.home.path { return true }
+        guard let owner = fileOwnerKey(first.home), owner == fileOwnerKey(second.home) else { return false }
+        return try usesFile(first) && usesFile(second)
+    }
+
+    private static func sourceKey(_ storage: AuthStorage$Codex, backend: AuthStorage$Codex.Backend) -> String {
+        backend == .file ? fileOwnerKey(storage.home) ?? storage.home.path : storage.home.path
+    }
+
+    private static func removesFile(_ storage: AuthStorage$Codex, backend: AuthStorage$Codex.Backend,
+                                    ownedBy other: AuthStorage$Codex) throws -> Bool {
+        guard backend == .keyring, let owner = fileOwnerKey(storage.home),
+              owner == fileOwnerKey(other.home) else { return false }
+        return try usesFile(other)
+    }
+
+    private static func refreshToken(_ data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (root["auth_mode"] as? String).map({ $0 == "chatgpt" }) ?? true,
+              let tokens = root["tokens"] as? [String: Any],
+              let token = tokens["refresh_token"] as? String, !token.isEmpty else { return nil }
+        return token
+    }
+
+    private struct SourceProof {
+        let selected: String
+        let backup: String?
+        let intended: String?
+
+        var isPending: Bool { intended != nil }
+        var identities: [String] { [selected, backup, intended].compactMap { $0 } }
+
+        func ownsSelected(_ identity: String) -> Bool { identity == selected || identity == intended }
+        func ownsBackup(_ identity: String) -> Bool { identity == backup || identity == intended }
+    }
+
+    /// A normal selection stores one digest. During cloned-session copyback,
+    /// three digests fence both atomic writes so a failed save can be retried.
+    private static func sourceProof() throws -> SourceProof? {
+        guard let value = UserDefaults.standard.object(forKey: sourceAuthKey) else { return nil }
+        if let identity = value as? String { return SourceProof(selected: identity, backup: nil, intended: nil) }
+        guard let journal = value as? [String], journal.count == 3 else { throw Failure.busy }
+        return SourceProof(selected: journal[0], backup: journal[1], intended: journal[2])
+    }
 
     /// Положить в `~/.codex` вход колонки. Приложение должно быть закрыто.
     static func activate(columnID: String, home: URL) throws {
@@ -121,16 +196,24 @@ enum AuthSwap$Codex {
         let source = try storage(at: incoming)
         try requireIdle(base)
         try requireIdle(source)
-        let payload = try source.load(verifyingOwner: true)?.data
+        let incomingRecord = try source.load(verifyingOwner: true)
+        var payload = incomingRecord?.data
         guard homeKey(incoming) == source.home.path else { throw Failure.busy }
         // An alias of the selected owner must not publish its old profile copy
         // over the newer native grant before copyback completes.
-        guard columnID == defaultColumnID || !isSwapped || source.home.path != activeOwnerPath else {
+        if columnID != defaultColumnID, try sameOwner(source, base) { throw Failure.busy }
+        if columnID != defaultColumnID, let incomingRecord,
+           try removesFile(source, backend: incomingRecord.backend, ownedBy: base) { throw Failure.busy }
+        if columnID != defaultColumnID, isSwapped, let active = activeOwnerPath,
+           try sameOwner(source, storage(at: URL(fileURLWithPath: active))) {
             throw Failure.busy
         }
         guard columnID == defaultColumnID || payload != nil else { throw Failure.missingAuth }
         try FileManager.default.createDirectory(at: baseHome, withIntermediateDirectories: true)
         let previous = try giveBackCurrent()
+        // Copyback can advance a primary backup that shared the selected grant.
+        // Publish that updated record instead of its pre-copyback token snapshot.
+        if columnID == defaultColumnID { payload = try source.load(verifyingOwner: true)?.data }
         if let payload { try base.save(payload) } else { try base.delete() }
         if columnID == defaultColumnID {
             // Do not forget a refused backup cleanup or report a completed switch.
@@ -176,9 +259,33 @@ enum AuthSwap$Codex {
         // its stale grant while the preferred Keychain owner is unavailable.
         guard let record = try source.load(verifyingOwner: true) else { return nil }
         guard homeKey(home) == key, homeKey(live) == source.home.path else { throw Failure.busy }
+        let nativeStorage = try storage(at: baseHome)
+        guard !(try sameOwner(source, nativeStorage)),
+              !(try removesFile(source, backend: record.backend, ownedBy: nativeStorage)) else { return nil }
+        if let active = activeOwnerPath, isSwapped {
+            let owner = try storage(at: URL(fileURLWithPath: active))
+            if try sameOwner(source, owner) || removesFile(source, backend: record.backend, ownedBy: owner) { return nil }
+        }
+        let sourceKey = sourceKey(source, backend: record.backend)
+        if let expected, expected.sourceKey != sourceKey || expected.sourceGeneration != generations[sourceKey] { return nil }
         if let expected, authIdentity(record.data) != authIdentity(expected.data) { return nil }
+        // A copied grant is still native-owned even in a different directory.
+        // Independent sessions of the same account have different refresh tokens.
+        if let token = refreshToken(record.data) {
+            if let native = try nativeStorage.load(verifyingOwner: true), refreshToken(native.data) == token { return nil }
+            let proof = isSwapped ? try sourceProof() : nil
+            if isSwapped, let identity = authIdentity(record.data),
+               proof?.identities.contains(identity) == true { return nil }
+            // Native refresh may already have advanced its token. The captured
+            // selected record still proves which original grant it owns.
+            if isSwapped, let active = activeOwnerPath,
+               let selected = try storage(at: URL(fileURLWithPath: active)).load(verifyingOwner: true),
+               let identity = authIdentity(selected.data), proof?.ownsSelected(identity) == true,
+               refreshToken(selected.data) == token { return nil }
+        }
         let renewal = Renewal(columnID: columnID, key: key, generation: generations[key],
                               columnGeneration: columnGenerations[columnID],
+                              sourceKey: sourceKey, sourceGeneration: generations[sourceKey],
                               storage: source, record: record)
         renewals[key] = renewal
         return renewal
@@ -207,8 +314,10 @@ enum AuthSwap$Codex {
         let key = renewal.key
         guard generations[key] == renewal.generation,
               columnGenerations[renewal.columnID] == renewal.columnGeneration,
+              generations[renewal.sourceKey] == renewal.sourceGeneration,
               renewals[key]?.id == renewal.id else { return false }
         let destination = renewal.storage
+        guard sourceKey(destination, backend: renewal.record.backend) == renewal.sourceKey else { return false }
         guard let record = try destination.load(backend: renewal.record.backend) else { return false }
         guard let updated = renewedAuth(record.data, usedRefreshToken: usedRefreshToken,
                                        tokens: tokens, now: Date()) else { return false }
@@ -258,7 +367,11 @@ enum AuthSwap$Codex {
             UserDefaults.standard.set(live.mode.rawValue, forKey: stashStoreKey)
             return record
         }
-        guard let payload, let path = UserDefaults.standard.string(forKey: activeHomeKey) else { return record }
+        let proof = try sourceProof()
+        guard let payload, let path = UserDefaults.standard.string(forKey: activeHomeKey) else {
+            guard proof?.isPending != true else { throw Failure.busy }
+            return record
+        }
         // Old selections have no physical marker. A canonical spelling remains
         // usable; an unpinned symlink cannot prove its original owner after an upgrade.
         let physical = UserDefaults.standard.string(forKey: activePhysicalHomeKey)
@@ -268,11 +381,29 @@ enum AuthSwap$Codex {
            let previous = try profile.load(verifyingOwner: true)?.data,
            accountID(payload) == accountID(previous),
            let identity = authIdentity(previous),
-           identity == (UserDefaults.standard.string(forKey: sourceAuthKey) ?? authIdentity(payload)) {
+           proof?.ownsSelected(identity) ?? (identity == authIdentity(payload)) {
             try requireIdle(profile)
+            let backup = try storage(at: stashHome)
+            let primary = try backup.load(verifyingOwner: true)
+            let backupIdentity = primary.flatMap { authIdentity($0.data) }
+            if proof?.isPending == true {
+                guard let backupIdentity, proof?.ownsBackup(backupIdentity) == true else { throw Failure.busy }
+            }
+            let originalRefresh = refreshToken(previous)
+            let sameGrant = originalRefresh != nil && primary.flatMap { refreshToken($0.data) } == originalRefresh
+            if proof?.isPending == true || sameGrant {
+                // These are copies of one proven session, rather than separate
+                // sessions of the same account. Preserve its native rotation in
+                // the primary backup before advancing the selected baseline.
+                guard let backupIdentity, let intended = authIdentity(payload) else { throw Failure.busy }
+                try requireIdle(backup)
+                UserDefaults.standard.set([identity, backupIdentity, intended], forKey: sourceAuthKey)
+                try backup.save(payload)
+            }
             try profile.save(payload)
             UserDefaults.standard.set(authIdentity(payload), forKey: sourceAuthKey)
         } else {
+            guard proof?.isPending != true else { throw Failure.busy }
             // Retain an unexpected native login without exporting a Keychain login to plaintext.
             let orphan = stashHome.deletingLastPathComponent().appendingPathComponent("orphaned-" + UUID().uuidString)
             try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
@@ -297,10 +428,12 @@ enum AuthSwap$Codex {
         let key = homeKey(home)
         let live = liveHome(columnID: columnID, home: home)
         let source = try storage(at: live)
-        guard let data = try source.load()?.data else { return nil }
+        guard let record = try source.load() else { return nil }
         guard homeKey(home) == key, homeKey(live) == source.home.path else { throw Failure.busy }
-        return AuthSnapshot(data: data, key: key, generation: generations[key],
-                            columnGeneration: columnGenerations[columnID])
+        let sourceKey = sourceKey(source, backend: record.backend)
+        return AuthSnapshot(data: record.data, key: key, generation: generations[key],
+                            columnGeneration: columnGenerations[columnID],
+                            sourceKey: sourceKey, sourceGeneration: generations[sourceKey])
     }
 
     static func hasAuth(home: URL) -> Bool { (try? storage(at: home))?.contains() ?? false }
@@ -312,6 +445,7 @@ enum AuthSwap$Codex {
         let key = homeKey(home)
         let target = try storage(at: home)
         guard target.home.path == key, homeKey(home) == key else { throw Failure.busy }
+        let fileOwner = fileOwnerKey(target.home)
         let restore = isSwapped && columnID.map { [defaultColumnID, activeColumnID].contains($0) } == true
         if restore || columnID == defaultColumnID {
             let base = try storage(at: baseHome)
@@ -346,12 +480,14 @@ enum AuthSwap$Codex {
             try operation(target)
         }
         generations[key] = UUID()
+        if let fileOwner { generations[fileOwner] = UUID() }
         if let columnID { columnGenerations[columnID] = UUID() }
         renewals[key] = nil
         // The logical profile may have moved to another physical root while its
         // old request was in flight. Successful removal retires that owner too.
         let retired = renewals.filter {
             $0.value.columnID == columnID || $0.value.storage.home.path == target.home.path
+                || $0.value.record.backend == .file && $0.value.sourceKey == fileOwner
         }.map(\.key)
         for key in retired {
             generations[key] = UUID()
@@ -362,8 +498,12 @@ enum AuthSwap$Codex {
     /// Logical columns can route to another physical owner, notably primary's
     /// backup. Fence the actual source/destination while its grant is in flight.
     private static func requireIdle(_ storage: AuthStorage$Codex) throws {
-        guard !renewals.values.contains(where: { $0.storage.home.path == storage.home.path }) else {
-            throw Failure.busy
+        for renewal in renewals.values {
+            if renewal.storage.home.path == storage.home.path { throw Failure.busy }
+            guard let owner = fileOwnerKey(storage.home), owner == fileOwnerKey(renewal.storage.home) else { continue }
+            // Keychain saves also remove auth.json. A pending file grant must
+            // survive that cleanup; independent Keychain records remain separate.
+            if try renewal.record.backend == .file || usesFile(storage) { throw Failure.busy }
         }
     }
 

@@ -59,7 +59,7 @@ actor Provider$Claude: UsageProvider {
         guard let token = resolved else {
             if let issue = issues[service] { return .failure(issue) }
             let noLogin = await Task.detached(priority: .utility) {
-                AuthStorage$Claude.hasNoLogin(service: service)
+                AuthStorage$Claude.hasNoLogin(service: service, verifyingOwner: true)
             }.value
             guard removalGenerations[service] == generation else { return .reauth(L.t("column.reauth")) }
             return noLogin ? .notAnAccount : .reauth(L.t("column.reauth"))
