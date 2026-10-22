@@ -10,6 +10,7 @@ actor Provider$Claude: UsageProvider {
         let value: String
         let expiresAt: Date?
         let plan: String?
+        let origin: AuthStorage$Claude.Credentials
 
         var isUsable: Bool {
             guard let expiresAt else { return true }
@@ -52,14 +53,19 @@ actor Provider$Claude: UsageProvider {
             return .failure(L.t("error.unknownSource"))
         }
 
-        guard let token = await token(for: service) else {
+        let generation = removalGenerations[service]
+        let resolved = await token(for: service)
+        guard removalGenerations[service] == generation else { return .reauth(L.t("column.reauth")) }
+        guard let token = resolved else {
             if let issue = issues[service] { return .failure(issue) }
             let noLogin = await Task.detached(priority: .utility) {
                 AuthStorage$Claude.hasNoLogin(service: service)
             }.value
+            guard removalGenerations[service] == generation else { return .reauth(L.t("column.reauth")) }
             return noLogin ? .notAnAccount : .reauth(L.t("column.reauth"))
         }
 
+        let origin = token.origin
         // Почту API не отдаёт. Обычно берём из discovery (конфиг/снимок), иначе
         // читаем сами из конфига CLI. Так библиотечные колонки без папки конфига
         // тоже показывают верную почту.
@@ -67,7 +73,11 @@ actor Provider$Claude: UsageProvider {
         if let discovered = account.email {
             resolvedEmail = discovered
         } else {
-            resolvedEmail = await email(for: service, configDir: configDir)
+            resolvedEmail = await email(for: service, configDir: configDir,
+                                        generation: generation, origin: origin)
+        }
+        guard isCurrent(service, generation: generation, origin: origin) else {
+            return .reauth(L.t("column.reauth"))
         }
         let subtitle = Self.subtitle(plan: token.plan, email: resolvedEmail)
 
@@ -79,7 +89,13 @@ actor Provider$Claude: UsageProvider {
             "Accept": "application/json"
         ]
 
-        switch await HTTPClient.shared.get(endpoint, headers: headers) {
+        let response = await HTTPClient.shared.get(endpoint, headers: headers)
+        // A late usage response belongs to the exact login that sent it. The
+        // replacement may reuse its access token with a different refresh token.
+        guard isCurrent(service, generation: generation, origin: origin) else {
+            return .reauth(L.t("column.reauth"))
+        }
+        switch response {
         case .failure(let error):
             if case .transport(let message) = error { return .failure(message) }
             return .failure(L.t("error.network"))
@@ -116,7 +132,9 @@ actor Provider$Claude: UsageProvider {
             if let current = inFlight[service] {
                 running = current
             } else {
-                running = Resolution(generation: generation, task: Task { await resolveToken(for: service) })
+                running = Resolution(generation: generation, task: Task {
+                    await resolveToken(for: service, generation: generation)
+                })
                 inFlight[service] = running
             }
             let token = await running.task.value
@@ -128,8 +146,8 @@ actor Provider$Claude: UsageProvider {
         return nil
     }
 
-    private func resolveToken(for service: String) async -> CachedToken? {
-        let generation = removalGenerations[service]
+    private func resolveToken(for service: String, generation: UUID?) async -> CachedToken? {
+        guard removalGenerations[service] == generation else { return nil }
         issues[service] = nil
         if terminating && unsaved[service] == nil {
             issues[service] = L.t("error.keychainWrite")
@@ -137,20 +155,24 @@ actor Provider$Claude: UsageProvider {
         }
         // Authorize interactive reads before taking a lease. A Keychain dialog
         // must not suspend the critical section beyond the CLI's lease timeout.
-        if let observed = await read(service) {
+        let observed = await read(service)
+        guard removalGenerations[service] == generation else { return nil }
+        if let observed {
             if unsaved[service] == nil, let cached = adopt(observed, service: service) { return cached }
         } else if unsaved[service] == nil {
             return nil
         }
         guard AuthStorage$Claude.supportsStorageLock else { return nil }
 
-        guard let lease = await Task.detached(priority: .utility, operation: {
+        let acquired = await Task.detached(priority: .utility, operation: {
             AuthStorage$Claude.refreshLock(service: service)
-        }).value else {
+        }).value
+        defer { acquired?.release() }
+        guard removalGenerations[service] == generation else { return nil }
+        guard let lease = acquired else {
             issues[service] = L.t("error.keychainWrite")
             return nil
         }
-        defer { lease.release() }
 
         // Another process may have refreshed or signed in while we waited.
         guard lease.isHeld, removalGenerations[service] == generation else { return nil }
@@ -169,7 +191,9 @@ actor Provider$Claude: UsageProvider {
                 return nil
             }
         }
-        guard let credentials = await read(service, interactive: false, verifyingOwner: true) else {
+        let current = await read(service, interactive: false, verifyingOwner: true)
+        guard removalGenerations[service] == generation else { return nil }
+        guard let credentials = current else {
             issues[service] = L.t("error.keychainWrite")
             return nil
         }
@@ -180,7 +204,8 @@ actor Provider$Claude: UsageProvider {
         let writable = await Task.detached(priority: .utility) {
             AuthStorage$Claude.canWrite(service: service, renewalLock: lease)
         }.value
-        guard writable, lease.isHeld, !terminating, removalGenerations[service] == generation else {
+        guard removalGenerations[service] == generation else { return nil }
+        guard writable, lease.isHeld, !terminating else {
             issues[service] = L.t("error.keychainWrite")
             return nil
         }
@@ -209,11 +234,14 @@ actor Provider$Claude: UsageProvider {
                 case .changed:
                     unsaved[service] = nil
                     forget(service)
-                    guard let latest = await read(service, interactive: false) else { return nil }
+                    let latest = await read(service, interactive: false)
+                    guard removalGenerations[service] == generation, let latest else { return nil }
                     return adopt(latest, service: service)
                 }
             }
-            guard lease.isHeld, let latest = await read(service, interactive: false) else {
+            let current = lease.isHeld ? await read(service, interactive: false) : nil
+            guard removalGenerations[service] == generation else { return nil }
+            guard lease.isHeld, let latest = current else {
                 issues[service] = L.t("error.keychainWrite")
                 return nil
             }
@@ -223,20 +251,28 @@ actor Provider$Claude: UsageProvider {
                 forget(service)
                 return adopt(latest, service: service)
             }
-            let cached = CachedToken(value: fresh.accessToken, expiresAt: fresh.expiresAt, plan: credentials.plan)
+            let cached = CachedToken(value: fresh.accessToken, expiresAt: fresh.expiresAt,
+                                     plan: credentials.plan, origin: latest)
             rejected[service] = nil
             tokens[service] = cached
             origins[service] = latest
             return cached
 
         case .rejected:
-            guard let latest = await read(service, interactive: false) else { return nil }
+            let latest = await read(service, interactive: false)
+            guard removalGenerations[service] == generation, let latest else { return nil }
             return adopt(latest, service: service)
 
         case .unavailable:
             issues[service] = L.t("error.network")
             return nil
         }
+    }
+
+    private func isCurrent(_ service: String, generation: UUID?,
+                           origin: AuthStorage$Claude.Credentials) -> Bool {
+        removalGenerations[service] == generation
+            && origins[service]?.hasSameTokens(as: origin) == true
     }
 
     private func forget(_ service: String) {
@@ -283,6 +319,7 @@ actor Provider$Claude: UsageProvider {
         var delay: UInt64 = 250_000_000
         while lease.isHeld && removalGenerations[service] == generation {
             let result = await write(pending, to: service, lease: lease)
+            guard removalGenerations[service] == generation else { return .failed }
             switch result {
             case .saved, .changed:
                 issues[service] = nil
@@ -330,7 +367,7 @@ actor Provider$Claude: UsageProvider {
     private static func cache(_ credentials: AuthStorage$Claude.Credentials) -> CachedToken? {
         let cached = CachedToken(value: credentials.accessToken,
                                  expiresAt: credentials.expiresAt,
-                                 plan: credentials.plan)
+                                 plan: credentials.plan, origin: credentials)
         return cached.isUsable ? cached : nil
     }
 
@@ -339,11 +376,13 @@ actor Provider$Claude: UsageProvider {
     /// Почта профиля. Читаем из конфига CLI `~/.claude.json`
     /// (`oauthAccount.emailAddress`) — обычный файл, без Keychain и подпроцессов,
     /// поэтому никаких диалогов пароля. Раз прочитав, держим в памяти.
-    private func email(for service: String, configDir: URL?) async -> String? {
+    private func email(for service: String, configDir: URL?, generation: UUID?,
+                       origin: AuthStorage$Claude.Credentials) async -> String? {
         if let cached = emails[service] { return cached.isEmpty ? nil : cached }
         let email = await Task.detached(priority: .utility) {
             Self.email(configDir: configDir)
         }.value
+        guard isCurrent(service, generation: generation, origin: origin) else { return nil }
         emails[service] = email ?? ""
         return email
     }

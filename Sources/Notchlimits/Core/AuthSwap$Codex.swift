@@ -26,6 +26,7 @@ enum AuthSwap$Codex {
 
     private static let activeIDKey = "codexAppAccountID"
     private static let activeHomeKey = "codexAppAccountHome"
+    private static let activePhysicalHomeKey = "codexAppAccountPhysicalHome"
     private static let stashStoreKey = "codexAppStashStore"
     private static let sourceAuthKey = "codexAppSourceAuth"
 
@@ -69,7 +70,7 @@ enum AuthSwap$Codex {
         if let path = UserDefaults.standard.string(forKey: activeHomeKey) {
             // Older versions could select a duplicate of the physical base home.
             // Its backup is the same grant, so it must never become a sleeping login.
-            if isBaseHome(URL(fileURLWithPath: path)) { return defaultColumnID }
+            if activeOwnerPath == homeKey(baseHome) { return defaultColumnID }
             let name = URL(fileURLWithPath: path).lastPathComponent
             if name.hasPrefix("profile:"), id == "codex:\(name)" {
                 return profileColumnID(name)
@@ -80,11 +81,16 @@ enum AuthSwap$Codex {
 
     static var isSwapped: Bool { activeColumnID != defaultColumnID }
 
+    private static var activeOwnerPath: String? {
+        UserDefaults.standard.string(forKey: activePhysicalHomeKey)
+            ?? UserDefaults.standard.string(forKey: activeHomeKey).map { homeKey(URL(fileURLWithPath: $0)) }
+    }
+
     /// Папка, где сейчас лежит `auth.json` колонки (`home` — её собственная).
     static func liveHome(columnID: String, home: URL) -> URL {
         guard isSwapped else { return home }
-        if columnID == activeColumnID { return baseHome }
         if columnID == defaultColumnID { return stashHome }
+        if columnID == activeColumnID || homeKey(home) == activeOwnerPath { return baseHome }
         return home
     }
 
@@ -112,7 +118,14 @@ enum AuthSwap$Codex {
             throw Failure.busy
         }
         let incoming = columnID == defaultColumnID ? stashHome : home
-        let payload = try storage(at: incoming).load(verifyingOwner: true)?.data
+        let source = try storage(at: incoming)
+        let payload = try source.load(verifyingOwner: true)?.data
+        guard homeKey(incoming) == source.home.path else { throw Failure.busy }
+        // An alias of the selected owner must not publish its old profile copy
+        // over the newer native grant before copyback completes.
+        guard columnID == defaultColumnID || !isSwapped || source.home.path != activeOwnerPath else {
+            throw Failure.busy
+        }
         guard columnID == defaultColumnID || payload != nil else { throw Failure.missingAuth }
         try FileManager.default.createDirectory(at: baseHome, withIntermediateDirectories: true)
         let previous = try giveBackCurrent()
@@ -127,11 +140,13 @@ enum AuthSwap$Codex {
             }
             UserDefaults.standard.removeObject(forKey: activeIDKey)
             UserDefaults.standard.removeObject(forKey: activeHomeKey)
+            UserDefaults.standard.removeObject(forKey: activePhysicalHomeKey)
             if !keepBackup { UserDefaults.standard.removeObject(forKey: sourceAuthKey) }
             if !keepBackup { UserDefaults.standard.removeObject(forKey: stashStoreKey) }
         } else {
             UserDefaults.standard.set(columnID, forKey: activeIDKey)
             UserDefaults.standard.set(home.path, forKey: activeHomeKey)
+            UserDefaults.standard.set(source.home.path, forKey: activePhysicalHomeKey)
             UserDefaults.standard.set(payload.flatMap(authIdentity), forKey: sourceAuthKey)
         }
         return previous
@@ -240,8 +255,13 @@ enum AuthSwap$Codex {
             return record
         }
         guard let payload, let path = UserDefaults.standard.string(forKey: activeHomeKey) else { return record }
-        let profile = try storage(at: URL(fileURLWithPath: path))
-        if let previous = try profile.load(verifyingOwner: true)?.data,
+        // Old selections have no physical marker. A canonical spelling remains
+        // usable; an unpinned symlink cannot prove its original owner after an upgrade.
+        let physical = UserDefaults.standard.string(forKey: activePhysicalHomeKey)
+            ?? (homeKey(URL(fileURLWithPath: path)) == path ? path : nil)
+        let profile = try physical.map { try storage(at: URL(fileURLWithPath: $0)) }
+        if let profile, profile.home.path == physical,
+           let previous = try profile.load(verifyingOwner: true)?.data,
            accountID(payload) == accountID(previous),
            let identity = authIdentity(previous),
            identity == (UserDefaults.standard.string(forKey: sourceAuthKey) ?? authIdentity(payload)) {
@@ -289,7 +309,7 @@ enum AuthSwap$Codex {
         if restore || columnID == defaultColumnID {
             let base = try storage(at: baseHome)
             let backup = try storage(at: stashHome)
-            let keys = [activeIDKey, activeHomeKey]
+            let keys = [activeIDKey, activeHomeKey, activePhysicalHomeKey]
             let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
             // Restore primary credentials before removing their backup. A
             // refused cleanup must precede destructive profile deletion.

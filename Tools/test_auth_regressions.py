@@ -1000,3 +1000,64 @@ final class NSMenuItem { var representedObject: Any? }
 
     def test_claude_stub_later_login_is_discovered_control(self):
         self.check_scenario("claude-stub-later-login")
+
+
+    def test_codex_rollback_preserves_new_cli_file(self):
+        self.check_scenario("codex-rollback-new-cli-file")
+
+    def test_codex_rollback_preserves_new_cli_symlink(self):
+        self.check_scenario("codex-rollback-new-cli-symlink")
+
+    def test_codex_rollback_restores_missing_file_control(self):
+        self.check_scenario("codex-rollback-missing-file-control")
+
+    def test_codex_active_alias_skips_file_renewal(self):
+        self.check_scenario("codex-active-alias-file")
+
+    def test_codex_active_alias_skips_keyring_renewal(self):
+        self.check_scenario("codex-active-alias-keyring")
+
+    def test_codex_active_alias_skips_auto_renewal(self):
+        self.check_scenario("codex-active-alias-auto")
+
+    def test_codex_sleeping_alias_renews_control(self):
+        self.check_scenario("codex-sleeping-alias-control")
+
+    def test_codex_copyback_pins_file_owner(self):
+        self.check_scenario("codex-copyback-pinned-file")
+
+    def test_codex_copyback_pins_keyring_owner(self):
+        self.check_scenario("codex-copyback-pinned-keyring")
+
+    def test_codex_copyback_pins_auto_owner(self):
+        self.check_scenario("codex-copyback-pinned-auto")
+
+    def test_codex_copyback_stable_symlink_control(self):
+        self.check_scenario("codex-copyback-stable-symlink-control")
+
+    def test_codex_copyback_legacy_canonical_control(self):
+        self.check_scenario("codex-copyback-legacy-canonical-control")
+
+    def test_codex_copyback_legacy_symlink_preserves_both_owners(self):
+        self.check_scenario("codex-copyback-legacy-symlink")
+
+    def test_codex_refused_removal_restores_pinned_owner(self):
+        self.check_scenario("codex-copyback-pinned-rollback")
+
+    def test_codex_retarget_to_base_retains_selected_owner(self):
+        self.check_scenario("codex-retarget-to-base-pinned")
+
+    def test_claude_retired_401_preserves_new_refresh_grant(self):
+        self.check_scenario("claude-retired-401-new-refresh")
+
+    def test_claude_retired_401_preserves_same_grant_readd(self):
+        self.check_scenario("claude-retired-401-same-grant")
+
+    def test_claude_old_401_preserves_relogin_with_same_access(self):
+        self.check_scenario("claude-retired-401-relogin")
+
+    def test_claude_old_401_preserves_new_access_control(self):
+        self.check_scenario("claude-retired-401-new-access-control")
+
+    def test_claude_current_401_still_renews_control(self):
+        self.check_scenario("claude-current-401-control")
