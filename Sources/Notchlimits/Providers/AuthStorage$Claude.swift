@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import CryptoKit
 import Security
 
@@ -63,6 +64,28 @@ enum AuthStorage$Claude {
             || credentialFile(service: service).map { FileManager.default.fileExists(atPath: $0.path) } == true
     }
 
+    private static let removedPrimaryFallbackKey = "claudeRemovedPrimaryFallback"
+
+    /// Remember only the retained file's metadata while removal owns the native
+    /// locks. A later CLI login must be discovered even when it uses this file.
+    static func recordSharedPrimaryRemoval() {
+        let file = ProfileDirectories.home.appendingPathComponent(".claude/.credentials.json")
+        UserDefaults.standard.set(fallbackIdentity(file), forKey: removedPrimaryFallbackKey)
+    }
+
+    private static func fallbackIdentity(_ file: URL) -> [String: String]? {
+        let path = file.resolvingSymlinksInPath().path
+        var info = stat()
+        guard path.withCString({ Darwin.lstat($0, &info) }) == 0,
+              (info.st_mode & S_IFMT) == S_IFREG else { return nil }
+        return ["path": path,
+                "device": String(info.st_dev), "inode": String(info.st_ino),
+                "size": String(info.st_size),
+                "birth": "\(info.st_birthtimespec.tv_sec):\(info.st_birthtimespec.tv_nsec)",
+                "modified": "\(info.st_mtimespec.tv_sec):\(info.st_mtimespec.tv_nsec)",
+                "changed": "\(info.st_ctimespec.tv_sec):\(info.st_ctimespec.tv_nsec)"]
+    }
+
     /// Записи с датой последнего изменения. Только атрибуты — секрет не
     /// читается, диалога пароля не будет.
     static func items() -> [(service: String, modified: Date?)] {
@@ -81,12 +104,18 @@ enum AuthStorage$Claude {
             guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path) else { continue }
             let service: String
             if directory == directories[0] {
-                // A surviving hashed owner already accounts for this shared
-                // fallback. Do not recreate a removed primary column for it.
-                service = found.keys.contains(baseService) ? baseService
-                    : found.keys.first(where: {
-                        configDirectory(for: $0).map(ProfileDirectories.isClaudeBase) == true
-                    }) ?? baseService
+                // Suppress only the unchanged fallback retained by explicit
+                // primary removal. A new native file login is a primary owner.
+                if !found.keys.contains(baseService),
+                   let shared = found.keys.first(where: {
+                       configDirectory(for: $0).map(ProfileDirectories.isClaudeBase) == true
+                   }),
+                   let retired = UserDefaults.standard.dictionary(forKey: removedPrimaryFallbackKey) as? [String: String],
+                   let current = fallbackIdentity(file), retired == current {
+                    service = shared
+                } else {
+                    service = baseService
+                }
             } else {
                 service = found.keys.first(where: { configDirectory(for: $0) == directory })
                     ?? baseService + "-" + String(sha256Hex(directory.path).prefix(8))

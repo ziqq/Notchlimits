@@ -1136,3 +1136,138 @@ final class NSMenuItem { var representedObject: Any? }
 
     def test_codex_retired_success_new_grant_control(self):
         self.check_scenario("codex-retired-success-new-grant-control")
+
+    def test_codex_firmlink_active_file(self):
+        self.check_scenario("codex-firmlink-active-file")
+
+    def test_codex_firmlink_base_file(self):
+        self.check_scenario("codex-firmlink-base-file")
+
+    def test_codex_firmlink_active_auto_fallback(self):
+        self.check_scenario("codex-firmlink-active-auto-fallback")
+
+    def test_codex_firmlink_sleeping_control(self):
+        self.check_scenario("codex-firmlink-sleeping-control")
+
+    def test_codex_firmlink_independent_keyring_control(self):
+        self.check_scenario("codex-firmlink-independent-keyring-control")
+
+    def test_codex_native_grant_copy_file(self):
+        self.check_scenario("codex-native-grant-copy-file")
+
+    def test_codex_native_grant_copy_keyring(self):
+        self.check_scenario("codex-native-grant-copy-keyring")
+
+    def test_codex_native_grant_copy_auto(self):
+        self.check_scenario("codex-native-grant-copy-auto")
+
+    def test_codex_independent_same_account_control(self):
+        self.check_scenario("codex-independent-same-account-control")
+
+    def test_codex_firmlink_backup_restore(self):
+        self.check_scenario("codex-firmlink-backup-restore")
+
+    def test_codex_firmlink_backup_pending(self):
+        self.check_scenario("codex-firmlink-backup-pending")
+
+    def test_codex_firmlink_backup_remove(self):
+        self.check_scenario("codex-firmlink-backup-remove")
+
+    def test_codex_firmlink_retired_usage(self):
+        self.check_scenario("codex-firmlink-retired-usage")
+
+    def test_codex_firmlink_current_usage_control(self):
+        self.check_scenario("codex-firmlink-current-usage-control")
+
+    def test_codex_renewal_directory_generation(self):
+        self.check_scenario("codex-renewal-directory-generation")
+
+    def test_codex_renewal_atomic_file_control(self):
+        self.check_scenario("codex-renewal-atomic-file-control")
+
+    def test_claude_new_main_file_login_after_shared_removal_is_rediscovered(self):
+        self.check_scenario("claude-main-file-readd")
+
+    def test_claude_same_grant_main_file_rewrite_after_shared_removal_is_rediscovered(self):
+        self.check_scenario("claude-main-file-same-grant-readd")
+
+    def test_claude_first_main_file_login_with_shared_hashed_owner_is_discovered(self):
+        self.check_scenario("claude-main-file-first-shared")
+
+    def test_claude_new_main_keychain_login_control(self):
+        self.check_scenario("claude-main-keychain-readd-control")
+
+    def test_claude_new_main_file_login_without_shared_owner_control(self):
+        self.check_scenario("claude-main-file-unshared-control")
+
+    def test_claude_unchanged_shared_fallback_does_not_resurrect_primary_control(self):
+        self.check_scenario("claude-main-file-unchanged-shared-control")
+
+    def test_claude_denied_preferred_owner_with_stub_fallback_keeps_polling_interval(self):
+        self.check_scenario("claude-preferred-denied-stub-polling")
+
+    def test_claude_malformed_preferred_owner_with_stub_fallback_keeps_polling_interval(self):
+        self.check_scenario("claude-preferred-malformed-stub-polling")
+
+    def test_claude_denied_preferred_owner_with_valid_fallback_control(self):
+        self.check_scenario("claude-preferred-valid-fallback-control")
+
+    def test_claude_genuine_keychain_stub_leaves_polling_control(self):
+        self.check_scenario("claude-preferred-keychain-stub-control")
+
+    def test_claude_genuine_file_only_stub_leaves_polling_control(self):
+        self.check_scenario("claude-preferred-file-stub-control")
+
+    def test_codex_firmlink_keyring_refresh_preserves_native_file_fallback(self):
+        self.check_scenario("codex-firmlink-mixed-auto-cleanup")
+
+    def test_codex_firmlink_keyring_refresh_preserves_selected_file_fallback(self):
+        self.check_scenario("codex-firmlink-mixed-auto-selected")
+
+    def test_codex_firmlink_auto_keyring_sessions_remain_independent_control(self):
+        self.check_scenario("codex-firmlink-mixed-auto-keyring-control")
+
+    def test_codex_native_rotation_file_copied_restore(self):
+        self.check_scenario("codex-native-rotation-file-copied-restore")
+
+    def test_codex_native_rotation_file_independent_control(self):
+        self.check_scenario("codex-native-rotation-file-independent-control")
+
+    def test_codex_native_rotation_keyring_copied_restore(self):
+        self.check_scenario("codex-native-rotation-keyring-copied-restore")
+
+    def test_codex_native_rotation_keyring_independent_control(self):
+        self.check_scenario("codex-native-rotation-keyring-independent-control")
+
+    def test_codex_native_rotation_auto_copied_restore(self):
+        self.check_scenario("codex-native-rotation-auto-copied-restore")
+
+    def test_codex_native_rotation_auto_independent_control(self):
+        self.check_scenario("codex-native-rotation-auto-independent-control")
+
+    def test_codex_native_rotation_copied_poll(self):
+        self.check_scenario("codex-native-rotation-copied-poll")
+
+    def test_codex_clone_copyback_retry(self):
+        self.check_scenario("codex-clone-copyback-retry")
+
+    def test_codex_clone_copyback_independent_control(self):
+        self.check_scenario("codex-clone-copyback-independent-control")
+
+    def test_codex_clone_copyback_new_backup(self):
+        self.check_scenario("codex-clone-copyback-new-backup")
+
+    def test_codex_clone_copyback_new_profile(self):
+        self.check_scenario("codex-clone-copyback-new-profile")
+
+    def test_codex_mixed_auto_activation_file(self):
+        self.check_scenario("codex-mixed-auto-activation-file")
+
+    def test_codex_mixed_auto_activation_keyring_control(self):
+        self.check_scenario("codex-mixed-auto-activation-keyring-control")
+
+    def test_codex_clone_copyback_pending_poll(self):
+        self.check_scenario("codex-clone-copyback-pending-poll")
+
+    def test_codex_clone_copyback_native_logout(self):
+        self.check_scenario("codex-clone-copyback-native-logout")
