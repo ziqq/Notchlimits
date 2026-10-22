@@ -120,12 +120,25 @@ struct AuthStorage$Codex {
             let status = AuthStorage$Claude.access(interactive: false) { SecItemDelete(query as CFDictionary) }
             guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.keychain(status) }
         } catch {
-            if let backup,
-               !FileManager.default.createFile(atPath: file.path, contents: backup, attributes: [.posixPermissions: 0o600]) {
-                throw CocoaError(.fileWriteUnknown)
-            }
+            if let backup { try restoreFile(backup, at: file) }
             throw error
         }
+    }
+
+    private func restoreFile(_ data: Data, at file: URL) throws {
+        var template = Array(file.deletingLastPathComponent()
+            .appendingPathComponent(".auth-restore-XXXXXX").path.utf8CString)
+        let descriptor = mkstemp(&template)
+        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        let prepared = String(cString: template)
+        defer { _ = unlink(prepared) }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        try handle.write(contentsOf: data)
+        try handle.close()
+        // Publish only a complete private backup. A CLI login that appeared
+        // during Keychain deletion owns the path and must remain untouched.
+        if renameatx_np(AT_FDCWD, prepared, AT_FDCWD, file.path, UInt32(RENAME_EXCL)) == 0 { return }
+        guard errno == EEXIST else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
     }
 
     private func loadFile() throws -> Record? {
