@@ -109,6 +109,27 @@ enum AuthSwap$Codex {
         (try? sameOwner(url, baseHome)) == true
     }
 
+    /// A duplicate primary owner is not another account. Native Keychain
+    /// namespaces remain distinct even when their directories share an inode.
+    static func isPrimaryBackup(_ url: URL) -> Bool {
+        (try? sameOwner(url, stashHome)) == true
+    }
+
+    /// Removing a directory also removes every backup below it. Match physical
+    /// ancestors so Data-volume aliases cannot bypass the reserved owner.
+    static func containsPrimaryBackup(_ url: URL) -> Bool {
+        let candidate = URL(fileURLWithPath: homeKey(url))
+        var backup = URL(fileURLWithPath: homeKey(stashHome))
+        let prefix = candidate.path.hasSuffix("/") ? candidate.path : candidate.path + "/"
+        if backup.path == candidate.path || backup.path.hasPrefix(prefix) { return true }
+        guard let owner = fileOwnerKey(candidate) else { return false }
+        while backup.path != "/" {
+            if owner == fileOwnerKey(backup) { return true }
+            backup.deleteLastPathComponent()
+        }
+        return false
+    }
+
     private static func homeKey(_ home: URL) -> String { AuthStorage$Codex.canonicalPath(home) }
 
     /// Keychain keeps native realpath keys. Only file grants share an owner
@@ -131,7 +152,8 @@ enum AuthSwap$Codex {
     /// Keychain cleanup must preserve a file used through another native key.
     /// Callers already hold the swap lock; do not acquire it recursively here.
     static func fileIsShared(home: URL, fileHome: URL) -> Bool {
-        for candidate in otherHomes(home: home, directory: fileHome) {
+        guard let homes = try? otherHomes(home: home, directory: fileHome) else { return true }
+        for candidate in homes {
             do {
                 if try usesFile(storage(at: candidate)) { return true }
             } catch {
@@ -143,7 +165,8 @@ enum AuthSwap$Codex {
     }
 
     static func directoryIsShared(home: URL, directory: URL) -> Bool {
-        for candidate in otherHomes(home: home, directory: directory) {
+        guard let homes = try? otherHomes(home: home, directory: directory) else { return true }
+        for candidate in homes {
             do {
                 if try storage(at: candidate).load(verifyingOwner: true) != nil { return true }
             } catch { return true }
@@ -151,16 +174,21 @@ enum AuthSwap$Codex {
         return false
     }
 
-    private static func otherHomes(home: URL, directory: URL) -> [URL] {
+    private static func otherHomes(home: URL, directory: URL) throws -> [URL] {
         let physical = URL(fileURLWithPath: homeKey(directory))
         guard let owner = fileOwnerKey(physical) else { return [] }
         let root = ProfileDirectories.codexRoot
         // Directory metadata excludes child symlinks. Ownership checks must
         // include those native namespaces before moving their shared target.
-        let entries = (try? FileManager.default.contentsOfDirectory(
-            at: root.resolvingSymlinksInPath(), includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        )) ?? []
+        let entries: [URL]
+        do {
+            entries = try FileManager.default.contentsOfDirectory(
+                at: root.resolvingSymlinksInPath(), includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            entries = []
+        }
         var homes = [baseHome, stashHome] + entries.map {
             root.appendingPathComponent($0.lastPathComponent, isDirectory: true)
         }
@@ -501,6 +529,11 @@ enum AuthSwap$Codex {
         let key = homeKey(home)
         let target = try storage(at: home)
         guard target.home.path == key, homeKey(home) == key else { throw Failure.busy }
+        // Stale discovery or a caller without a column ID cannot authorize
+        // deleting the primary through another name for its current backup.
+        // The proven primary transaction removes credentials, never its home.
+        guard !containsPrimaryBackup(target.home)
+            || columnID == defaultColumnID && isBaseHome(target.home) else { throw Failure.busy }
         let fileOwner = fileOwnerKey(target.home)
         let restore = isSwapped && columnID.map { [defaultColumnID, activeColumnID].contains($0) } == true
         if restore || columnID == defaultColumnID {

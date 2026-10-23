@@ -122,8 +122,13 @@ actor Renewal$Codex {
         let tokens: OAuth$Codex.Tokens
     }
 
+    private struct Attempt {
+        let result: Result
+        let data: Data
+    }
+
     /// Учитываем и запрос в полёте: actor допускает другой вызов на время await.
-    private var attempts: [String: Result] = [:]
+    private var attempts: [String: Attempt] = [:]
     /// Живая копия после ротации, если запись auth.json не удалась.
     private var pending: [String: Pending] = [:]
     private var inFlight: Set<UUID> = []
@@ -149,8 +154,10 @@ actor Renewal$Codex {
                                expiresAt: Provider$Codex.parseAuth(renewal.record.data)?.expiresAt,
                                force: force, now: Date())
         else { return .skipped }
-        if let result = attempts[refreshToken] { return result }
-        attempts[refreshToken] = .unavailable
+        if let attempt = attempts[refreshToken] {
+            return currentResult(attempt, renewal: renewal, home: home)
+        }
+        attempts[refreshToken] = Attempt(result: .unavailable, data: renewal.record.data)
         inFlight.insert(renewal.id)
         defer { inFlight.remove(renewal.id) }
 
@@ -159,9 +166,9 @@ actor Renewal$Codex {
         // its destination. Only a known temporary refusal permits another POST.
         switch response {
         case .success, .uncertain:
-            attempts[refreshToken] = .uncertain
+            attempts[refreshToken] = Attempt(result: .uncertain, data: renewal.record.data)
         case .rejected:
-            attempts[refreshToken] = .rejected
+            attempts[refreshToken] = Attempt(result: .rejected, data: renewal.record.data)
         case .unavailable:
             attempts[refreshToken] = nil
         }
@@ -172,17 +179,27 @@ actor Renewal$Codex {
             pending[columnID] = saved
             return persist(saved, columnID: columnID) ?? .renewed
         case .rejected:
-            // Пока мы ходили, файл мог обновить CLI в этом профиле.
-            let current = AuthSwap$Codex.liveHome(columnID: columnID, home: home)
-            if let latest = Self.refreshToken(current.appendingPathComponent("auth.json")),
-               latest != refreshToken {
-                return .renewed
-            }
-            return .rejected
+            return currentResult(Attempt(result: .rejected, data: renewal.record.data), renewal: renewal, home: home)
         case .unavailable:
             return .unavailable
         case .uncertain:
-            return .uncertain
+            return currentResult(Attempt(result: .uncertain, data: renewal.record.data), renewal: renewal, home: home)
+        }
+    }
+
+    /// Quarantine the grant across homes, but report failure only for the session
+    /// that submitted it. A fresh CLI access token can still serve usage even
+    /// when its unchanged refresh grant cannot safely be posted again.
+    private func currentResult(_ attempt: Attempt, renewal: AuthSwap$Codex.Renewal, home: URL) -> Result {
+        guard attempt.result == .uncertain || attempt.result == .rejected else { return attempt.result }
+        let snapshot = AuthSwap$Codex.AuthSnapshot(data: attempt.data, key: renewal.key,
+            generation: renewal.generation, columnGeneration: renewal.columnGeneration,
+            sourceKey: renewal.sourceKey, sourceGeneration: renewal.sourceGeneration)
+        do {
+            return try AuthSwap$Codex.isCurrent(snapshot, columnID: renewal.columnID, home: home)
+                ? attempt.result : .renewed
+        } catch {
+            return .unavailable
         }
     }
 
@@ -212,12 +229,12 @@ actor Renewal$Codex {
             AuthSwap$Codex.finishRenewal(saved.renewal)
             if stored {
                 attempts[saved.usedRefreshToken] = saved.tokens.refreshToken.map {
-                    $0 != saved.usedRefreshToken ? .uncertain : nil
+                    $0 != saved.usedRefreshToken ? Attempt(result: .uncertain, data: saved.renewal.record.data) : nil
                 } ?? nil
                 return .renewed
             }
             // Потраченный токен не используем, даже если его копия осталась в другом профиле.
-            attempts[saved.usedRefreshToken] = .uncertain
+            attempts[saved.usedRefreshToken] = Attempt(result: .uncertain, data: saved.renewal.record.data)
             return nil
         } catch {
             return .unavailable
