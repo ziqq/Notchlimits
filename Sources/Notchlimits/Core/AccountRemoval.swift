@@ -30,10 +30,10 @@ enum AccountRemoval {
 
     /// Serialize Codex removal with Desktop switching, including its exit barrier.
     @MainActor
-    static func remove(_ account: DiscoveredAccount,
+    static func remove(_ account: DiscoveredAccount, requireIncomplete: Bool = false,
                        completion: @escaping (Result<Void, Error>) -> Void) {
         guard account.provider == .codex else {
-            completion(Result { try remove(account) })
+            completion(Result { try remove(account, requireIncomplete: requireIncomplete) })
             return
         }
         guard !AppSwitchState.inProgress.contains(.codex) else {
@@ -43,7 +43,7 @@ enum AccountRemoval {
         AppSwitchState.inProgress.insert(.codex)
         let finish: (Result<Void, Error>) -> Void = { result in
             defer { AppSwitchState.inProgress.remove(.codex) }
-            completion(result.flatMap { Result { try remove(account) } })
+            completion(result.flatMap { Result { try remove(account, requireIncomplete: requireIncomplete) } })
         }
         if touchesCodexDesktop(account) {
             let app = AppSwitcher$Codex()
@@ -81,7 +81,7 @@ enum AccountRemoval {
         }
     }
 
-    static func remove(_ account: DiscoveredAccount) throws {
+    static func remove(_ account: DiscoveredAccount, requireIncomplete: Bool = false) throws {
         switch account.source {
         case .claudeKeychain(let service, let configDir):
             let directory = configDir ?? AuthStorage$Claude.configDirectory(for: service)
@@ -97,7 +97,7 @@ enum AccountRemoval {
                     guard let owner, let current,
                           current.resolvingSymlinksInPath().path == owner.resolvingSymlinksInPath().path,
                           service == AuthStorage$Claude.baseService && configDir == nil
-                            || account.claudeConfigOwner == owner.resolvingSymlinksInPath().path,
+                            || account.claudeConfigOwner?.matches(owner) == true,
                           let owners = AuthStorage$Claude.keychainServices(in: owner) else { throw Failure.busy }
                     let shared = owners.contains { $0 != service }
                         || service != AuthStorage$Claude.baseService && ProfileDirectories.isClaudeBase(owner)
@@ -136,7 +136,8 @@ enum AccountRemoval {
             var link = stat()
             let removesLink = !isBase && url.deletingLastPathComponent().path == ProfileDirectories.codexRoot.path
                 && url.path.withCString({ Darwin.lstat($0, &link) }) == 0 && link.st_mode & S_IFMT == S_IFLNK
-            try AuthSwap$Codex.removeAuth(home: url, columnID: account.id, removingProfileLink: removesLink) { storage in
+            try AuthSwap$Codex.removeAuth(home: url, columnID: account.id, removingProfileLink: removesLink,
+                                        requireIncomplete: requireIncomplete) { storage in
                 if isBase {
                     try storage.delete()
                 } else {
@@ -215,7 +216,12 @@ enum AccountRemoval {
             // Borrowed renewal leases still own these in the staged directory;
             // the adjacent legacy OAuth lock continues to fence native writers.
             if name.hasPrefix(".oauth_refresh.lock") || name.hasPrefix(".storage-write.lock") { continue }
-            if renameatx_np(sourceFD, name, destinationFD, name, UInt32(RENAME_EXCL)) == 0 { continue }
+            if renameatx_np(sourceFD, name, destinationFD, name, UInt32(RENAME_EXCL)) == 0 {
+                if isProfileRoot && name == ".credentials.json" {
+                    AuthStorage$Claude.recordRestoredFileOwner(from: source, to: destination)
+                }
+                continue
+            }
             guard errno == EEXIST else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
             let original = source.appendingPathComponent(name), current = destination.appendingPathComponent(name)
             let old = try original.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])

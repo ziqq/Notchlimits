@@ -105,6 +105,129 @@ final class NSMenuItem { var representedObject: Any? }
             result = run_fixture(self.executable, scenario, pathlib.Path(directory))
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_codex_incomplete_preserves_completed_file_login(self):
+        self.check_scenario("codex-incomplete-completed-file")
+
+    def test_codex_incomplete_preserves_completed_keyring_login(self):
+        self.check_scenario("codex-incomplete-completed-keyring")
+
+    def test_codex_incomplete_preserves_completed_auto_login(self):
+        self.check_scenario("codex-incomplete-completed-auto")
+
+    def test_codex_incomplete_preserves_auto_fallback(self):
+        self.check_scenario("codex-incomplete-auto-fallback")
+
+    def test_codex_incomplete_preserves_ignored_keyring_fallback(self):
+        self.check_scenario("codex-incomplete-keyring-fallback")
+
+    def test_codex_incomplete_preserves_dangling_auth_fallback(self):
+        self.check_scenario("codex-incomplete-dangling-fallback")
+
+    def test_codex_incomplete_defers_unreadable_auto_owner(self):
+        self.check_scenario("codex-incomplete-denied-auto")
+
+    def test_codex_incomplete_defers_unreadable_keyring_owner(self):
+        self.check_scenario("codex-incomplete-denied-keyring")
+
+    def test_codex_incomplete_preserves_malformed_preferred_entry(self):
+        self.check_scenario("codex-incomplete-malformed-keyring")
+
+    def test_codex_incomplete_rechecks_after_desktop_exit(self):
+        self.check_scenario("codex-incomplete-desktop-delay")
+
+    def test_codex_incomplete_removes_empty_file_profile(self):
+        self.check_scenario("codex-incomplete-empty-file-control")
+
+    def test_codex_incomplete_removes_empty_keyring_profile(self):
+        self.check_scenario("codex-incomplete-empty-keyring-control")
+
+    def test_codex_incomplete_removes_empty_auto_profile(self):
+        self.check_scenario("codex-incomplete-empty-auto-control")
+
+    def test_codex_incomplete_refuses_ephemeral_profile(self):
+        self.check_scenario("codex-incomplete-ephemeral-control")
+
+    def test_codex_incomplete_refuses_unsupported_storage(self):
+        self.check_scenario("codex-incomplete-unsupported-control")
+
+    def test_codex_alias_removal_preserves_file_peer_inflight_rotation(self):
+        self.check_scenario("codex-link-removal-retains-inflight-file")
+
+    def test_codex_alias_removal_preserves_file_peer_pending_rotation(self):
+        self.check_scenario("codex-link-removal-retains-pending-file")
+
+    def test_codex_file_peer_inflight_rotation_control(self):
+        self.check_scenario("codex-link-inflight-file-control")
+
+    def test_codex_file_peer_pending_rotation_control(self):
+        self.check_scenario("codex-link-pending-file-control")
+
+    def test_claude_directory_owner_replaced(self):
+        self.check_scenario("claude-directory-owner-replaced")
+
+    def test_claude_directory_owner_stable(self):
+        self.check_scenario("claude-directory-owner-stable")
+
+    def test_claude_directory_owner_metadata(self):
+        self.check_scenario("claude-directory-owner-metadata")
+
+    def test_claude_switch_owner_retarget(self):
+        self.check_scenario("claude-switch-owner-retarget")
+
+    def test_claude_switch_owner_retarget_before(self):
+        self.check_scenario("claude-switch-owner-retarget-before")
+
+    def test_claude_switch_owner_replacement(self):
+        self.check_scenario("claude-switch-owner-replacement")
+
+    def test_claude_switch_owner_replacement_before(self):
+        self.check_scenario("claude-switch-owner-replacement-before")
+
+    def test_claude_switch_owner_stable(self):
+        self.check_scenario("claude-switch-owner-stable")
+
+    def test_claude_switch_owner_off(self):
+        self.check_scenario("claude-switch-owner-off")
+
+    def test_claude_switch_owner_off_before(self):
+        self.check_scenario("claude-switch-owner-off-before")
+
+    def test_claude_switch_owner_toggle_on(self):
+        self.check_scenario("claude-switch-owner-toggle-on")
+
+    def test_claude_switch_owner_toggle_off(self):
+        self.check_scenario("claude-switch-owner-toggle-off")
+
+    def test_claude_pending_rotation_retarget_new_owner(self):
+        self.check_scenario("claude-pending-root-new-owner")
+
+    def test_claude_pending_rotation_retarget_same_grant(self):
+        self.check_scenario("claude-pending-root-same-grant")
+
+    def test_claude_pending_rotation_stable_owner_control(self):
+        self.check_scenario("claude-pending-root-stable-control")
+
+    def test_claude_pending_rotation_busy_owner_recovers(self):
+        self.check_scenario("claude-pending-owner-busy-recovery")
+
+    def test_claude_pending_rotation_survives_other_owner_removal(self):
+        self.check_scenario("claude-pending-owner-remove-replacement")
+
+    def test_codex_incomplete_preserves_selected_native_file_login(self):
+        self.check_scenario("codex-incomplete-selected-live-file")
+
+    def test_codex_incomplete_preserves_selected_native_keyring_login(self):
+        self.check_scenario("codex-incomplete-selected-live-keyring")
+
+    def test_claude_pending_rotation_survives_inflight_other_owner_removal(self):
+        self.check_scenario("claude-pending-owner-remove-replacement-inflight")
+
+    def test_claude_rotated_grant_quarantine_allows_new_login_control(self):
+        self.check_scenario("claude-rotated-grant-new-login-control")
+
+    def test_claude_rotated_grant_quarantine_allows_unrotated_response_control(self):
+        self.check_scenario("claude-unrotated-grant-control")
+
     def test_claude_root_retarget_preserves_physical_owner(self):
         self.check_scenario("claude-root-retarget-physical-owner")
 
@@ -1577,3 +1700,6 @@ final class NSMenuItem { var representedObject: Any? }
 
     def test_codex_separate_directory_keyring_control(self):
         self.check_scenario("codex-separate-directory-keyring-control")
+
+    def test_claude_pending_rotation_survives_conflicting_rollback_owner(self):
+        self.check_scenario("claude-pending-rollback-replacement-owner")

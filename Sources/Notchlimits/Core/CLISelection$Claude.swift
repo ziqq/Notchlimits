@@ -34,6 +34,11 @@ enum CLISelection$Claude {
         guard !selection.contains("\n"), !selection.contains("\r") else {
             throw Failure(errorDescription: L.t("error.cliProfile"))
         }
+        let owner = account.claudeConfigOwner
+        guard service == AuthStorage$Claude.baseService
+                || owner?.matches(URL(fileURLWithPath: selection)) == true else {
+            throw Failure(errorDescription: L.t("error.cliProfile"))
+        }
         let home = ProfileDirectories.home
         let shell = URL(fileURLWithPath: ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh").lastPathComponent
         let startups: [URL]
@@ -101,7 +106,7 @@ enum CLISelection$Claude {
             try? FileManager.default.removeItem(at: staged)
             throw error
         }
-        return Prepared(staged: staged, pointer: pointer, service: service, selection: selection)
+        return Prepared(staged: staged, pointer: pointer, service: service, selection: selection, owner: owner)
     }
 
     final class Prepared {
@@ -109,18 +114,22 @@ enum CLISelection$Claude {
         private let pointer: URL
         private let service: String
         private let selection: String
+        private let owner: DirectoryIdentity?
         private var committed = false
 
-        fileprivate init(staged: URL, pointer: URL, service: String, selection: String) {
+        fileprivate init(staged: URL, pointer: URL, service: String, selection: String, owner: DirectoryIdentity?) {
             self.staged = staged
             self.pointer = pointer
             self.service = service
             self.selection = selection
+            self.owner = owner
         }
 
         func commit() throws {
             guard AuthStorage$Claude.contains(service: service),
-                  service == AuthStorage$Claude.baseService || AuthStorage$Claude.configPath(for: service) == selection else {
+                  service == AuthStorage$Claude.baseService
+                    || AuthStorage$Claude.configPath(for: service) == selection
+                        && owner?.matches(URL(fileURLWithPath: selection)) == true else {
                 throw Failure(errorDescription: L.t("error.cliProfile"))
             }
             guard rename(staged.path, pointer.path) == 0 else {

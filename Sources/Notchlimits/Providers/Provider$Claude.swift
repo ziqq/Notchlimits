@@ -23,6 +23,7 @@ actor Provider$Claude: UsageProvider {
     private var origins: [String: AuthStorage$Claude.Credentials] = [:]
     private var terminating = false
     private var renewing: Set<String> = []
+    private var renewingFileOwners: [String: RefreshLock$Claude] = [:]
     private var removalGenerations: [String: UUID] = [:]
     private struct Resolution {
         let id = UUID()
@@ -41,9 +42,12 @@ actor Provider$Claude: UsageProvider {
     private struct Pending {
         let tokens: OAuth$Claude.Tokens
         let credentials: AuthStorage$Claude.Credentials
+        let owner: RefreshLock$Claude?
     }
 
     private var unsaved: [String: Pending] = [:]
+    /// A copied grant remains spent even after its original file owner is restored.
+    private var rotatedGrants: Set<String> = []
     /// Почему токена нет, если дело не во входе (сеть, запись в Keychain).
     private var issues: [String: String] = [:]
     private let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
@@ -170,8 +174,12 @@ actor Provider$Claude: UsageProvider {
         }
         guard AuthStorage$Claude.supportsStorageLock else { return nil }
 
+        // A pending file rotation belongs to its original physical directory,
+        // even when the logical profile now resolves to another owner.
+        let directory = unsaved[service]?.owner?.fileDirectory
+            ?? unsaved[service]?.credentials.directory ?? observed?.directory
         let acquired = await Task.detached(priority: .utility, operation: {
-            AuthStorage$Claude.refreshLock(service: service)
+            AuthStorage$Claude.refreshLock(service: service, directory: directory)
         }).value
         defer { acquired?.release() }
         guard removalGenerations[service] == generation else { return nil }
@@ -182,7 +190,10 @@ actor Provider$Claude: UsageProvider {
 
         // Another process may have refreshed or signed in while we waited.
         guard lease.isHeld, removalGenerations[service] == generation else { return nil }
-        if let pending = unsaved[service] {
+        if let saved = unsaved[service] {
+            let pending = Pending(tokens: saved.tokens, credentials: saved.credentials,
+                                  owner: saved.owner == nil ? nil : lease)
+            unsaved[service] = pending
             let result = await persist(pending, to: service, lease: lease, generation: generation)
             guard removalGenerations[service] == generation else { return nil }
             switch result {
@@ -205,13 +216,24 @@ actor Provider$Claude: UsageProvider {
         }
         if let cached = adopt(credentials, service: service) { return cached }
         guard !terminating else { return nil }
+        guard credentials.directory == directory else {
+            issues[service] = L.t("error.keychainWrite")
+            return nil
+        }
         guard credentials.isRefreshable, let refreshToken = credentials.refreshToken else { return nil }
+        guard !rotatedGrants.contains(refreshToken) else { return nil }
 
         let writable = await Task.detached(priority: .utility) {
-            AuthStorage$Claude.canWrite(service: service, renewalLock: lease)
+            AuthStorage$Claude.canWrite(service: service, renewalLock: lease, expected: credentials)
         }.value
         guard removalGenerations[service] == generation else { return nil }
         guard writable, lease.isHeld, !terminating else {
+            if !writable, !terminating {
+                let latest = await read(service, interactive: false, verifyingOwner: true)
+                guard removalGenerations[service] == generation else { return nil }
+                if let latest, !latest.hasSameTokens(as: credentials),
+                   let cached = adopt(latest, service: service) { return cached }
+            }
             issues[service] = L.t("error.keychainWrite")
             return nil
         }
@@ -219,14 +241,18 @@ actor Provider$Claude: UsageProvider {
         // Keep both native OAuth locks throughout the HTTP request and save.
         // A compromised lease cancels the request and forbids subsequent writes.
         renewing.insert(service)
-        defer { renewing.remove(service) }
+        if credentials.directory != nil { renewingFileOwners[service] = lease }
+        defer { renewing.remove(service); renewingFileOwners[service] = nil }
         let request = Task { await OAuth$Claude.refresh(refreshToken: refreshToken, scopes: credentials.scopes) }
         lease.onLost { request.cancel() }
         let response = await request.value
+        if case .success(let fresh) = response, let replacement = fresh.refreshToken,
+           replacement != refreshToken { rotatedGrants.insert(refreshToken) }
         guard removalGenerations[service] == generation else { return nil }
         switch response {
         case .success(let fresh):
-            let pending = Pending(tokens: fresh, credentials: credentials)
+            let pending = Pending(tokens: fresh, credentials: credentials,
+                                  owner: credentials.directory == nil ? nil : lease)
             if fresh.refreshToken != nil {
                 unsaved[service] = pending
                 let result = await persist(pending, to: service, lease: lease, generation: generation)
@@ -252,7 +278,8 @@ actor Provider$Claude: UsageProvider {
                 return nil
             }
             let expectedAccess = fresh.refreshToken == nil ? credentials.accessToken : fresh.accessToken
-            guard latest.accessToken == expectedAccess,
+            guard latest.directory == credentials.directory,
+                  latest.accessToken == expectedAccess,
                   latest.refreshToken == (fresh.refreshToken ?? credentials.refreshToken) else {
                 forget(service)
                 return adopt(latest, service: service)
@@ -292,6 +319,16 @@ actor Provider$Claude: UsageProvider {
     /// Invalidate late refresh responses without blocking a later login to the same profile.
     func accountRemoved(_ account: DiscoveredAccount) {
         guard case .claudeKeychain(let service, _) = account.source else { return }
+        if let pendingDirectory = unsaved[service]?.owner?.fileDirectory
+            ?? unsaved[service]?.credentials.directory ?? renewingFileOwners[service]?.fileDirectory,
+           let removedDirectory = account.claudeConfigOwner
+            ?? (service == AuthStorage$Claude.baseService
+                ? DirectoryIdentity.capture(ProfileDirectories.home.appendingPathComponent(".claude")) : nil),
+           !pendingDirectory.isSameDirectory(as: removedDirectory) {
+            // Removing a replacement profile does not retire the original
+            // file owner's accepted rotation under the same logical service.
+            return
+        }
         removalGenerations[service] = UUID()
         unsaved[service] = nil
         issues[service] = nil

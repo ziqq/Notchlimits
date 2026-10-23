@@ -246,12 +246,15 @@ final class RefreshLock$Claude: @unchecked Sendable {
     private let legacy: StorageLock$Claude
     private let directoryKey: String
     private let releaseLock = NSLock()
+    private let fileOwnerLock = NSLock()
+    private var fileOwner: DirectoryIdentity?
 
     init(directory: URL, createParent: Bool) throws {
         directoryKey = directory.resolvingSymlinksInPath().path
         if createParent {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
+        fileOwner = DirectoryIdentity.capture(directory)
         current = try StorageLock$Claude(path: directory.appendingPathComponent(".oauth_refresh.lock"),
                                         lifetime: 60, createParent: false)
         do {
@@ -286,9 +289,31 @@ final class RefreshLock$Claude: @unchecked Sendable {
 
     var isHeld: Bool { current.isHeld && legacy.isHeld }
 
+    /// Keep accepted file rotations attached to authorized removal/rollback moves.
+    var fileDirectory: DirectoryIdentity? {
+        fileOwnerLock.lock()
+        defer { fileOwnerLock.unlock() }
+        return fileOwner
+    }
+
+    static func recordRestoredFileOwner(from source: URL, to destination: URL) {
+        registryLock.lock()
+        let leases = active.values.compactMap(\.lease)
+        registryLock.unlock()
+        guard let restored = DirectoryIdentity.capture(destination) else { return }
+        for lease in leases {
+            lease.fileOwnerLock.lock()
+            if lease.fileOwner?.matches(source) == true { lease.fileOwner = restored }
+            lease.fileOwnerLock.unlock()
+        }
+    }
+
     func moveDirectory(from: URL, to: URL, storage: StorageLock$Claude) throws {
         // The legacy OAuth lock is adjacent to the profile and stays in place.
         try StorageLock$Claude.moveDirectory(from: from, to: to, locks: [current, storage])
+        fileOwnerLock.lock()
+        fileOwner = DirectoryIdentity.capture(to)
+        fileOwnerLock.unlock()
     }
 
     func onLost(_ handler: @escaping () -> Void) {

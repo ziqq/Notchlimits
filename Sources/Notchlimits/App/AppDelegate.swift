@@ -387,7 +387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if url.path.hasPrefix(ProfileDirectories.codexRoot.path + "/") {
             AccountRemoval.remove(DiscoveredAccount(
                 id: AuthSwap$Codex.profileColumnID(url.lastPathComponent), provider: .codex,
-                profileName: url.lastPathComponent, source: .codexHome(url))) { result in
+                profileName: url.lastPathComponent, source: .codexHome(url)), requireIncomplete: true) { result in
                 switch result {
                 case .success: self.store.rediscover(force: true)
                 case .failure(let error): self.errorAlert(L.t("remove.failed.title"), error)
