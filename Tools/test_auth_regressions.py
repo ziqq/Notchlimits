@@ -105,6 +105,135 @@ final class NSMenuItem { var representedObject: Any? }
             result = run_fixture(self.executable, scenario, pathlib.Path(directory))
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_claude_root_retarget_preserves_physical_owner(self):
+        self.check_scenario("claude-root-retarget-physical-owner")
+
+    def test_claude_root_retarget_preserves_logical_owner(self):
+        self.check_scenario("claude-root-retarget-logical-owner")
+
+    def test_claude_root_retarget_preserves_file_owner(self):
+        self.check_scenario("claude-root-retarget-file-owner")
+
+    def test_claude_root_stable_physical_owner_removal_control(self):
+        self.check_scenario("claude-root-stable-physical-owner")
+
+    def test_claude_root_stable_logical_owner_removal_control(self):
+        self.check_scenario("claude-root-stable-logical-owner")
+
+    def test_claude_root_stable_file_owner_removal_control(self):
+        self.check_scenario("claude-root-stable-file-owner")
+
+    def test_codex_uncertain_refresh_does_not_hide_new_file_login(self):
+        self.check_scenario("codex-uncertain-login-file")
+
+    def test_codex_uncertain_refresh_does_not_hide_new_keyring_login(self):
+        self.check_scenario("codex-uncertain-login-keyring")
+
+    def test_codex_uncertain_refresh_does_not_hide_new_auto_login(self):
+        self.check_scenario("codex-uncertain-login-auto")
+
+    def test_codex_uncertain_refresh_checks_access_token_with_same_grant(self):
+        self.check_scenario("codex-uncertain-same-grant")
+
+    def test_codex_uncertain_refresh_reports_unavailable_owner_as_failure(self):
+        self.check_scenario("codex-uncertain-owner-denied")
+
+    def test_codex_uncertain_refresh_ignores_owner_metadata_changes(self):
+        self.check_scenario("codex-uncertain-metadata-control")
+
+    def test_codex_uncertain_refresh_keeps_unchanged_grant_quarantined(self):
+        self.check_scenario("codex-uncertain-unchanged-control")
+
+    def test_codex_rejected_refresh_preserves_new_login_control(self):
+        self.check_scenario("codex-rejected-login-control")
+
+    def test_codex_successful_refresh_preserves_new_login_control(self):
+        self.check_scenario("codex-renewed-login-control")
+
+    def test_codex_owner_inventory_denied_remove(self):
+        self.check_scenario("codex-owner-inventory-denied-remove")
+
+    def test_codex_owner_inventory_denied_save(self):
+        self.check_scenario("codex-owner-inventory-denied-save")
+
+    def test_codex_owner_inventory_denied_delete(self):
+        self.check_scenario("codex-owner-inventory-denied-delete")
+
+    def test_codex_owner_inventory_missing_control(self):
+        self.check_scenario("codex-owner-inventory-missing-control")
+
+    def test_codex_primary_backup_discovery_file(self):
+        self.check_scenario("codex-primary-backup-discovery-file")
+
+    def test_codex_primary_backup_discovery_keyring(self):
+        self.check_scenario("codex-primary-backup-discovery-keyring")
+
+    def test_codex_primary_backup_discovery_auto(self):
+        self.check_scenario("codex-primary-backup-discovery-auto")
+
+    def test_codex_primary_backup_stale_remove(self):
+        self.check_scenario("codex-primary-backup-stale-remove")
+
+    def test_codex_primary_backup_stale_keyring_remove(self):
+        self.check_scenario("codex-primary-backup-stale-keyring-remove")
+
+    def test_codex_primary_backup_recovery_discovery(self):
+        self.check_scenario("codex-primary-backup-recovery-discovery")
+
+    def test_codex_primary_backup_recovery_direct_remove(self):
+        self.check_scenario("codex-primary-backup-recovery-direct-remove")
+
+    def test_codex_primary_backup_data_alias_remove(self):
+        self.check_scenario("codex-primary-backup-data-alias-remove")
+
+    def test_codex_primary_backup_lost_selection_discovery(self):
+        self.check_scenario("codex-primary-backup-lost-selection-discovery")
+
+    def test_codex_primary_backup_lost_selection_remove(self):
+        self.check_scenario("codex-primary-backup-lost-selection-remove")
+
+    def test_codex_primary_backup_separate_default_control(self):
+        self.check_scenario("codex-primary-backup-separate-default-control")
+
+    def test_codex_cached_uncertain_status_does_not_hide_near_window_file_access(self):
+        self.check_scenario("codex-uncertain-near-window-file")
+
+    def test_codex_cached_uncertain_status_does_not_hide_near_window_keyring_access(self):
+        self.check_scenario("codex-uncertain-near-window-keyring")
+
+    def test_codex_cached_uncertain_status_does_not_hide_near_window_auto_access(self):
+        self.check_scenario("codex-uncertain-near-window-auto")
+
+    def test_codex_cli_login_after_uncertain_response_gets_fresh_usage(self):
+        self.check_scenario("codex-uncertain-completed-login")
+
+    def test_codex_cached_uncertain_status_ignores_later_metadata_changes(self):
+        self.check_scenario("codex-uncertain-completed-metadata-control")
+
+    def test_codex_rejected_response_does_not_hide_near_window_cli_access(self):
+        self.check_scenario("codex-rejected-near-window-login")
+
+    def test_codex_primary_backup_ancestor_remove(self):
+        self.check_scenario("codex-primary-backup-ancestor-remove")
+
+    def test_codex_primary_backup_data_ancestor_remove(self):
+        self.check_scenario("codex-primary-backup-data-ancestor-remove")
+
+    def test_codex_primary_backup_orphan_menu(self):
+        self.check_scenario("codex-primary-backup-orphan-menu")
+
+    def test_codex_primary_backup_ancestor_orphan_menu(self):
+        self.check_scenario("codex-primary-backup-ancestor-orphan-menu")
+
+    def test_codex_primary_backup_independent_keyring_control(self):
+        self.check_scenario("codex-primary-backup-independent-keyring-control")
+
+    def test_codex_primary_backup_native_ancestor_control(self):
+        self.check_scenario("codex-primary-backup-native-ancestor-control")
+
+    def test_codex_primary_backup_spoofed_default_remove(self):
+        self.check_scenario("codex-primary-backup-spoofed-default-remove")
+
     def test_claude_canonical_main_has_one_file_owner(self):
         self.check_scenario("claude-canonical-main-discovery")
 

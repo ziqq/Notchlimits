@@ -15,11 +15,28 @@ struct DiscoveredAccount: Identifiable, Equatable {
     let provider: Provider
     let profileName: String
     let source: AccountSource
+    /// Keep the discovered physical owner when a managed root is a symlink.
+    let claudeConfigOwner: String?
     /// Почта аккаунта (из конфигов, без Keychain). Для дедупа и подсветки.
     var email: String? = nil
     /// Аккаунт открыт в десктоп-приложении (Claude — по папке данных, Codex —
     /// чей вход в ~/.codex). Только его имя подсвечивается.
     var isActive: Bool = false
+
+    init(id: String, provider: Provider, profileName: String, source: AccountSource,
+         email: String? = nil, isActive: Bool = false) {
+        self.id = id
+        self.provider = provider
+        self.profileName = profileName
+        self.source = source
+        self.email = email
+        self.isActive = isActive
+        if case .claudeKeychain(_, let directory) = source {
+            claudeConfigOwner = directory?.resolvingSymlinksInPath().path
+        } else {
+            claudeConfigOwner = nil
+        }
+    }
 }
 
 struct UsageSnapshot {

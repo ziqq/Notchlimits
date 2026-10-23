@@ -46,7 +46,8 @@ struct Discovery$Real: AccountDiscovery {
         for directory in ProfileDirectories.codexProfiles() {
             // A native base home inside the managed root is still the primary
             // account, with projects and threads that profile removal must preserve.
-            guard !AuthSwap$Codex.isBaseHome(directory) else { continue }
+            guard !AuthSwap$Codex.isBaseHome(directory),
+                  !AuthSwap$Codex.isPrimaryBackup(directory) else { continue }
             let folder = directory.lastPathComponent
             let id = AuthSwap$Codex.profileColumnID(folder)
             let live = AuthSwap$Codex.liveHome(columnID: id, home: directory)

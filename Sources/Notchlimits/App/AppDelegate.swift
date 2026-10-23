@@ -358,6 +358,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var result: [(label: String, url: URL)] = []
         for dir in ProfileDirectories.codexProfiles()
             where !ProfileDirectories.containsNativeHome(dir)
+                && !AuthSwap$Codex.containsPrimaryBackup(dir)
                 && !codexIds.contains(AuthSwap$Codex.profileColumnID(dir.lastPathComponent)) {
             result.append(("CODEX · \(dir.lastPathComponent)", dir))
         }

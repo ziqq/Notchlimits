@@ -89,7 +89,16 @@ enum AccountRemoval {
                 ? ProfileDirectories.home.appendingPathComponent(".claude") : nil)
             do {
                 try AuthStorage$Claude.withRemovalLock(service: service, configDir: directory) { move in
-                    guard let owner, let owners = AuthStorage$Claude.keychainServices(in: owner) else { throw Failure.busy }
+                    // A stale logical path must not authorize the replacement
+                    // directory after the managed root has been redirected.
+                    let current = service == AuthStorage$Claude.baseService
+                        ? ProfileDirectories.home.appendingPathComponent(".claude")
+                        : AuthStorage$Claude.configDirectory(for: service)
+                    guard let owner, let current,
+                          current.resolvingSymlinksInPath().path == owner.resolvingSymlinksInPath().path,
+                          service == AuthStorage$Claude.baseService && configDir == nil
+                            || account.claudeConfigOwner == owner.resolvingSymlinksInPath().path,
+                          let owners = AuthStorage$Claude.keychainServices(in: owner) else { throw Failure.busy }
                     let shared = owners.contains { $0 != service }
                         || service != AuthStorage$Claude.baseService && ProfileDirectories.isClaudeBase(owner)
                     // A file-only login cannot claim the common fallback after
