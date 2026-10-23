@@ -38,6 +38,10 @@ struct Provider$Codex: UsageProvider {
         // Сервер отверг ещё живой по сроку токен — пробуем продлить и повторить.
         guard await Renewal$Codex.shared.renew(columnID: account.id, home: home, force: true,
                                              expected: snapshot) == .renewed else {
+            // A forced refresh yields while CLI can replace the usage session.
+            do {
+                guard try AuthSwap$Codex.isCurrent(snapshot, columnID: account.id, home: home) else { return .superseded }
+            } catch { return .failure(error.localizedDescription) }
             return outcome
         }
         do { return await request(try AuthSwap$Codex.authSnapshot(columnID: account.id, home: home), columnID: account.id, home: home) }

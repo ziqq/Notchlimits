@@ -276,6 +276,33 @@ final class NSMenuItem { var representedObject: Any? }
     def test_codex_shared_auto_link_credential_only(self):
         self.check_scenario("codex-shared-auto-link-credential-only")
 
+    def test_codex_forced_temporary_refresh_drops_replaced_file_usage(self):
+        self.check_scenario("codex-forced-temporary-login-file")
+
+    def test_codex_forced_temporary_refresh_drops_replaced_keyring_usage(self):
+        self.check_scenario("codex-forced-temporary-login-keyring")
+
+    def test_codex_forced_temporary_refresh_drops_replaced_auto_usage(self):
+        self.check_scenario("codex-forced-temporary-login-auto")
+
+    def test_codex_forced_uncertain_refresh_rechecks_unreadable_keyring_owner(self):
+        self.check_scenario("codex-forced-uncertain-unreadable-keyring")
+
+    def test_codex_forced_uncertain_refresh_rechecks_unreadable_auto_owner(self):
+        self.check_scenario("codex-forced-uncertain-unreadable-auto")
+
+    def test_codex_forced_temporary_refresh_retires_identical_readded_owner(self):
+        self.check_scenario("codex-forced-temporary-identical-readd")
+
+    def test_codex_forced_temporary_refresh_keeps_unchanged_owner_outcome(self):
+        self.check_scenario("codex-forced-temporary-unchanged-control")
+
+    def test_codex_forced_temporary_refresh_ignores_outer_metadata(self):
+        self.check_scenario("codex-forced-temporary-metadata-control")
+
+    def test_codex_forced_uncertain_refresh_keeps_unchanged_owner_outcome(self):
+        self.check_scenario("codex-forced-uncertain-unchanged-control")
+
     def test_claude_canonical_main_has_one_file_owner(self):
         self.check_scenario("claude-canonical-main-discovery")
 

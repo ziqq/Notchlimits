@@ -1062,6 +1062,15 @@ enum Authentication {
             case "codex-primary-keyring-unreadable-peer-control": try codexCompleteRemovalPeer(mode: "keyring")
             case "codex-shared-auto-link-removal-control": try codexSharedAutoLinkRemoval()
             case "codex-shared-auto-link-credential-only": try codexSharedAutoLinkRemoval(direct: true)
+            case "codex-forced-temporary-login-file": try await codexForcedRefreshOutcome()
+            case "codex-forced-temporary-login-keyring": try await codexForcedRefreshOutcome(mode: "keyring")
+            case "codex-forced-temporary-login-auto": try await codexForcedRefreshOutcome(mode: "auto")
+            case "codex-forced-uncertain-unreadable-keyring": try await codexForcedRefreshOutcome(mode: "keyring", change: "unreadable", response: "lost")
+            case "codex-forced-uncertain-unreadable-auto": try await codexForcedRefreshOutcome(mode: "auto", change: "unreadable", response: "lost")
+            case "codex-forced-temporary-identical-readd": try await codexForcedRefreshOutcome(change: "readd")
+            case "codex-forced-temporary-unchanged-control": try await codexForcedRefreshOutcome(change: "none")
+            case "codex-forced-temporary-metadata-control": try await codexForcedRefreshOutcome(change: "metadata")
+            case "codex-forced-uncertain-unchanged-control": try await codexForcedRefreshOutcome(change: "none", response: "lost")
             case "claude-canonical-main-discovery": try claudeCanonicalMain()
             case "claude-canonical-main-stale-removal": try claudeCanonicalMain(staleRemoval: true)
             case "claude-owner-denied-fallback": try await claudeOwnerFallback()
@@ -6090,6 +6099,70 @@ enum Authentication {
             try expect(!Foundation.FileManager.default.fileExists(atPath: alias.path)
                        && Fixture.codexKeychain[Fixture.codexKey(nativeAlias)] == nil,
                        "Safe managed-alias removal left its link or preferred credentials behind")
+        }
+    }
+
+    @MainActor
+    private static func codexForcedRefreshOutcome(mode: String = "file", change: String = "login",
+                                                    response: String = "temporary") async throws {
+        Fixture.keychainExists = false
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("forced-refresh-owner")
+        try Fixture.codexLogin(home, account: "original", mode: mode, expired: false)
+        let original = try AuthSwap$Codex.authData(home: home)!
+        guard let expiry = Provider$Codex.parseAuth(original)?.expiresAt else {
+            throw Failure(description: "Fixture did not create a usable access token")
+        }
+        try expect(expiry.timeIntervalSinceNow > Renewal$Codex.window,
+                   "The fixture must reach forced refresh through usage 401")
+        let account = DiscoveredAccount(id: "codex:forced-refresh-owner", provider: .codex,
+                                        profileName: "forced-refresh-owner", source: .codexHome(home))
+        Fixture.usageStatus = 401
+        Fixture.response = response == "temporary" ? .heldTemporary : .heldLost
+        let request = Task { await Provider$Codex().fetch(account) }
+        try await waitForRefresh(1)
+        try expect(Fixture.usageCalls == 1, "Refresh did not follow the original usage 401")
+        if change == "login" || change == "unreadable" {
+            try Fixture.codexLogin(home, account: "replacement", mode: mode, expired: false)
+            if change == "unreadable" && mode == "auto" {
+                try Fixture.writeAuth(home, account: "fallback", refresh: "fallback-refresh", expired: false)
+            }
+        } else if change == "readd" {
+            try AccountRemoval.remove(account)
+            try Fixture.codexMode(home, mode)
+            try original.write(to: home.appendingPathComponent("auth.json"))
+        } else if change == "metadata" {
+            var metadata = try JSONSerialization.jsonObject(with: original) as! [String: Any]
+            metadata["last_refresh"] = "2026-10-23T00:00:00Z"
+            try JSONSerialization.data(withJSONObject: metadata).write(to: home.appendingPathComponent("auth.json"))
+        }
+        let expected = try AuthSwap$Codex.authData(home: home)
+        Fixture.denyCodexRead = change == "unreadable"
+        Fixture.usageStatus = 200
+        Fixture.releaseRefresh()
+        let outcome = await request.value
+        if change == "login" || change == "readd" {
+            guard case .superseded = outcome else {
+                throw Failure(description: "Forced refresh published an old usage result to a replacement owner: \(outcome)")
+            }
+        } else if change == "unreadable" {
+            guard case .failure = outcome else {
+                throw Failure(description: "Forced refresh published old reauth while the current owner was unreadable: \(outcome)")
+            }
+        } else {
+            guard case .reauth = outcome else {
+                throw Failure(description: "Unchanged forced-refresh owner lost its existing usage result: \(outcome)")
+            }
+        }
+        Fixture.denyCodexRead = false
+        let retained = try AuthSwap$Codex.authData(home: home)
+        try expect(retained == expected && Fixture.refreshCalls == 1 && Fixture.usageCalls == 1,
+                   "Forced-result validation changed credentials or replayed a request")
+        if change == "login" || change == "readd" || change == "unreadable" {
+            guard case .success = await Provider$Codex().fetch(account) else {
+                throw Failure(description: "The next poll did not read the replacement owner's usage")
+            }
+            try expect(Fixture.refreshCalls == 1 && Fixture.usageCalls == 2,
+                       "Polling the replacement session repeated its predecessor's refresh")
         }
     }
 
