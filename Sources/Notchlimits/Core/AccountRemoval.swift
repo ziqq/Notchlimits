@@ -131,7 +131,12 @@ enum AccountRemoval {
             if touchesCodexDesktop(account) {
                 guard !DesktopApp.isRunning(bundleID: AppSwitcher$Codex().bundleID) else { throw Failure.busy }
             }
-            try AuthSwap$Codex.removeAuth(home: url, columnID: account.id) { storage in
+            // Unlinking a managed alias removes its login without deleting the
+            // independent owner's shared fallback or physical directory.
+            var link = stat()
+            let removesLink = !isBase && url.deletingLastPathComponent().path == ProfileDirectories.codexRoot.path
+                && url.path.withCString({ Darwin.lstat($0, &link) }) == 0 && link.st_mode & S_IFMT == S_IFLNK
+            try AuthSwap$Codex.removeAuth(home: url, columnID: account.id, removingProfileLink: removesLink) { storage in
                 if isBase {
                     try storage.delete()
                 } else {

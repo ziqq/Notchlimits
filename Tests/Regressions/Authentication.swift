@@ -1048,6 +1048,20 @@ enum Authentication {
             case "codex-primary-backup-independent-keyring-control": try codexBackupDirectoryGuard(dataAlias: true, keyringPeer: true)
             case "codex-primary-backup-native-ancestor-control": try codexBackupPrimaryAncestorControl()
             case "codex-primary-backup-spoofed-default-remove": try codexBackupPrimaryAncestorControl(spoofed: true)
+            case "codex-primary-inventory-denied-auto": try codexPrimaryRemovalInventory()
+            case "codex-primary-inventory-denied-keyring": try codexPrimaryRemovalInventory(mode: "keyring")
+            case "codex-primary-inventory-denied-swapped": try codexPrimaryRemovalInventory(selected: true)
+            case "codex-primary-inventory-denied-direct": try codexPrimaryRemovalInventory(direct: true)
+            case "codex-primary-inventory-readable-control": try codexPrimaryRemovalInventory(state: "readable")
+            case "codex-primary-inventory-missing-control": try codexPrimaryRemovalInventory(state: "missing")
+            case "codex-primary-peer-unreadable-auto": try codexCompleteRemovalPeer()
+            case "codex-primary-peer-file-auto": try codexCompleteRemovalPeer(peerState: "file")
+            case "codex-backup-peer-file-auto": try codexCompleteRemovalPeer(peerState: "file", backup: true)
+            case "codex-primary-peer-keyring-control": try codexCompleteRemovalPeer(peerState: "keyring")
+            case "codex-primary-peer-no-fallback-control": try codexCompleteRemovalPeer(fallback: false)
+            case "codex-primary-keyring-unreadable-peer-control": try codexCompleteRemovalPeer(mode: "keyring")
+            case "codex-shared-auto-link-removal-control": try codexSharedAutoLinkRemoval()
+            case "codex-shared-auto-link-credential-only": try codexSharedAutoLinkRemoval(direct: true)
             case "claude-canonical-main-discovery": try claudeCanonicalMain()
             case "claude-canonical-main-stale-removal": try claudeCanonicalMain(staleRemoval: true)
             case "claude-owner-denied-fallback": try await claudeOwnerFallback()
@@ -5898,6 +5912,185 @@ enum Authentication {
         try expect((try? Data(contentsOf: projects)) == projectData
                    && Provider$Codex.readAuth(codexHome: selected)?.accountID == "selected",
                    "Primary ancestor handling removed native projects or the selected profile")
+    }
+
+    @MainActor
+    private static func codexPrimaryRemovalInventory(state: String = "denied", mode: String = "auto",
+                                                      selected: Bool = false, direct: Bool = false) throws {
+        let base = AuthSwap$Codex.baseHome
+        try Fixture.codexLogin(base, account: "primary", mode: mode)
+        let primary = try AuthSwap$Codex.authData(home: base)
+        if selected {
+            let profile = ProfileDirectories.codexRoot.appendingPathComponent("selected")
+            try Fixture.codexLogin(profile, account: "selected", mode: "keyring")
+            try AuthSwap$Codex.activate(columnID: "codex:selected", home: profile)
+        }
+        guard let preferred = Fixture.codexKeychain[Fixture.codexKey(base)] else {
+            throw Failure(description: "Fixture did not create the preferred native Keychain login")
+        }
+        let fallback = base.appendingPathComponent("auth.json")
+        if mode == "auto" { try preferred.write(to: fallback) }
+        let id = AuthSwap$Codex.defaultColumnID
+        let store = UsageStore(providers: [:], discovery: Discovery$Real())
+        store.rediscover(force: true)
+        try expect(store.account(for: id) != nil, "Fixture did not discover the removable primary")
+        store.setCustomName("Retained primary label", for: id)
+        store.setHidden(id, hidden: true)
+        if state != "missing" {
+            try Foundation.FileManager.default.createDirectory(at: ProfileDirectories.codexRoot, withIntermediateDirectories: true)
+        } else {
+            try expect(!Foundation.FileManager.default.fileExists(atPath: ProfileDirectories.codexRoot.path),
+                       "Missing-root control unexpectedly created a managed profile root")
+        }
+        if state == "denied" {
+            try Foundation.FileManager.default.setAttributes([.posixPermissions: 0o300], ofItemAtPath: ProfileDirectories.codexRoot.path)
+            do {
+                _ = try Foundation.FileManager.default.contentsOfDirectory(atPath: ProfileDirectories.codexRoot.path)
+                throw Failure(description: "Fixture did not deny managed-root enumeration")
+            } catch let failure as Failure { throw failure } catch {}
+        }
+        defer {
+            if state != "missing" {
+                try? Foundation.FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: ProfileDirectories.codexRoot.path)
+            }
+        }
+        var refused = false
+        do {
+            if direct { try AuthSwap$Codex.removeAuth(home: base) }
+            else { try store.removeAccount(id: id) }
+        } catch { refused = true }
+        if state == "denied" {
+            try expect(refused && Fixture.codexKeychain[Fixture.codexKey(base)] == preferred,
+                       "Unavailable inventory allowed a partial primary removal to report success")
+            try expect(mode != "auto" || (try? Data(contentsOf: fallback)) == preferred,
+                       "Refused primary removal changed the native file fallback")
+            try expect(store.account(for: id) != nil && store.customNames[id] == "Retained primary label" && store.hidden.contains(id),
+                       "Partial primary removal cleared column settings before rediscovering the retained fallback")
+            if selected {
+                let retained = try AuthSwap$Codex.authData(home: AuthSwap$Codex.stashHome)
+                try expect(retained == primary && AuthSwap$Codex.activeColumnID == "codex:selected",
+                           "Inventory refusal occurred after changing native selection or primary backup")
+            }
+        } else {
+            try expect(!refused && Fixture.codexKeychain[Fixture.codexKey(base)] == nil
+                       && !Foundation.FileManager.default.fileExists(atPath: fallback.path),
+                       "A readable or absent profile root blocked complete primary removal")
+            try expect(store.account(for: id) == nil && !Discovery$Real().discover().contains { $0.id == id }
+                       && store.customNames[id] == nil && !store.hidden.contains(id),
+                       "Successful primary removal resurrected the account or retained its column settings")
+        }
+    }
+
+    @MainActor
+    private static func codexCompleteRemovalPeer(peerState: String = "denied", mode: String = "auto",
+                                                 fallback: Bool = true, backup: Bool = false) throws {
+        let base = AuthSwap$Codex.baseHome
+        try Fixture.codexLogin(base, account: "primary", mode: mode)
+        let selected = ProfileDirectories.codexRoot.appendingPathComponent("selected")
+        if backup {
+            try Fixture.codexLogin(selected, account: "selected", mode: "keyring")
+            try AuthSwap$Codex.activate(columnID: "codex:selected", home: selected)
+        }
+        let target = backup ? AuthSwap$Codex.stashHome : base
+        let id = backup ? "codex:selected" : AuthSwap$Codex.defaultColumnID
+        guard let preferred = Fixture.codexKeychain[Fixture.codexKey(target)] else {
+            throw Failure(description: "Fixture did not create preferred credentials")
+        }
+        let native = try AuthSwap$Codex.authData(home: base)
+        let peer = ProfileDirectories.codexRoot.appendingPathComponent("peer")
+        try Foundation.FileManager.default.createDirectory(at: ProfileDirectories.codexRoot, withIntermediateDirectories: true)
+        try Foundation.FileManager.default.createSymbolicLink(
+            at: peer, withDestinationURL: URL(fileURLWithPath: "/System/Volumes/Data" + target.path))
+        try expect(Fixture.codexKey(peer) != Fixture.codexKey(target),
+                   "Fixture did not create separate native namespaces")
+        if peerState != "file" {
+            let payload = Fixture.root.appendingPathComponent("peer-payload")
+            try Fixture.writeAuth(payload, account: "peer", refresh: "peer-refresh", expired: false)
+            Fixture.codexKeychain[Fixture.codexKey(peer)] = try Data(contentsOf: payload.appendingPathComponent("auth.json"))
+        }
+        let peerPreferred = Fixture.codexKeychain[Fixture.codexKey(peer)]
+        let file = target.appendingPathComponent("auth.json")
+        if fallback { try preferred.write(to: file) }
+        let store = UsageStore(providers: [:], discovery: Discovery$Real())
+        store.rediscover(force: true)
+        try expect(store.account(for: id) != nil, "Fixture did not discover the account before removal")
+        store.setCustomName("Retained owner", for: id)
+        store.setHidden(id, hidden: true)
+        _ = try Foundation.FileManager.default.contentsOfDirectory(atPath: ProfileDirectories.codexRoot.path)
+        Fixture.denyCodexRead = peerState == "denied"
+        defer { Fixture.denyCodexRead = false }
+        var refused = false
+        do { try store.removeAccount(id: id) } catch { refused = true }
+        Fixture.denyCodexRead = false
+        let mustRefuse = mode == "auto" && fallback && peerState != "keyring"
+        try expect(refused == mustRefuse,
+                   "Complete removal ignored a retained auto fallback or blocked an independent Keychain owner")
+        if mustRefuse {
+            try expect(Fixture.codexKeychain[Fixture.codexKey(target)] == preferred
+                       && (try? Data(contentsOf: file)) == preferred,
+                       "Refused complete removal changed preferred credentials or their fallback")
+            try expect(store.account(for: id) != nil && store.customNames[id] == "Retained owner" && store.hidden.contains(id),
+                       "Partial removal cleared metadata before rediscovering the retained login")
+            let retainedNative = try AuthSwap$Codex.authData(home: base)
+            try expect(retainedNative == native
+                       && AuthSwap$Codex.activeColumnID == (backup ? "codex:selected" : AuthSwap$Codex.defaultColumnID),
+                       "Shared-backup refusal occurred after native copyback or selection changed")
+        } else {
+            try expect(Fixture.codexKeychain[Fixture.codexKey(target)] == nil
+                       && !Foundation.FileManager.default.fileExists(atPath: file.path),
+                       "Successful complete removal retained the owner's credentials")
+            try expect(store.account(for: id) == nil && store.customNames[id] == nil && !store.hidden.contains(id)
+                       && !Discovery$Real().discover().contains { $0.id == id },
+                       "Successful complete removal resurrected the account or retained its metadata")
+        }
+        try expect(Fixture.codexKeychain[Fixture.codexKey(peer)] == peerPreferred,
+                   "Complete removal changed a separate native Keychain namespace")
+    }
+
+    @MainActor
+    private static func codexSharedAutoLinkRemoval(direct: Bool = false) throws {
+        let base = AuthSwap$Codex.baseHome
+        let alias = ProfileDirectories.codexRoot.appendingPathComponent("linked-owner")
+        let physical = ProfileDirectories.codexRoot.appendingPathComponent("physical-owner")
+        try Fixture.codexLogin(base, account: "primary", mode: "file")
+        try Fixture.codexLogin(alias, account: "alias-owner", mode: "auto")
+        guard let account = Discovery$Real().discover().first(where: { $0.id == "codex:linked-owner" }),
+              let preferred = Fixture.codexKeychain[Fixture.codexKey(alias)] else {
+            throw Failure(description: "Fixture did not discover the original managed account")
+        }
+        // Preserve a discovered account while its managed path is migrated to a
+        // child symlink. The native login moves to that alias's new namespace.
+        Fixture.codexKeychain[Fixture.codexKey(alias)] = nil
+        try Foundation.FileManager.default.removeItem(at: alias)
+        try Fixture.codexMode(physical, "auto")
+        try Fixture.writeAuth(physical, account: "file-peer", refresh: "peer-refresh", expired: false)
+        try Foundation.FileManager.default.createSymbolicLink(
+            at: alias, withDestinationURL: URL(fileURLWithPath: "/System/Volumes/Data" + physical.path))
+        Fixture.codexKeychain[Fixture.codexKey(alias)] = preferred
+        let peer = try Data(contentsOf: physical.appendingPathComponent("auth.json"))
+        let settings = physical.appendingPathComponent("settings-sentinel")
+        let settingsData = Data("physical-profile-settings".utf8)
+        try settingsData.write(to: settings)
+        var refused = false
+        do {
+            if direct { try AuthSwap$Codex.removeAuth(home: alias, columnID: account.id) }
+            else { try AccountRemoval.remove(account) }
+        } catch { refused = true }
+        try expect(refused == direct,
+                   "Removal confused unlinking a managed alias with credential-only deletion")
+        try expect((try? Data(contentsOf: physical.appendingPathComponent("auth.json"))) == peer
+                   && (try? Data(contentsOf: settings)) == settingsData,
+                   "Removing an auto alias changed its independent physical file owner")
+        if direct {
+            try expect(Foundation.FileManager.default.fileExists(atPath: alias.path)
+                       && Fixture.codexKeychain[Fixture.codexKey(alias)] == preferred,
+                       "Credential-only removal resurrected a still-linked alias through its shared fallback")
+        } else {
+            let nativeAlias = URL(fileURLWithPath: "/System/Volumes/Data" + physical.path)
+            try expect(!Foundation.FileManager.default.fileExists(atPath: alias.path)
+                       && Fixture.codexKeychain[Fixture.codexKey(nativeAlias)] == nil,
+                       "Safe managed-alias removal left its link or preferred credentials behind")
+        }
     }
 
 }

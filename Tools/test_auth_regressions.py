@@ -234,6 +234,48 @@ final class NSMenuItem { var representedObject: Any? }
     def test_codex_primary_backup_spoofed_default_remove(self):
         self.check_scenario("codex-primary-backup-spoofed-default-remove")
 
+    def test_codex_primary_inventory_denied_auto(self):
+        self.check_scenario("codex-primary-inventory-denied-auto")
+
+    def test_codex_primary_inventory_denied_keyring(self):
+        self.check_scenario("codex-primary-inventory-denied-keyring")
+
+    def test_codex_primary_inventory_denied_swapped(self):
+        self.check_scenario("codex-primary-inventory-denied-swapped")
+
+    def test_codex_primary_inventory_denied_direct(self):
+        self.check_scenario("codex-primary-inventory-denied-direct")
+
+    def test_codex_primary_inventory_readable_control(self):
+        self.check_scenario("codex-primary-inventory-readable-control")
+
+    def test_codex_primary_inventory_missing_control(self):
+        self.check_scenario("codex-primary-inventory-missing-control")
+
+    def test_codex_primary_peer_unreadable_auto(self):
+        self.check_scenario("codex-primary-peer-unreadable-auto")
+
+    def test_codex_primary_peer_file_auto(self):
+        self.check_scenario("codex-primary-peer-file-auto")
+
+    def test_codex_backup_peer_file_auto(self):
+        self.check_scenario("codex-backup-peer-file-auto")
+
+    def test_codex_primary_peer_keyring_control(self):
+        self.check_scenario("codex-primary-peer-keyring-control")
+
+    def test_codex_primary_peer_no_fallback_control(self):
+        self.check_scenario("codex-primary-peer-no-fallback-control")
+
+    def test_codex_primary_keyring_unreadable_peer_control(self):
+        self.check_scenario("codex-primary-keyring-unreadable-peer-control")
+
+    def test_codex_shared_auto_link_removal_control(self):
+        self.check_scenario("codex-shared-auto-link-removal-control")
+
+    def test_codex_shared_auto_link_credential_only(self):
+        self.check_scenario("codex-shared-auto-link-credential-only")
+
     def test_claude_canonical_main_has_one_file_owner(self):
         self.check_scenario("claude-canonical-main-discovery")
 
