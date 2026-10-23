@@ -15,6 +15,8 @@ enum AuthStorage$Claude {
 
     struct Credentials {
         var backend: Backend = .keychain
+        /// File records retain their physical owner; Keychain records belong to the service.
+        var directory: DirectoryIdentity? = nil
         let accessToken: String
         let expiresAt: Date?
         /// План подписки из записи Keychain («pro», «max»…). Почты Anthropic
@@ -35,7 +37,8 @@ enum AuthStorage$Claude {
         }
 
         func hasSameTokens(as other: Credentials) -> Bool {
-            backend == other.backend && accessToken == other.accessToken && refreshToken == other.refreshToken
+            backend == other.backend && directory == other.directory
+                && accessToken == other.accessToken && refreshToken == other.refreshToken
         }
     }
 
@@ -200,6 +203,7 @@ enum AuthStorage$Claude {
         let item = readItem(service: service, interactive: interactive, verifyingOwner: verifyingOwner)
         guard let json = item.json, var credentials = parse(json) else { return nil }
         credentials.backend = item.backend
+        credentials.directory = item.directory
         return credentials
     }
 
@@ -217,8 +221,9 @@ enum AuthStorage$Claude {
 
     private static func readItem(service: String, interactive: Bool,
                                  backend: Backend? = nil,
-                                 verifyingOwner: Bool = false) -> (json: [String: Any]?, status: OSStatus, backend: Backend) {
-        if backend == .file { return readFile(service: service) }
+                                 verifyingOwner: Bool = false,
+                                 directory: DirectoryIdentity? = nil) -> (json: [String: Any]?, status: OSStatus, backend: Backend, directory: DirectoryIdentity?) {
+        if backend == .file { return readFile(service: service, directory: directory) }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -232,25 +237,32 @@ enum AuthStorage$Claude {
         // establish that the preferred owner is absent before spending a file grant.
         if backend == nil, status != errSecSuccess || json == nil,
            !verifyingOwner || status == errSecItemNotFound {
-            let file = readFile(service: service)
+            let file = readFile(service: service, directory: directory)
             if file.json != nil { return file }
         }
-        return (status == errSecSuccess ? json : nil, status, .keychain)
+        return (status == errSecSuccess ? json : nil, status, .keychain, nil)
     }
 
     static func credentialFile(service: String) -> URL? {
         storageDirectory(service: service)?.appendingPathComponent(".credentials.json")
     }
 
-    private static func readFile(service: String) -> (json: [String: Any]?, status: OSStatus, backend: Backend) {
-        guard let file = credentialFile(service: service), FileManager.default.fileExists(atPath: file.path) else {
-            return (nil, errSecItemNotFound, .file)
+    private static func readFile(service: String, directory: DirectoryIdentity? = nil) -> (json: [String: Any]?, status: OSStatus, backend: Backend, directory: DirectoryIdentity?) {
+        guard let owner = directory ?? storageDirectory(service: service).flatMap(DirectoryIdentity.capture) else {
+            return (nil, errSecItemNotFound, .file, nil)
+        }
+        let root = URL(fileURLWithPath: owner.path, isDirectory: true)
+        guard owner.matches(root) else { return (nil, errSecAuthFailed, .file, owner) }
+        let file = root.appendingPathComponent(".credentials.json")
+        guard FileManager.default.fileExists(atPath: file.path) else {
+            return (nil, errSecItemNotFound, .file, owner)
         }
         guard let data = try? Data(contentsOf: file),
-              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-            return (nil, errSecAuthFailed, .file)
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              owner.matches(root) else {
+            return (nil, errSecAuthFailed, .file, owner)
         }
-        return (json, errSecSuccess, .file)
+        return (json, errSecSuccess, .file, owner)
     }
 
     private static let interactionLock = NSLock()
@@ -302,12 +314,19 @@ enum AuthStorage$Claude {
     @discardableResult
     static func save(service: String, tokens: OAuth$Claude.Tokens,
                      expected: Credentials, renewalLock: RefreshLock$Claude? = nil) -> SaveResult {
-        guard let storageLock = storageLock(service: service, createParent: renewalLock == nil) else { return .failed }
+        var expected = expected
+        if expected.backend == .file, let restored = renewalLock?.fileDirectory {
+            expected.directory = restored
+        }
+        guard let storageLock = storageLock(service: service, createParent: renewalLock == nil,
+                                          directory: expected.directory) else { return .failed }
         defer { storageLock.release() }
-        let item = readItem(service: service, interactive: renewalLock == nil, backend: expected.backend)
+        let item = readItem(service: service, interactive: renewalLock == nil, backend: expected.backend,
+                            directory: expected.directory)
         guard var json = item.json else { return item.status == errSecItemNotFound ? .changed : .failed }
         guard var current = parse(json) else { return .changed }
         current.backend = item.backend
+        current.directory = item.directory
         guard current.hasSameTokens(as: expected),
               var oauth = json["claudeAiOauth"] as? [String: Any] else { return .changed }
 
@@ -325,27 +344,40 @@ enum AuthStorage$Claude {
         guard let data = try? JSONSerialization.data(withJSONObject: json) else { return .failed }
 
         return write(data, service: service, backend: item.backend, storageLock: storageLock,
-                     renewalLock: renewalLock) ? .saved : .failed
+                     renewalLock: renewalLock, directory: item.directory) ? .saved : .failed
     }
 
     /// Можно ли писать в запись: перезаписываем её же содержимым. Проверяем
     /// ДО продления — сервер отзывает прежний refresh-токен, и если новый
     /// потом не записать, в Keychain останется мёртвый, а CLI, наткнувшись
     /// на него, обнулит вход. Блокирующий вызов — только вне главного потока.
-    static func canWrite(service: String, renewalLock: RefreshLock$Claude? = nil) -> Bool {
-        guard let storageLock = storageLock(service: service, createParent: renewalLock == nil) else { return false }
+    static func canWrite(service: String, renewalLock: RefreshLock$Claude? = nil,
+                         expected: Credentials? = nil) -> Bool {
+        guard let storageLock = storageLock(service: service, createParent: renewalLock == nil,
+                                          directory: expected?.directory) else { return false }
         defer { storageLock.release() }
-        let item = readItem(service: service, interactive: renewalLock == nil, verifyingOwner: true)
+        let item = readItem(service: service, interactive: renewalLock == nil, verifyingOwner: true,
+                            directory: expected?.directory)
         guard let json = item.json,
               let data = try? JSONSerialization.data(withJSONObject: json) else { return false }
-        return write(data, service: service, backend: item.backend, storageLock: storageLock, renewalLock: renewalLock)
+        if let expected {
+            guard var current = parse(json) else { return false }
+            current.backend = item.backend
+            current.directory = item.directory
+            guard current.hasSameTokens(as: expected) else { return false }
+        }
+        return write(data, service: service, backend: item.backend, storageLock: storageLock,
+                     renewalLock: renewalLock, directory: item.directory)
     }
 
     private static func write(_ data: Data, service: String, backend: Backend,
-                              storageLock: StorageLock$Claude, renewalLock: RefreshLock$Claude?) -> Bool {
+                              storageLock: StorageLock$Claude, renewalLock: RefreshLock$Claude?,
+                              directory: DirectoryIdentity?) -> Bool {
         if backend == .file {
             guard storageLock.isHeld, renewalLock?.isHeld != false,
-                  let file = credentialFile(service: service) else { return false }
+                  let directory,
+                  directory.matches(URL(fileURLWithPath: directory.path, isDirectory: true)) else { return false }
+            let file = URL(fileURLWithPath: directory.path, isDirectory: true).appendingPathComponent(".credentials.json")
             do {
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
                 try data.write(to: file, options: .atomic)
@@ -362,9 +394,19 @@ enum AuthStorage$Claude {
         } == errSecSuccess
     }
 
-    static func refreshLock(service: String) -> RefreshLock$Claude? {
-        guard supportsStorageLock, let directory = storageDirectory(service: service) else { return nil }
-        return try? RefreshLock$Claude(directory: directory, createParent: service == baseService)
+    static func refreshLock(service: String, directory: DirectoryIdentity? = nil) -> RefreshLock$Claude? {
+        guard supportsStorageLock,
+              let root = directory.map({ URL(fileURLWithPath: $0.path, isDirectory: true) })
+                ?? storageDirectory(service: service),
+              directory?.matches(root) != false,
+              let lease = try? RefreshLock$Claude(directory: root, createParent: directory == nil && service == baseService) else { return nil }
+        guard directory?.matches(root) != false else { lease.release(); return nil }
+        return lease
+    }
+
+    /// Called only after rollback restores this file with an exclusive rename.
+    static func recordRestoredFileOwner(from source: URL, to destination: URL) {
+        RefreshLock$Claude.recordRestoredFileOwner(from: source, to: destination)
     }
 
     static func withRemovalLock(service: String, configDir: URL?,
@@ -390,10 +432,17 @@ enum AuthStorage$Claude {
         var errorDescription: String? { L.t("error.cliProfile") }
     }
 
-    private static func storageLock(service: String, createParent: Bool) -> StorageLock$Claude? {
-        guard supportsStorageLock, let directory = storageDirectory(service: service) else { return nil }
+    private static func storageLock(service: String, createParent: Bool,
+                                    directory: DirectoryIdentity? = nil) -> StorageLock$Claude? {
+        guard supportsStorageLock,
+              let root = directory.map({ URL(fileURLWithPath: $0.path, isDirectory: true) })
+                ?? storageDirectory(service: service),
+              directory?.matches(root) != false else { return nil }
         // Renewal already owns this directory. Do not recreate it after removal.
-        return try? StorageLock$Claude(directory: directory, createParent: createParent && service == baseService)
+        guard let lease = try? StorageLock$Claude(directory: root,
+                                                createParent: directory == nil && createParent && service == baseService) else { return nil }
+        guard directory?.matches(root) != false else { lease.release(); return nil }
+        return lease
     }
 
     private static func storageDirectory(service: String) -> URL? {

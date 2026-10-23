@@ -538,6 +538,7 @@ enum AuthSwap$Codex {
     static func hasAuth(home: URL) -> Bool { (try? storage(at: home))?.contains() ?? false }
 
     static func removeAuth(home: URL, columnID: String? = nil, removingProfileLink: Bool = false,
+                           requireIncomplete: Bool = false,
                            operation: (AuthStorage$Codex) throws -> Void = { try $0.delete() }) throws {
         lock.lock()
         defer { lock.unlock() }
@@ -549,10 +550,30 @@ enum AuthSwap$Codex {
         // The proven primary transaction removes credentials, never its home.
         guard !containsPrimaryBackup(target.home)
             || columnID == defaultColumnID && isBaseHome(target.home) else { throw Failure.busy }
+        if requireIncomplete {
+            var owners = [target]
+            if let columnID {
+                let live = try storage(at: liveHome(columnID: columnID, home: home))
+                if live.home != target.home { owners.append(live) }
+            }
+            for owner in owners {
+                guard owner.mode != .ephemeral else { throw AuthStorage$Codex.Failure.ephemeral }
+                guard try owner.load(verifyingOwner: true) == nil else { throw Failure.busy }
+                // Include the selected native login, even if its sleeping copy
+                // vanished after the menu was built. Ignored fallbacks also count.
+                var info = stat()
+                guard lstat(owner.home.appendingPathComponent("auth.json").path, &info) != 0,
+                      errno == ENOENT else { throw Failure.busy }
+            }
+        }
         // Complete account removal must not preserve an unknown fallback and
         // then report success after deleting only its preferred Keychain entry.
         try requireRemovalOwners(target, removingProfileLink: removingProfileLink)
         let fileOwner = fileOwnerKey(target.home)
+        // Unlinking an independent Keychain alias preserves the shared file.
+        // Its remaining owner's in-flight refresh must still become durable.
+        let preservesSharedFile = removingProfileLink && target.mode != .file
+            && fileIsShared(home: target.home, fileHome: target.home)
         let restore = isSwapped && columnID.map { [defaultColumnID, activeColumnID].contains($0) } == true
         if restore || columnID == defaultColumnID {
             let base = try storage(at: baseHome)
@@ -589,14 +610,14 @@ enum AuthSwap$Codex {
             try operation(target)
         }
         generations[key] = UUID()
-        if let fileOwner { generations[fileOwner] = UUID() }
+        if !preservesSharedFile, let fileOwner { generations[fileOwner] = UUID() }
         if let columnID { columnGenerations[columnID] = UUID() }
         renewals[key] = nil
         // The logical profile may have moved to another physical root while its
         // old request was in flight. Successful removal retires that owner too.
         let retired = renewals.filter {
             $0.value.columnID == columnID || $0.value.storage.home.path == target.home.path
-                || $0.value.record.backend == .file && $0.value.sourceKey == fileOwner
+                || !preservesSharedFile && $0.value.record.backend == .file && $0.value.sourceKey == fileOwner
         }.map(\.key)
         for key in retired {
             generations[key] = UUID()

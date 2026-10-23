@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Откуда берутся учётные данные конкретной колонки.
 enum AccountSource: Equatable {
@@ -10,13 +11,44 @@ enum AccountSource: Equatable {
     case mock(seed: Int)
 }
 
+/// A path alone cannot distinguish a removed profile from its replacement.
+struct DirectoryIdentity: Equatable {
+    let path: String
+    private let device: Int32
+    private let inode: UInt64
+    /// Keep the inode alive; timestamps can change without replacing its owner.
+    private let handle: FileHandle
+
+    static func capture(_ directory: URL) -> DirectoryIdentity? {
+        let path = directory.resolvingSymlinksInPath().path
+        let descriptor = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { return nil }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else { return nil }
+        return DirectoryIdentity(path: path, device: info.st_dev, inode: UInt64(info.st_ino), handle: handle)
+    }
+
+    func matches(_ directory: URL) -> Bool {
+        withExtendedLifetime(handle) { Self.capture(directory) == self }
+    }
+
+    func isSameDirectory(as other: DirectoryIdentity) -> Bool {
+        device == other.device && inode == other.inode
+    }
+
+    static func == (lhs: DirectoryIdentity, rhs: DirectoryIdentity) -> Bool {
+        lhs.path == rhs.path && lhs.isSameDirectory(as: rhs)
+    }
+}
+
 struct DiscoveredAccount: Identifiable, Equatable {
     let id: String
     let provider: Provider
     let profileName: String
     let source: AccountSource
     /// Keep the discovered physical owner when a managed root is a symlink.
-    let claudeConfigOwner: String?
+    let claudeConfigOwner: DirectoryIdentity?
     /// Почта аккаунта (из конфигов, без Keychain). Для дедупа и подсветки.
     var email: String? = nil
     /// Аккаунт открыт в десктоп-приложении (Claude — по папке данных, Codex —
@@ -32,7 +64,7 @@ struct DiscoveredAccount: Identifiable, Equatable {
         self.email = email
         self.isActive = isActive
         if case .claudeKeychain(_, let directory) = source {
-            claudeConfigOwner = directory?.resolvingSymlinksInPath().path
+            claudeConfigOwner = directory.flatMap(DirectoryIdentity.capture)
         } else {
             claudeConfigOwner = nil
         }

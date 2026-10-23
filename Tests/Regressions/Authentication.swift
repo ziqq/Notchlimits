@@ -1071,6 +1071,47 @@ enum Authentication {
             case "codex-forced-temporary-unchanged-control": try await codexForcedRefreshOutcome(change: "none")
             case "codex-forced-temporary-metadata-control": try await codexForcedRefreshOutcome(change: "metadata")
             case "codex-forced-uncertain-unchanged-control": try await codexForcedRefreshOutcome(change: "none", response: "lost")
+            case "codex-incomplete-completed-file": try codexIncompleteRemoval()
+            case "codex-incomplete-completed-keyring": try codexIncompleteRemoval(mode: "keyring")
+            case "codex-incomplete-completed-auto": try codexIncompleteRemoval(mode: "auto")
+            case "codex-incomplete-auto-fallback": try codexIncompleteRemoval(mode: "auto", state: "fallback")
+            case "codex-incomplete-keyring-fallback": try codexIncompleteRemoval(mode: "keyring", state: "fallback")
+            case "codex-incomplete-dangling-fallback": try codexIncompleteRemoval(mode: "keyring", state: "dangling")
+            case "codex-incomplete-denied-auto": try codexIncompleteRemoval(mode: "auto", state: "denied")
+            case "codex-incomplete-denied-keyring": try codexIncompleteRemoval(mode: "keyring", state: "denied")
+            case "codex-incomplete-malformed-keyring": try codexIncompleteRemoval(mode: "keyring", state: "malformed")
+            case "codex-incomplete-desktop-delay": try codexIncompleteRemoval(desktopDelay: true)
+            case "codex-incomplete-empty-file-control": try codexIncompleteRemoval(state: "empty")
+            case "codex-incomplete-empty-keyring-control": try codexIncompleteRemoval(mode: "keyring", state: "empty")
+            case "codex-incomplete-empty-auto-control": try codexIncompleteRemoval(mode: "auto", state: "empty")
+            case "codex-incomplete-ephemeral-control": try codexIncompleteRemoval(mode: "ephemeral", state: "empty")
+            case "codex-incomplete-unsupported-control": try codexIncompleteRemoval(state: "unsupported")
+            case "codex-link-removal-retains-inflight-file": try await codexLinkRemovalPreservesFileRenewal()
+            case "codex-link-removal-retains-pending-file": try await codexLinkRemovalPreservesFileRenewal(pending: true)
+            case "codex-link-inflight-file-control": try await codexLinkRemovalPreservesFileRenewal(remove: false)
+            case "codex-link-pending-file-control": try await codexLinkRemovalPreservesFileRenewal(remove: false, pending: true)
+            case "claude-directory-owner-replaced": try claudeDirectoryOwnerReplacement()
+            case "claude-directory-owner-stable": try claudeDirectoryOwnerReplacement(replaced: false)
+            case "claude-directory-owner-metadata": try claudeDirectoryOwnerReplacement(replaced: false, metadataOnly: true)
+            case "claude-switch-owner-retarget": try claudeSwitchDirectoryOwner()
+            case "claude-switch-owner-retarget-before": try claudeSwitchDirectoryOwner(beforeStage: true)
+            case "claude-switch-owner-replacement": try claudeSwitchDirectoryOwner(change: "replacement")
+            case "claude-switch-owner-replacement-before": try claudeSwitchDirectoryOwner(change: "replacement", beforeStage: true)
+            case "claude-switch-owner-stable": try claudeSwitchDirectoryOwner(change: "stable")
+            case "claude-switch-owner-off": try claudeSwitchDirectoryOwner(switchCLI: false)
+            case "claude-switch-owner-off-before": try claudeSwitchDirectoryOwner(beforeStage: true, switchCLI: false)
+            case "claude-switch-owner-toggle-on": try claudeSwitchDirectoryOwner(switchCLI: false, commitSetting: true)
+            case "claude-switch-owner-toggle-off": try claudeSwitchDirectoryOwner(commitSetting: false)
+            case "claude-pending-root-new-owner": try await claudePendingRootRetarget()
+            case "claude-pending-root-same-grant": try await claudePendingRootRetarget(sameCredentials: true)
+            case "claude-pending-root-stable-control": try await claudePendingRootRetarget(retarget: false)
+            case "claude-pending-owner-busy-recovery": try await claudePendingPhysicalRecovery()
+            case "claude-pending-owner-remove-replacement": try await claudePendingPhysicalRecovery(removeReplacement: true)
+            case "codex-incomplete-selected-live-file": try codexIncompleteSelectedLiveOwner()
+            case "codex-incomplete-selected-live-keyring": try codexIncompleteSelectedLiveOwner(mode: "keyring")
+            case "claude-pending-owner-remove-replacement-inflight": try await claudePendingPhysicalRemovalDuringRefresh()
+            case "claude-rotated-grant-new-login-control": try await claudeRotatedGrantControl()
+            case "claude-unrotated-grant-control": try await claudeRotatedGrantControl(unchangedGrant: true)
             case "claude-canonical-main-discovery": try claudeCanonicalMain()
             case "claude-canonical-main-stale-removal": try claudeCanonicalMain(staleRemoval: true)
             case "claude-owner-denied-fallback": try await claudeOwnerFallback()
@@ -1260,6 +1301,7 @@ enum Authentication {
             case "claude-live-owner": try claudeCrashOwner(live: true)
             case "claude-recover-owner": try await claudeRecoverOwner(expectBusy: false)
             case "claude-preserve-owner": try await claudeRecoverOwner(expectBusy: true)
+            case "claude-pending-rollback-replacement-owner": try await claudePendingRollbackReplacementOwner()
             default: throw Failure(description: "Unknown scenario")
             }
             print("PASS: \(CommandLine.arguments[1])")
@@ -3469,7 +3511,9 @@ enum Authentication {
         Fixture.keychainExists = true
         try expect(AppSwitcher$Claude().isOpenInApp(columnID: account.id) == false,
                    "The retired Desktop session was shown as the re-added account")
-        let second = try switchSuccessfully(account)
+        store.rediscover(force: true)
+        guard let readded = store.account(for: account.id) else { throw Failure(description: "Re-added account was not discovered") }
+        let second = try switchSuccessfully(readded)
         let replacement = try desktopDirectory(second.arguments)
         try expect(replacement != directory && !Foundation.FileManager.default.fileExists(atPath: replacement.appendingPathComponent(session.lastPathComponent).path),
                    "Re-added account reused the removed Desktop session, including writes from an old process")
@@ -4129,8 +4173,11 @@ enum Authentication {
         var native = stat()
         try expect(lstat(foreign.path, &native) == 0, "Fixture could not identify the new native lock")
         Fixture.denyKeychainDelete = false
+        guard let restored = Discovery$Real().discover().first(where: { $0.id == account.id }) else {
+            throw Failure(description: "Restored profile was not rediscovered after rollback")
+        }
         var retryFailed = false
-        do { try AccountRemoval.remove(account) } catch { retryFailed = true }
+        do { try AccountRemoval.remove(restored) } catch { retryFailed = true }
         var after = stat()
         let retained = lstat(foreign.path, &after) == 0 && after.st_ino == native.st_ino && after.st_dev == native.st_dev
         print("Retry failed=\(retryFailed), native current lock retained=\(retained), credentials retained=\(Fixture.claudeEntries?[service] != nil)")
@@ -4138,7 +4185,7 @@ enum Authentication {
                    "Retry borrowed a staged lease and bypassed the new native OAuth owner")
         _ = Darwin.rmdir(foreign.path)
         lease.release()
-        try AccountRemoval.remove(account)
+        try AccountRemoval.remove(restored)
         try expect(Fixture.claudeEntries?[service] == nil && !Foundation.FileManager.default.fileExists(atPath: directory.path),
                    "Removal remained blocked after both prior owners released their locks")
     }
@@ -6164,6 +6211,540 @@ enum Authentication {
             try expect(Fixture.refreshCalls == 1 && Fixture.usageCalls == 2,
                        "Polling the replacement session repeated its predecessor's refresh")
         }
+    }
+
+    @MainActor
+    private static func codexIncompleteRemoval(mode: String = "file", state: String = "completed",
+                                                desktopDelay: Bool = false) throws {
+        Fixture.keychainExists = false
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("unfinished-owner")
+        let file = home.appendingPathComponent("auth.json")
+        try Fixture.codexMode(home, mode)
+        if desktopDelay {
+            UserDefaults.standard.set("codex:unfinished-owner", forKey: "codexAppAccountID")
+            UserDefaults.standard.set(home.path, forKey: "codexAppAccountHome")
+            UserDefaults.standard.set(home.path, forKey: "codexAppAccountPhysicalHome")
+            Fixture.desktopRunning = true
+            Fixture.holdDesktopStop = true
+        }
+        let store = UsageStore(providers: [.codex: Provider$Codex()], discovery: Discovery$Real())
+        store.rediscover(force: true)
+        let menu = RegressionProfileMenu(store: store)
+        try expect(menu.profiles().contains { $0.url.path == home.path }, "Fixture did not expose an unfinished Codex profile")
+        if desktopDelay {
+            menu.remove(path: home.path)
+            try expect(Fixture.desktopStops == 1 && Fixture.desktopStopCompletion != nil,
+                       "Unfinished removal did not wait for the selected Desktop to exit")
+        }
+        switch state {
+        case "completed": try Fixture.codexLogin(home, account: "new-login", mode: mode, expired: false)
+        case "fallback": try Fixture.writeAuth(home, account: "fallback-login", refresh: "fallback-refresh", expired: false)
+        case "dangling": try Foundation.FileManager.default.createSymbolicLink(at: file, withDestinationURL: home.appendingPathComponent("missing-auth"))
+        case "denied":
+            try Fixture.codexLogin(home, account: "unreadable-login", mode: mode, expired: false)
+            Fixture.denyCodexRead = true
+        case "malformed": Fixture.codexKeychain[Fixture.codexKey(home)] = Data("malformed-keyring".utf8)
+        case "unsupported": try Fixture.codexMode(home, "encrypted")
+        default: break
+        }
+        let preferred = Fixture.codexKeychain[Fixture.codexKey(home)]
+        let fallback = try? Data(contentsOf: file)
+        if desktopDelay {
+            Fixture.desktopRunning = false
+            Fixture.desktopStopCompletion?(.success(()))
+        } else { menu.remove(path: home.path) }
+        Fixture.denyCodexRead = false
+        let shouldRefuse = state != "empty" || mode == "ephemeral"
+        try expect((menu.failure != nil) == shouldRefuse, "Unfinished removal confused an absent login with completed, unavailable or unsupported credentials")
+        if shouldRefuse {
+            try expect(Foundation.FileManager.default.fileExists(atPath: home.path)
+                       && Fixture.codexKeychain[Fixture.codexKey(home)] == preferred
+                       && (try? Data(contentsOf: file)) == fallback,
+                       "Refused unfinished removal changed the new login or its profile directory")
+            if state == "dangling" {
+                var info = stat()
+                try expect(lstat(file.path, &info) == 0 && info.st_mode & S_IFMT == S_IFLNK,
+                           "Unfinished removal deleted a dangling auth fallback")
+            }
+            if desktopDelay {
+                try expect(AuthSwap$Codex.activeColumnID == "codex:unfinished-owner",
+                           "Refused unfinished removal changed the selected account")
+            }
+        } else {
+            try expect(!Foundation.FileManager.default.fileExists(atPath: home.path),
+                       "A genuinely unfinished Codex profile could not be removed")
+            try Fixture.codexLogin(home, account: "readded", mode: mode, expired: false)
+            try expect(Discovery$Real().discover().contains { $0.id == "codex:unfinished-owner" },
+                       "Successful unfinished cleanup prevented same-name re-addition")
+        }
+        try expect(Fixture.refreshCalls == 0, "Unfinished cleanup started an OAuth request")
+    }
+
+    @MainActor
+    private static func codexLinkRemovalPreservesFileRenewal(remove: Bool = true, pending: Bool = false) async throws {
+        Fixture.keychainExists = false
+        let base = AuthSwap$Codex.baseHome
+        let alias = ProfileDirectories.codexRoot.appendingPathComponent("independent-link")
+        let physical = ProfileDirectories.codexRoot.appendingPathComponent("retained-file-owner")
+        try Fixture.codexLogin(base, account: "primary", mode: "file")
+        try Fixture.codexLogin(alias, account: "alias-owner", mode: "auto")
+        guard let aliasAccount = Discovery$Real().discover().first(where: { $0.id == "codex:independent-link" }),
+              let preferred = Fixture.codexKeychain[Fixture.codexKey(alias)] else {
+            throw Failure(description: "Fixture did not discover the independent alias login")
+        }
+        Fixture.codexKeychain[Fixture.codexKey(alias)] = nil
+        try Foundation.FileManager.default.removeItem(at: alias)
+        try Fixture.codexMode(physical, "auto")
+        try Fixture.writeAuth(physical, account: "file-peer", refresh: "peer-refresh", expired: true)
+        try Foundation.FileManager.default.createSymbolicLink(at: alias,
+            withDestinationURL: URL(fileURLWithPath: "/System/Volumes/Data" + physical.path))
+        let aliasKey = Fixture.codexKey(alias)
+        Fixture.codexKeychain[aliasKey] = preferred
+        let fileAccount = DiscoveredAccount(id: "codex:retained-file-owner", provider: .codex,
+            profileName: "retained-file-owner", source: .codexHome(physical))
+        Fixture.response = .heldRenewed
+        Fixture.failCodexFileWrite = pending
+        let request = Task { await Provider$Codex().fetch(fileAccount) }
+        try await waitForRefresh(1)
+        if pending {
+            Fixture.releaseRefresh()
+            _ = await request.value
+            try expect(Renewal$Codex.refreshToken(physical.appendingPathComponent("auth.json")) == "peer-refresh",
+                       "Fixture did not retain the rotated response in pending storage")
+        }
+        if remove { try AccountRemoval.remove(aliasAccount) }
+        if pending {
+            Fixture.failCodexFileWrite = false
+            let ready = await Renewal$Codex.shared.prepareForTermination(timeout: 2)
+            try expect(ready, "Preserved file owner's pending rotation could not become durable")
+        } else {
+            Fixture.releaseRefresh()
+            _ = await request.value
+        }
+        let token = Renewal$Codex.refreshToken(physical.appendingPathComponent("auth.json"))
+        try expect(token == "synthetic-rotated" && Fixture.refreshCalls == 1,
+                   "Removing an independent Keychain alias retired the preserved file owner's accepted rotation")
+        try expect(remove ? Fixture.codexKeychain[aliasKey] == nil : Fixture.codexKeychain[aliasKey] == preferred,
+                   "File-peer rotation restored or changed the independent alias credentials")
+        try expect(Foundation.FileManager.default.fileExists(atPath: alias.path) != remove,
+                   "File-peer rotation recreated a removed managed alias")
+    }
+
+    @MainActor
+    private static func claudeDirectoryOwnerReplacement(replaced: Bool = true, metadataOnly: Bool = false) throws {
+        let manager = Foundation.FileManager.default
+        let profile = ProfileDirectories.claudeRoot.appendingPathComponent("same-name")
+        let old = Fixture.root.appendingPathComponent("retired-original")
+        try manager.createDirectory(at: profile, withIntermediateDirectories: true)
+        Fixture.claudeEntries = [:]
+        let original = try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("original", expired: false))
+        try original.write(to: profile.appendingPathComponent(".credentials.json"))
+        let hash = SHA256.hash(data: Data(profile.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
+        let id = "claude:" + Fixture.service + "-" + hash
+        guard let account = Discovery$Real().discover().first(where: { $0.id == id }) else {
+            throw Failure(description: "Original file profile was not discovered")
+        }
+        var before = stat()
+        try expect(stat(profile.path, &before) == 0, "Original profile identity unavailable")
+        let replacement = try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("replacement", expired: false))
+        if replaced {
+            try manager.moveItem(at: profile, to: old)
+            try manager.createDirectory(at: profile, withIntermediateDirectories: true)
+            try replacement.write(to: profile.appendingPathComponent(".credentials.json"))
+            try Data("replacement-settings".utf8).write(to: profile.appendingPathComponent("settings.json"))
+            var after = stat()
+            try expect(stat(profile.path, &after) == 0 && after.st_ino != before.st_ino,
+                       "Fixture did not replace the physical profile directory")
+        } else if metadataOnly {
+            try Data("updated-settings".utf8).write(to: profile.appendingPathComponent("settings.json"))
+            try manager.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1)], ofItemAtPath: profile.path)
+        }
+        var refused = false
+        do { try AccountRemoval.remove(account) } catch { refused = true }
+        let preserved = (try? Data(contentsOf: profile.appendingPathComponent(".credentials.json"))) == replacement
+        print("Same-path replacement=\(replaced), metadata=\(metadataOnly), refused=\(refused), replacement preserved=\(preserved)")
+        if replaced {
+            try expect(refused && preserved
+                       && (try? Data(contentsOf: old.appendingPathComponent(".credentials.json"))) == original
+                       && (try? String(contentsOf: profile.appendingPathComponent("settings.json"))) == "replacement-settings",
+                       "Stale Claude removal deleted the replacement directory at the same physical path")
+        } else {
+            try expect(!refused && !manager.fileExists(atPath: profile.path),
+                       "Original unchanged Claude owner could not be removed after ordinary metadata changes")
+        }
+    }
+
+    @MainActor
+    private static func claudeSwitchDirectoryOwner(change: String = "retarget", beforeStage: Bool = false,
+                                                   switchCLI: Bool? = nil, commitSetting: Bool? = nil) throws {
+        let manager = Foundation.FileManager.default
+        let first = Fixture.root.appendingPathComponent("switch-owner-a")
+        let second = Fixture.root.appendingPathComponent("switch-owner-b")
+        try manager.createDirectory(at: first.appendingPathComponent("work"), withIntermediateDirectories: true)
+        try manager.createDirectory(at: second.appendingPathComponent("work"), withIntermediateDirectories: true)
+        try manager.createSymbolicLink(at: ProfileDirectories.claudeRoot, withDestinationURL: first)
+        let logical = ProfileDirectories.claudeRoot.appendingPathComponent("work")
+        Fixture.claudeEntries = [:]
+        let original = try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("original", expired: false))
+        let replacement = try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("replacement", expired: false))
+        try original.write(to: first.appendingPathComponent("work/.credentials.json"))
+        try replacement.write(to: second.appendingPathComponent("work/.credentials.json"))
+        let hash = SHA256.hash(data: Data(logical.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
+        guard let account = Discovery$Real().discover().first(where: { $0.id == "claude:" + Fixture.service + "-" + hash }) else {
+            throw Failure(description: "Original switch profile was not discovered")
+        }
+        let desktop = DesktopApp.supportDirectory.appendingPathComponent("claude-app")
+            .appendingPathComponent(AppSwitcher$Claude.key(for: account.id))
+        try manager.createDirectory(at: desktop, withIntermediateDirectories: true)
+        let desktopState = desktop.appendingPathComponent("session-marker")
+        try Data("preserve-desktop-session".utf8).write(to: desktopState)
+        let pointer = DesktopApp.supportDirectory.appendingPathComponent("claude-cli/selected-profile")
+        try manager.createDirectory(at: pointer.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let previous = "/previous-cli-profile\n"
+        try Data(previous.utf8).write(to: pointer)
+        if let switchCLI { CLISelection$Claude.isEnabled = switchCLI }
+        else { UserDefaults.standard.removeObject(forKey: "switchClaudeCLI") }
+        let initiallyEnabled = switchCLI ?? true
+        func replaceOwner() throws {
+            if change == "retarget" {
+                try manager.removeItem(at: ProfileDirectories.claudeRoot)
+                try manager.createSymbolicLink(at: ProfileDirectories.claudeRoot, withDestinationURL: second)
+            } else if change == "replacement" {
+                let physical = first.appendingPathComponent("work")
+                let retired = first.appendingPathComponent("retired-original")
+                var before = stat()
+                try expect(stat(physical.path, &before) == 0, "Original switch directory unavailable")
+                try manager.moveItem(at: physical, to: retired)
+                try manager.createDirectory(at: physical, withIntermediateDirectories: true)
+                try replacement.write(to: physical.appendingPathComponent(".credentials.json"))
+                var after = stat()
+                try expect(stat(physical.path, &after) == 0 && after.st_ino != before.st_ino,
+                           "Switch fixture did not replace the physical directory")
+            } else {
+                try Data("updated-settings".utf8).write(to: logical.appendingPathComponent("settings.json"))
+            }
+        }
+        if beforeStage { try replaceOwner() }
+        Fixture.holdDesktopCompletion = true
+        var result: Result<Void, Error>?
+        AppSwitcher$Claude().switchTo(account) { result = $0 }
+        let launched = Fixture.desktopCompletion != nil
+        if launched {
+            if !beforeStage { try replaceOwner() }
+            if let commitSetting { CLISelection$Claude.isEnabled = commitSetting }
+            Fixture.desktopCompletion?(.success(()))
+        }
+        let changed = change != "stable"
+        let refusedBeforeLaunch = beforeStage && changed && initiallyEnabled
+        let finallyEnabled = commitSetting ?? initiallyEnabled
+        let expectedRefusal = refusedBeforeLaunch || changed && finallyEnabled
+        let refused: Bool
+        if case .failure? = result { refused = true } else { refused = false }
+        let selected = try String(contentsOf: pointer)
+        print("Switch change=\(change), before=\(beforeStage), initial=\(initiallyEnabled), final=\(finallyEnabled), refused=\(refused), launched=\(launched)")
+        try expect(refused == expectedRefusal && launched == !refusedBeforeLaunch,
+                   "Switch did not reject the changed physical CLI owner at preparation or commit")
+        try expect(selected == (!expectedRefusal && finallyEnabled ? logical.path + "\n" : previous),
+                   "Switch routed the CLI to a replacement owner or ignored its setting")
+        let marker = AppSwitcher$Claude().isOpenInApp(columnID: account.id)
+        try expect(launched ? marker == true : marker == nil,
+                   "The Desktop marker did not reflect the actual launch")
+        try expect(try String(contentsOf: desktopState) == "preserve-desktop-session",
+                   "CLI ownership validation discarded the existing Desktop session")
+        try expect(Fixture.keychainWrites == 0 && Fixture.refreshCalls == 0,
+                   "CLI ownership validation copied credentials or performed an unexpected renewal")
+    }
+
+    @MainActor
+    private static func claudePendingRootRetarget(retarget: Bool = true, sameCredentials: Bool = false) async throws {
+        let manager = Foundation.FileManager.default
+        let first = Fixture.root.appendingPathComponent("pending-owner-a")
+        let second = Fixture.root.appendingPathComponent("pending-owner-b")
+        let original = first.appendingPathComponent("work")
+        let replacement = second.appendingPathComponent("work")
+        try manager.createDirectory(at: original, withIntermediateDirectories: true)
+        try manager.createDirectory(at: replacement, withIntermediateDirectories: true)
+        try manager.createSymbolicLink(at: ProfileDirectories.claudeRoot, withDestinationURL: first)
+        let logical = ProfileDirectories.claudeRoot.appendingPathComponent("work")
+        let suffix = SHA256.hash(data: Data(logical.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
+        let service = Fixture.service + "-" + suffix
+        Fixture.claudeEntries = [:]
+        let oldJSON = Fixture.claudeLogin("pending-original", expired: true)
+        let oldData = try JSONSerialization.data(withJSONObject: oldJSON)
+        let replacementData = try sameCredentials ? oldData : JSONSerialization.data(withJSONObject: Fixture.claudeLogin("replacement", expired: false))
+        let originalFile = original.appendingPathComponent(".credentials.json")
+        let replacementFile = replacement.appendingPathComponent(".credentials.json")
+        try oldData.write(to: originalFile)
+        try replacementData.write(to: replacementFile)
+        let account = DiscoveredAccount(id: "claude:" + service, provider: .claude, profileName: "work",
+                                        source: .claudeKeychain(service: service, configDir: logical))
+        Fixture.expectedOAuthDirectory = logical
+        Fixture.response = .heldRenewed
+        defer { Fixture.releaseRefresh() }
+        let provider = Provider$Claude()
+        let pending = Task { await provider.fetch(account) }
+        try await waitForRefresh(1)
+        if retarget {
+            try manager.removeItem(at: ProfileDirectories.claudeRoot)
+            try manager.createSymbolicLink(at: ProfileDirectories.claudeRoot, withDestinationURL: second)
+        }
+        Fixture.releaseRefresh()
+        _ = await pending.value
+        if retarget {
+            _ = await provider.fetch(account)
+            let ready = await provider.prepareForTermination(timeout: 0.05)
+            await provider.cancelTermination()
+            let originalJSON = try JSONSerialization.jsonObject(with: Data(contentsOf: originalFile)) as! [String: Any]
+            let stored = AuthStorage$Claude.parse(originalJSON)?.refreshToken
+            let originalRotated = stored == "synthetic-rotated"
+            print("retarget=\(retarget), same=\(sameCredentials), ready=\(ready), original rotated=\(originalRotated), POSTs=\(Fixture.refreshCalls)")
+            try manager.removeItem(at: ProfileDirectories.claudeRoot)
+            try manager.createSymbolicLink(at: ProfileDirectories.claudeRoot, withDestinationURL: first)
+        }
+        _ = await provider.fetch(account)
+        let finalJSON = try JSONSerialization.jsonObject(with: Data(contentsOf: originalFile)) as! [String: Any]
+        try expect(AuthStorage$Claude.parse(finalJSON)?.refreshToken == "synthetic-rotated" && Fixture.refreshCalls == 1,
+                   "Retargeting the profile root discarded an accepted original-owner rotation and reposted its spent grant")
+        try expect(try Data(contentsOf: replacementFile) == replacementData, "Original rotation changed replacement-owner credentials")
+    }
+
+    @MainActor
+    private static func claudePendingPhysicalRecovery(removeReplacement: Bool = false) async throws {
+        let manager = Foundation.FileManager.default
+        let first = Fixture.root.appendingPathComponent("pending-locked-a")
+        let second = Fixture.root.appendingPathComponent("pending-locked-b")
+        let original = first.appendingPathComponent("work")
+        let replacement = second.appendingPathComponent("work")
+        try manager.createDirectory(at: original, withIntermediateDirectories: true)
+        try manager.createDirectory(at: replacement, withIntermediateDirectories: true)
+        try manager.createSymbolicLink(at: ProfileDirectories.claudeRoot, withDestinationURL: first)
+        let logical = ProfileDirectories.claudeRoot.appendingPathComponent("work")
+        let suffix = SHA256.hash(data: Data(logical.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
+        let service = Fixture.service + "-" + suffix
+        Fixture.claudeEntries = [:]
+        let originalFile = original.appendingPathComponent(".credentials.json")
+        let replacementFile = replacement.appendingPathComponent(".credentials.json")
+        let replacementData = try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("replacement", expired: false))
+        try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("pending-original", expired: true)).write(to: originalFile)
+        try replacementData.write(to: replacementFile)
+        let account = DiscoveredAccount(id: "claude:" + service, provider: .claude, profileName: "work",
+                                        source: .claudeKeychain(service: service, configDir: logical))
+        Fixture.expectedOAuthDirectory = logical
+        Fixture.replaceOAuthDuringPOST = true
+        Fixture.response = .heldRenewed
+        defer { Fixture.releaseRefresh() }
+        let provider = Provider$Claude()
+        let pending = Task { await provider.fetch(account) }
+        try await waitForRefresh(1)
+        try manager.removeItem(at: ProfileDirectories.claudeRoot)
+        try manager.createSymbolicLink(at: ProfileDirectories.claudeRoot, withDestinationURL: second)
+        Fixture.releaseRefresh()
+        _ = await pending.value
+        _ = await provider.fetch(account)
+        let blocked = await provider.prepareForTermination(timeout: 0.05)
+        await provider.cancelTermination()
+        try expect(!blocked && Fixture.refreshCalls == 1,
+                   "A busy original file owner lost its accepted grant or allowed termination through the replacement root")
+        try expect(try Data(contentsOf: replacementFile) == replacementData,
+                   "Pending original-owner credentials changed the replacement profile")
+        if removeReplacement {
+            let removed = DiscoveredAccount(id: account.id, provider: .claude, profileName: "work",
+                                           source: .claudeKeychain(service: service, configDir: logical))
+            try AccountRemoval.remove(removed)
+            await provider.accountRemoved(removed)
+            try manager.createDirectory(at: replacement, withIntermediateDirectories: true)
+            try replacementData.write(to: replacementFile)
+            let afterRemoval = await provider.prepareForTermination(timeout: 0.05)
+            await provider.cancelTermination()
+            try expect(!afterRemoval, "Removing replacement B discarded pending original A under the same service")
+        }
+        Fixture.replaceOAuthDuringPOST = false
+        try manager.removeItem(at: original.appendingPathComponent(".oauth_refresh.lock"))
+        _ = await provider.fetch(account)
+        let durable = try JSONSerialization.jsonObject(with: Data(contentsOf: originalFile)) as! [String: Any]
+        try expect(AuthStorage$Claude.parse(durable)?.refreshToken == "synthetic-rotated" && Fixture.refreshCalls == 1,
+                   "Releasing the original lock did not persist its accepted rotation without a second POST")
+        try expect(try Data(contentsOf: replacementFile) == replacementData,
+                   "Recovery modified the replacement file owner")
+        let ready = await provider.prepareForTermination(timeout: 0.05)
+        await provider.cancelTermination()
+        try expect(ready, "Durable rotation still blocked termination")
+        try manager.removeItem(at: ProfileDirectories.claudeRoot)
+        try manager.createSymbolicLink(at: ProfileDirectories.claudeRoot, withDestinationURL: first)
+        if case .success = await provider.fetch(account) {} else { throw Failure(description: "Restored original root could not use its persisted rotation") }
+        try expect(Fixture.refreshCalls == 1, "Restoring the original root reposted its spent grant")
+    }
+
+    @MainActor
+    private static func codexIncompleteSelectedLiveOwner(mode: String = "file") throws {
+        Fixture.keychainExists = false
+        let base = AuthSwap$Codex.baseHome
+        let profile = ProfileDirectories.codexRoot.appendingPathComponent("unfinished-selected")
+        let id = "codex:unfinished-selected"
+        try Fixture.codexLogin(base, account: "primary", mode: mode, expired: false)
+        try Fixture.codexMode(profile, mode)
+        let store = UsageStore(providers: [.codex: Provider$Codex()], discovery: Discovery$Real())
+        store.rediscover(force: true)
+        let menu = RegressionProfileMenu(store: store)
+        try expect(menu.profiles().contains { $0.url.path == profile.path },
+                   "Fixture did not capture the unfinished menu before login")
+        try Fixture.codexLogin(profile, account: "selected", mode: mode, expired: false)
+        try AuthSwap$Codex.activate(columnID: id, home: profile)
+        let live = try AuthSwap$Codex.authData(home: base)
+        let backup = try AuthSwap$Codex.authData(home: AuthSwap$Codex.stashHome)
+        if mode == "file" {
+            try Foundation.FileManager.default.removeItem(at: profile.appendingPathComponent("auth.json"))
+        } else { Fixture.codexKeychain[Fixture.codexKey(profile)] = nil }
+        try expect(try AuthSwap$Codex.authData(home: profile) == nil
+                   && Provider$Codex.readAuth(codexHome: base)?.accountID == "selected",
+                   "Fixture did not leave the selected login only in the live native backend")
+        menu.remove(path: profile.path)
+        let retainedLive = try AuthSwap$Codex.authData(home: base)
+        let retainedBackup = try AuthSwap$Codex.authData(home: AuthSwap$Codex.stashHome)
+        print("Incomplete selected mode=\(mode) refused=\(menu.failure != nil) active=\(AuthSwap$Codex.activeColumnID)")
+        try expect(menu.failure != nil && AuthSwap$Codex.activeColumnID == id
+                   && retainedLive == live && retainedBackup == backup
+                   && Foundation.FileManager.default.fileExists(atPath: profile.path),
+                   "Stale unfinished menu removed a completed login routed through the native backend")
+        try expect(Fixture.refreshCalls == 0, "Unfinished-profile validation started a refresh request")
+    }
+
+    @MainActor
+    private static func claudePendingPhysicalRemovalDuringRefresh() async throws {
+        let manager = Foundation.FileManager.default
+        let first = Fixture.root.appendingPathComponent("pending-locked-a")
+        let second = Fixture.root.appendingPathComponent("pending-locked-b")
+        let original = first.appendingPathComponent("work")
+        let replacement = second.appendingPathComponent("work")
+        try manager.createDirectory(at: original, withIntermediateDirectories: true)
+        try manager.createDirectory(at: replacement, withIntermediateDirectories: true)
+        try manager.createSymbolicLink(at: ProfileDirectories.claudeRoot, withDestinationURL: first)
+        let logical = ProfileDirectories.claudeRoot.appendingPathComponent("work")
+        let suffix = SHA256.hash(data: Data(logical.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
+        let service = Fixture.service + "-" + suffix
+        Fixture.claudeEntries = [:]
+        let originalFile = original.appendingPathComponent(".credentials.json")
+        let replacementFile = replacement.appendingPathComponent(".credentials.json")
+        let replacementData = try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("replacement", expired: false))
+        try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("pending-original", expired: true)).write(to: originalFile)
+        try replacementData.write(to: replacementFile)
+        let account = DiscoveredAccount(id: "claude:" + service, provider: .claude, profileName: "work",
+                                        source: .claudeKeychain(service: service, configDir: logical))
+        Fixture.expectedOAuthDirectory = logical
+        Fixture.replaceOAuthDuringPOST = true
+        Fixture.response = .heldRenewed
+        defer { Fixture.releaseRefresh() }
+        let provider = Provider$Claude()
+        let pending = Task { await provider.fetch(account) }
+        try await waitForRefresh(1)
+        try manager.removeItem(at: ProfileDirectories.claudeRoot)
+        try manager.createSymbolicLink(at: ProfileDirectories.claudeRoot, withDestinationURL: second)
+        let removed = DiscoveredAccount(id: account.id, provider: .claude, profileName: "work",
+                                       source: .claudeKeychain(service: service, configDir: logical))
+        try AccountRemoval.remove(removed)
+        await provider.accountRemoved(removed)
+        try manager.createDirectory(at: replacement, withIntermediateDirectories: true)
+        try replacementData.write(to: replacementFile)
+        Fixture.releaseRefresh()
+        _ = await pending.value
+        _ = await provider.fetch(account)
+        let blocked = await provider.prepareForTermination(timeout: 0.05)
+        await provider.cancelTermination()
+        try expect(!blocked && Fixture.refreshCalls == 1,
+                   "Removing and readding B while the reply was held retired the active refresh of physical owner A")
+        try expect(try Data(contentsOf: replacementFile) == replacementData,
+                   "Pending original-owner credentials changed the replacement profile")
+        Fixture.replaceOAuthDuringPOST = false
+        try manager.removeItem(at: original.appendingPathComponent(".oauth_refresh.lock"))
+        _ = await provider.fetch(account)
+        let durable = try JSONSerialization.jsonObject(with: Data(contentsOf: originalFile)) as! [String: Any]
+        try expect(AuthStorage$Claude.parse(durable)?.refreshToken == "synthetic-rotated" && Fixture.refreshCalls == 1,
+                   "Releasing the original lock did not persist its accepted rotation without a second POST")
+        try expect(try Data(contentsOf: replacementFile) == replacementData,
+                   "Recovery modified the replacement file owner")
+        let ready = await provider.prepareForTermination(timeout: 0.05)
+        await provider.cancelTermination()
+        try expect(ready, "Durable rotation still blocked termination")
+        try manager.removeItem(at: ProfileDirectories.claudeRoot)
+        try manager.createSymbolicLink(at: ProfileDirectories.claudeRoot, withDestinationURL: first)
+        if case .success = await provider.fetch(account) {} else { throw Failure(description: "Restored original root could not use its persisted rotation") }
+        try expect(Fixture.refreshCalls == 1, "Restoring the original root reposted its spent grant")
+    }
+
+    @MainActor
+    private static func claudeRotatedGrantControl(unchangedGrant: Bool = false) async throws {
+        let (account, file) = try claudeFileAccount(primary: false)
+        let provider = Provider$Claude()
+        if unchangedGrant {
+            var original = Fixture.claudeLogin("initial", expired: true)
+            var oauth = original["claudeAiOauth"] as! [String: Any]
+            oauth["refreshToken"] = "synthetic-rotated"
+            original["claudeAiOauth"] = oauth
+            try JSONSerialization.data(withJSONObject: original).write(to: file)
+        }
+        if case .success = await provider.fetch(account) {} else { throw Failure(description: "Initial file owner did not renew") }
+        try expect(Fixture.refreshCalls == 1, "Initial control sent an unexpected number of refresh requests")
+        var replacement = Fixture.claudeLogin("replacement-control", expired: true)
+        if unchangedGrant {
+            var oauth = replacement["claudeAiOauth"] as! [String: Any]
+            oauth["refreshToken"] = "synthetic-rotated"
+            replacement["claudeAiOauth"] = oauth
+        }
+        try JSONSerialization.data(withJSONObject: replacement).write(to: file, options: .atomic)
+        if case .success = await provider.fetch(account) {} else {
+            throw Failure(description: "Confirmed-rotation quarantine blocked a new grant or an explicitly unrotated grant")
+        }
+        let current = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
+        try expect(Fixture.refreshCalls == 2 && AuthStorage$Claude.parse(current)?.refreshToken == "synthetic-rotated",
+                   "Safe grant control did not renew and persist exactly once per poll")
+    }
+
+    @MainActor
+    private static func claudePendingRollbackReplacementOwner() async throws {
+        let manager = Foundation.FileManager.default
+        let (account, file) = try claudeFileAccount(primary: false)
+        let directory = file.deletingLastPathComponent()
+        let replacementData = try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("replacement-rollback", expired: false))
+        let provider = Provider$Claude()
+        Fixture.failClaudeFileWrite = true
+        let pending = Task { await provider.fetch(account) }
+        for _ in 0..<300 {
+            if Fixture.claudeFileWriteFailures > 0 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(Fixture.claudeFileWriteFailures > 0, "Original rotation did not reach pending persistence")
+        Fixture.denyKeychainDelete = true
+        Fixture.beforeCredentialDelete = {
+            try! manager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try! replacementData.write(to: file)
+        }
+        var refused = false
+        do { try AccountRemoval.remove(account) } catch { refused = true }
+        try expect(refused && (try Data(contentsOf: file)) == replacementData,
+                   "Refused removal changed the concurrent replacement login")
+        Fixture.denyKeychainDelete = false
+        Fixture.failClaudeFileWrite = false
+        _ = await pending.value
+        let staged = try manager.contentsOfDirectory(at: ProfileDirectories.claudeRoot,
+                                                     includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix(".removed-") }
+        var retainedRotation = false
+        for root in staged {
+            let originalFile = root.appendingPathComponent(".credentials.json")
+            if let data = try? Data(contentsOf: originalFile),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               AuthStorage$Claude.parse(json)?.refreshToken == "synthetic-rotated" {
+                retainedRotation = true
+            }
+        }
+        try expect(retainedRotation && Fixture.refreshCalls == 1,
+                   "Rollback conflict discarded the accepted original rotation instead of preserving its staged owner")
+        try expect(try Data(contentsOf: file) == replacementData, "Pending original rotation overwrote replacement B")
+        if case .success = await provider.fetch(account) {} else { throw Failure(description: "Replacement owner could not serve usage after original persistence") }
+        try expect(Fixture.lastAuthorization == "Bearer synthetic-replacement-rollback" && Fixture.refreshCalls == 1,
+                   "Replacement usage inherited original-owner credentials or repeated its refresh")
+        let ready = await provider.prepareForTermination(timeout: 0.05)
+        try expect(ready, "A durable staged rotation still blocked termination")
     }
 
 }
