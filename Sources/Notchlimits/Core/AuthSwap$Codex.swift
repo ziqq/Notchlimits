@@ -176,7 +176,6 @@ enum AuthSwap$Codex {
 
     private static func otherHomes(home: URL, directory: URL) throws -> [URL] {
         let physical = URL(fileURLWithPath: homeKey(directory))
-        guard let owner = fileOwnerKey(physical) else { return [] }
         let root = ProfileDirectories.codexRoot
         // Directory metadata excludes child symlinks. Ownership checks must
         // include those native namespaces before moving their shared target.
@@ -189,6 +188,7 @@ enum AuthSwap$Codex {
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
             entries = []
         }
+        guard let owner = fileOwnerKey(physical) else { return [] }
         var homes = [baseHome, stashHome] + entries.map {
             root.appendingPathComponent($0.lastPathComponent, isDirectory: true)
         }
@@ -196,6 +196,21 @@ enum AuthSwap$Codex {
         return homes.filter {
             let canonical = URL(fileURLWithPath: homeKey($0))
             return canonical.path != home.path && fileOwnerKey(canonical) == owner
+        }
+    }
+
+    /// Raw Keychain cleanup may retain a shared file. Complete auto-account
+    /// removal cannot: that file would become the account's live fallback.
+    private static func requireRemovalOwners(_ target: AuthStorage$Codex, removingProfileLink: Bool = false) throws {
+        let homes = try otherHomes(home: target.home, directory: target.home)
+        guard !removingProfileLink, target.mode == .auto else { return }
+        var file = stat()
+        guard lstat(target.home.appendingPathComponent("auth.json").path, &file) == 0 else {
+            guard errno == ENOENT else { throw Failure.busy }
+            return
+        }
+        for home in homes {
+            guard try !usesFile(storage(at: home)) else { throw Failure.busy }
         }
     }
 
@@ -522,7 +537,7 @@ enum AuthSwap$Codex {
 
     static func hasAuth(home: URL) -> Bool { (try? storage(at: home))?.contains() ?? false }
 
-    static func removeAuth(home: URL, columnID: String? = nil,
+    static func removeAuth(home: URL, columnID: String? = nil, removingProfileLink: Bool = false,
                            operation: (AuthStorage$Codex) throws -> Void = { try $0.delete() }) throws {
         lock.lock()
         defer { lock.unlock() }
@@ -534,11 +549,15 @@ enum AuthSwap$Codex {
         // The proven primary transaction removes credentials, never its home.
         guard !containsPrimaryBackup(target.home)
             || columnID == defaultColumnID && isBaseHome(target.home) else { throw Failure.busy }
+        // Complete account removal must not preserve an unknown fallback and
+        // then report success after deleting only its preferred Keychain entry.
+        try requireRemovalOwners(target, removingProfileLink: removingProfileLink)
         let fileOwner = fileOwnerKey(target.home)
         let restore = isSwapped && columnID.map { [defaultColumnID, activeColumnID].contains($0) } == true
         if restore || columnID == defaultColumnID {
             let base = try storage(at: baseHome)
             let backup = try storage(at: stashHome)
+            try requireRemovalOwners(backup)
             try requireIdle(base)
             try requireIdle(backup)
             let keys = [activeIDKey, activeHomeKey, activePhysicalHomeKey]
