@@ -29,6 +29,7 @@ enum AuthSwap$Codex {
     private static let activeHomeKey = "codexAppAccountHome"
     private static let activePhysicalHomeKey = "codexAppAccountPhysicalHome"
     private static let stashStoreKey = "codexAppStashStore"
+    private static let stashHomeKey = "codexAppStashHome"
     private static let sourceAuthKey = "codexAppSourceAuth"
 
     /// Перестановка входов и запись продлённых токенов не должны пересечься:
@@ -65,7 +66,10 @@ enum AuthSwap$Codex {
 
     /// Куда убран вход основного аккаунта, пока в `~/.codex` чужой.
     static var stashHome: URL {
-        DesktopApp.supportDirectory.appendingPathComponent("codex-app/default", isDirectory: true)
+        if let path = UserDefaults.standard.string(forKey: stashHomeKey) {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+        return DesktopApp.supportDirectory.appendingPathComponent("codex-app/default", isDirectory: true)
     }
 
     /// Колонка, чей вход сейчас в `~/.codex`.
@@ -121,6 +125,49 @@ enum AuthSwap$Codex {
         case .file: return true
         case .auto: return try storage.load(verifyingOwner: true)?.backend == .file
         case .keyring, .ephemeral: return false
+        }
+    }
+
+    /// Keychain cleanup must preserve a file used through another native key.
+    /// Callers already hold the swap lock; do not acquire it recursively here.
+    static func fileIsShared(home: URL, fileHome: URL) -> Bool {
+        for candidate in otherHomes(home: home, directory: fileHome) {
+            do {
+                if try usesFile(storage(at: candidate)) { return true }
+            } catch {
+                // Unavailable ownership is not permission to remove its file.
+                return true
+            }
+        }
+        return false
+    }
+
+    static func directoryIsShared(home: URL, directory: URL) -> Bool {
+        for candidate in otherHomes(home: home, directory: directory) {
+            do {
+                if try storage(at: candidate).load(verifyingOwner: true) != nil { return true }
+            } catch { return true }
+        }
+        return false
+    }
+
+    private static func otherHomes(home: URL, directory: URL) -> [URL] {
+        let physical = URL(fileURLWithPath: homeKey(directory))
+        guard let owner = fileOwnerKey(physical) else { return [] }
+        let root = ProfileDirectories.codexRoot
+        // Directory metadata excludes child symlinks. Ownership checks must
+        // include those native namespaces before moving their shared target.
+        let entries = (try? FileManager.default.contentsOfDirectory(
+            at: root.resolvingSymlinksInPath(), includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        var homes = [baseHome, stashHome] + entries.map {
+            root.appendingPathComponent($0.lastPathComponent, isDirectory: true)
+        }
+        if let active = activeOwnerPath { homes.append(URL(fileURLWithPath: active)) }
+        return homes.filter {
+            let canonical = URL(fileURLWithPath: homeKey($0))
+            return canonical.path != home.path && fileOwnerKey(canonical) == owner
         }
     }
 
@@ -228,6 +275,7 @@ enum AuthSwap$Codex {
             UserDefaults.standard.removeObject(forKey: activePhysicalHomeKey)
             if !keepBackup { UserDefaults.standard.removeObject(forKey: sourceAuthKey) }
             if !keepBackup { UserDefaults.standard.removeObject(forKey: stashStoreKey) }
+            if !keepBackup { UserDefaults.standard.removeObject(forKey: stashHomeKey) }
         } else {
             UserDefaults.standard.set(columnID, forKey: activeIDKey)
             UserDefaults.standard.set(home.path, forKey: activeHomeKey)
@@ -422,18 +470,26 @@ enum AuthSwap$Codex {
         try authSnapshot(columnID: columnID, home: home)?.data
     }
 
-    static func authSnapshot(columnID: String, home: URL) throws -> AuthSnapshot? {
+    static func authSnapshot(columnID: String, home: URL, verifyingOwner: Bool = false) throws -> AuthSnapshot? {
         lock.lock()
         defer { lock.unlock() }
         let key = homeKey(home)
         let live = liveHome(columnID: columnID, home: home)
         let source = try storage(at: live)
-        guard let record = try source.load() else { return nil }
+        guard let record = try source.load(verifyingOwner: verifyingOwner) else { return nil }
         guard homeKey(home) == key, homeKey(live) == source.home.path else { throw Failure.busy }
         let sourceKey = sourceKey(source, backend: record.backend)
         return AuthSnapshot(data: record.data, key: key, generation: generations[key],
                             columnGeneration: columnGenerations[columnID],
                             sourceKey: sourceKey, sourceGeneration: generations[sourceKey])
+    }
+
+    static func isCurrent(_ snapshot: AuthSnapshot, columnID: String, home: URL) throws -> Bool {
+        guard let current = try authSnapshot(columnID: columnID, home: home, verifyingOwner: true) else { return false }
+        return current.key == snapshot.key && current.generation == snapshot.generation
+            && current.columnGeneration == snapshot.columnGeneration
+            && current.sourceKey == snapshot.sourceKey && current.sourceGeneration == snapshot.sourceGeneration
+            && authIdentity(current.data) == authIdentity(snapshot.data)
     }
 
     static func hasAuth(home: URL) -> Bool { (try? storage(at: home))?.contains() ?? false }
@@ -464,7 +520,7 @@ enum AuthSwap$Codex {
                 removedBackup = primary
                 try operation(target)
             } catch {
-                if let primary = removedBackup { try backup.save(primary.data, backend: primary.backend) }
+                if let primary = removedBackup { try restoreBackup(primary, to: backup) }
                 if restore {
                     try base.restore(selected)
                     for (name, value) in zip(keys, saved) {
@@ -475,6 +531,7 @@ enum AuthSwap$Codex {
                 throw error
             }
             UserDefaults.standard.removeObject(forKey: stashStoreKey)
+            UserDefaults.standard.removeObject(forKey: stashHomeKey)
             UserDefaults.standard.removeObject(forKey: sourceAuthKey)
         } else {
             try operation(target)
@@ -492,6 +549,22 @@ enum AuthSwap$Codex {
         for key in retired {
             generations[key] = UUID()
             renewals[key] = nil
+        }
+    }
+
+    /// Keep primary durable before restoring the selected native account. A
+    /// refusal at the old backup path must not discard it or skip native rollback.
+    private static func restoreBackup(_ record: AuthStorage$Codex.Record, to backup: AuthStorage$Codex) throws {
+        do { try backup.save(record.data, backend: record.backend) }
+        catch {
+            let recovery = DesktopApp.supportDirectory.appendingPathComponent("codex-app/recovery-" + UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: true,
+                                                    attributes: [.posixPermissions: 0o700])
+            try ("cli_auth_credentials_store = \"" + backup.mode.rawValue + "\"\n")
+                .write(to: recovery.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+            try AuthStorage$Codex(home: recovery, mode: backup.mode).save(record.data, backend: record.backend)
+            // Discovery, renewal and CLI re-login use the recovered primary too.
+            UserDefaults.standard.set(recovery.path, forKey: stashHomeKey)
         }
     }
 

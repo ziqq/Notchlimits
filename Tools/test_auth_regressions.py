@@ -1271,3 +1271,111 @@ final class NSMenuItem { var representedObject: Any? }
 
     def test_codex_clone_copyback_native_logout(self):
         self.check_scenario("codex-clone-copyback-native-logout")
+
+    def test_codex_shared_file_remove(self):
+        self.check_scenario("codex-shared-file-remove")
+
+    def test_codex_shared_file_remove_separate_control(self):
+        self.check_scenario("codex-shared-file-remove-separate-control")
+
+    def test_codex_shared_file_copyback(self):
+        self.check_scenario("codex-shared-file-copyback")
+
+    def test_codex_shared_file_copyback_separate_control(self):
+        self.check_scenario("codex-shared-file-copyback-separate-control")
+
+    def test_codex_shared_file_renew(self):
+        self.check_scenario("codex-shared-file-renew")
+
+    def test_codex_shared_file_renew_separate_control(self):
+        self.check_scenario("codex-shared-file-renew-separate-control")
+
+    def test_codex_backup_recovery_file_restore(self):
+        self.check_scenario("codex-backup-recovery-file-restore")
+
+    def test_codex_backup_recovery_file_renew(self):
+        self.check_scenario("codex-backup-recovery-file-renew")
+
+    def test_codex_backup_recovery_file_control(self):
+        self.check_scenario("codex-backup-recovery-file-control")
+
+    def test_codex_backup_recovery_keyring_restore(self):
+        self.check_scenario("codex-backup-recovery-keyring-restore")
+
+    def test_codex_backup_recovery_keyring_renew(self):
+        self.check_scenario("codex-backup-recovery-keyring-renew")
+
+    def test_codex_backup_recovery_keyring_control(self):
+        self.check_scenario("codex-backup-recovery-keyring-control")
+
+    def test_codex_backup_recovery_readd(self):
+        self.check_scenario("codex-backup-recovery-readd")
+
+    def test_codex_usage_snapshot_file_login(self):
+        self.check_scenario("codex-usage-snapshot-file-login")
+
+    def test_codex_usage_snapshot_file_none(self):
+        self.check_scenario("codex-usage-snapshot-file-none")
+
+    def test_codex_usage_snapshot_keyring_login(self):
+        self.check_scenario("codex-usage-snapshot-keyring-login")
+
+    def test_codex_usage_snapshot_keyring_none(self):
+        self.check_scenario("codex-usage-snapshot-keyring-none")
+
+    def test_codex_usage_snapshot_auto_login(self):
+        self.check_scenario("codex-usage-snapshot-auto-login")
+
+    def test_codex_usage_snapshot_auto_none(self):
+        self.check_scenario("codex-usage-snapshot-auto-none")
+
+    def test_claude_usage_snapshot_keychain_login(self):
+        self.check_scenario("claude-usage-snapshot-keychain-login")
+
+    def test_claude_usage_snapshot_keychain_none(self):
+        self.check_scenario("claude-usage-snapshot-keychain-none")
+
+    def test_claude_usage_snapshot_file_login(self):
+        self.check_scenario("claude-usage-snapshot-file-login")
+
+    def test_claude_usage_snapshot_file_none(self):
+        self.check_scenario("claude-usage-snapshot-file-none")
+
+    def test_codex_usage_snapshot_metadata_control(self):
+        self.check_scenario("codex-usage-snapshot-metadata-control")
+
+    def test_codex_usage_snapshot_retired_401(self):
+        self.check_scenario("codex-usage-snapshot-retired-401")
+
+    def test_codex_usage_snapshot_retired_429(self):
+        self.check_scenario("codex-usage-snapshot-retired-429")
+
+    def test_codex_usage_snapshot_unreadable(self):
+        self.check_scenario("codex-usage-snapshot-unreadable")
+
+    def test_claude_usage_snapshot_metadata_control(self):
+        self.check_scenario("claude-usage-snapshot-metadata-control")
+
+    def test_claude_usage_snapshot_retired_401(self):
+        self.check_scenario("claude-usage-snapshot-retired-401")
+
+    def test_claude_usage_snapshot_retired_429(self):
+        self.check_scenario("claude-usage-snapshot-retired-429")
+
+    def test_claude_usage_snapshot_unreadable(self):
+        self.check_scenario("claude-usage-snapshot-unreadable")
+
+    def test_codex_shared_directory_file(self):
+        self.check_scenario("codex-shared-directory-file")
+
+    def test_codex_shared_directory_selected(self):
+        self.check_scenario("codex-shared-directory-selected")
+
+    def test_codex_shared_directory_keyring(self):
+        self.check_scenario("codex-shared-directory-keyring")
+
+    def test_codex_separate_directory_file_control(self):
+        self.check_scenario("codex-separate-directory-file-control")
+
+    def test_codex_separate_directory_keyring_control(self):
+        self.check_scenario("codex-separate-directory-keyring-control")

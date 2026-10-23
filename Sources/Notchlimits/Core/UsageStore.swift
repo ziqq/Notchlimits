@@ -247,6 +247,10 @@ final class UsageStore: ObservableObject {
         }
 
         switch outcome {
+        case .superseded:
+            // Keep newer state and retry on the next scheduler tick.
+            state.nextDue = Date()
+
         case .success(let snapshot):
             state.backoffStep = 0
             state.nextDue = Date().addingTimeInterval(Schedule.interval)
