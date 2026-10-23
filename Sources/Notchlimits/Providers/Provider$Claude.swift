@@ -93,7 +93,13 @@ actor Provider$Claude: UsageProvider {
         // A late usage response belongs to the exact login that sent it. The
         // replacement may reuse its access token with a different refresh token.
         guard isCurrent(service, generation: generation, origin: origin) else {
-            return .reauth(L.t("column.reauth"))
+            return .superseded
+        }
+        let current = await read(service, interactive: false, verifyingOwner: true)
+        guard isCurrent(service, generation: generation, origin: origin) else { return .superseded }
+        guard let current else { return .failure(L.t("error.keychainWrite")) }
+        guard current.hasSameTokens(as: origin) else {
+            return .superseded
         }
         switch response {
         case .failure(let error):

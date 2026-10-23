@@ -157,6 +157,8 @@ enum DebugProbe {
                     print("  ошибка: \(message)")
                 case .notAnAccount:
                     print("  не аккаунт: в записи нет входа")
+                case .superseded:
+                    print("  Login changed; current usage will be fetched on the next poll")
                 }
                 group.leave()
             }

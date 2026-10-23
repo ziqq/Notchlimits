@@ -30,6 +30,8 @@ struct UsageSnapshot {
 
 enum FetchOutcome {
     case success(UsageSnapshot)
+    /// The login changed while the request was in flight; poll its current owner.
+    case superseded
     /// HTTP 429 — это не ошибка, а просьба подождать.
     case rateLimited(retryAfter: TimeInterval?)
     /// Нет токена / 401 / 403 — нужен новый вход в CLI.

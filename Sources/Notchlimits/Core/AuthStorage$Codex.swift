@@ -94,7 +94,7 @@ struct AuthStorage$Codex {
                 status = AuthStorage$Claude.access(interactive: false) { SecItemAdd(item as CFDictionary, nil) }
             }
             guard status == errSecSuccess else { throw Failure.keychain(status) }
-            try? removeFile()
+            if !AuthSwap$Codex.fileIsShared(home: home, fileHome: home) { try? removeFile() }
         } catch {
             guard backend == nil, mode == .auto, keyringStatus() == errSecItemNotFound else { throw error }
             try saveFile(data)
@@ -114,8 +114,9 @@ struct AuthStorage$Codex {
         guard mode != .ephemeral else { throw Failure.ephemeral }
         let file = (fileHome ?? home).appendingPathComponent("auth.json")
         if mode == .file { try removeFile(at: file); return }
-        let backup = FileManager.default.fileExists(atPath: file.path) ? try Data(contentsOf: file) : nil
-        try removeFile(at: file)
+        let shared = AuthSwap$Codex.fileIsShared(home: home, fileHome: file.deletingLastPathComponent())
+        let backup = !shared && FileManager.default.fileExists(atPath: file.path) ? try Data(contentsOf: file) : nil
+        if !shared { try removeFile(at: file) }
         do {
             let status = AuthStorage$Claude.access(interactive: false) { SecItemDelete(query as CFDictionary) }
             guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.keychain(status) }

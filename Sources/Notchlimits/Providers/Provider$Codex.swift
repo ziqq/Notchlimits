@@ -30,7 +30,7 @@ struct Provider$Codex: UsageProvider {
         let snapshot: AuthSwap$Codex.AuthSnapshot?
         do { snapshot = try AuthSwap$Codex.authSnapshot(columnID: account.id, home: home) }
         catch { return .failure(error.localizedDescription) }
-        let outcome = await request(snapshot)
+        let outcome = await request(snapshot, columnID: account.id, home: home)
         guard case .reauth = outcome else { return outcome }
         if renewal == .unavailable { return .failure(L.t("error.network")) }
         // Не продлеваем второй раз в одном опросе после успешной ротации.
@@ -40,11 +40,11 @@ struct Provider$Codex: UsageProvider {
                                              expected: snapshot) == .renewed else {
             return outcome
         }
-        do { return await request(try AuthSwap$Codex.authSnapshot(columnID: account.id, home: home)) }
+        do { return await request(try AuthSwap$Codex.authSnapshot(columnID: account.id, home: home), columnID: account.id, home: home) }
         catch { return .failure(error.localizedDescription) }
     }
 
-    private func request(_ snapshot: AuthSwap$Codex.AuthSnapshot?) async -> FetchOutcome {
+    private func request(_ snapshot: AuthSwap$Codex.AuthSnapshot?, columnID: String, home: URL) async -> FetchOutcome {
         guard let snapshot, let auth = Self.parseAuth(snapshot.data) else {
             return .reauth(L.t("column.reauth"))
         }
@@ -59,7 +59,11 @@ struct Provider$Codex: UsageProvider {
             "Accept": "application/json"
         ]
 
-        switch await HTTPClient.shared.get(endpoint, headers: headers) {
+        let response = await HTTPClient.shared.get(endpoint, headers: headers)
+        do {
+            guard try AuthSwap$Codex.isCurrent(snapshot, columnID: columnID, home: home) else { return .superseded }
+        } catch { return .failure(error.localizedDescription) }
+        switch response {
         case .failure(let error):
             if case .transport(let message) = error { return .failure(message) }
             return .failure(L.t("error.network"))

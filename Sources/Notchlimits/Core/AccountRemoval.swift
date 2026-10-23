@@ -126,6 +126,15 @@ enum AccountRemoval {
                 if isBase {
                     try storage.delete()
                 } else {
+                    var info = stat()
+                    if url.path.withCString({ Darwin.lstat($0, &info) }) == 0,
+                       info.st_mode & S_IFMT == S_IFDIR,
+                       AuthSwap$Codex.directoryIsShared(home: storage.home, directory: url) {
+                        // Moving the physical directory would also move another
+                        // native namespace's file/configuration. A symlink can
+                        // be removed independently without moving that owner.
+                        throw Failure.busy
+                    }
                     try withProfileDirectory(url, root: ProfileDirectories.codexRoot) { directory in
                         try storage.delete(fileHome: directory)
                     }
