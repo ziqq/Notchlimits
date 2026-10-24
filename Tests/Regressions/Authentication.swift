@@ -788,11 +788,79 @@ private actor UsageCompletionProbe: UsageProvider {
     }
 }
 
+private final class UsageOwnerDiscovery: AccountDiscovery {
+    let accountID: String
+    let change: String
+    var changed = false
+
+    init(accountID: String, change: String) {
+        self.accountID = accountID
+        self.change = change
+    }
+
+    func discover() -> [DiscoveredAccount] {
+        Discovery$Real().discover().map { account in
+            guard changed, account.id == accountID else { return account }
+            if change == "metadata" {
+                return DiscoveredAccount(id: account.id, provider: account.provider,
+                                         profileName: account.profileName + "-metadata",
+                                         source: account.source,
+                                         email: "metadata@example.invalid", isActive: account.isActive)
+            }
+            if change == "active" {
+                var updated = account
+                updated.isActive.toggle()
+                return updated
+            }
+            return account
+        }
+    }
+}
+
 @main
 enum Authentication {
     static func main() async {
         do {
             switch CommandLine.arguments[1] {
+            case "codex-owner-dangling-primary-control": try codexDanglingPrimaryRemoval()
+            case "codex-owner-metadata-file-control": try codexOwnerMetadataRemoval(mode: "file")
+            case "codex-owner-metadata-keyring-control": try codexOwnerMetadataRemoval(mode: "keyring")
+            case "codex-owner-metadata-auto-control": try codexOwnerMetadataRemoval(mode: "auto")
+            case "codex-owner-missing-snapshot": try codexMissingRemovalOwner(appeared: true)
+            case "codex-owner-missing-current": try codexMissingRemovalOwner(appeared: false)
+            case "codex-owner-stale-selected-file": try codexStaleSwappedRemoval(mode: "file", primary: false)
+            case "codex-owner-stale-selected-keyring": try codexStaleSwappedRemoval(mode: "keyring", primary: false)
+            case "codex-owner-stale-selected-auto": try codexStaleSwappedRemoval(mode: "auto", primary: false)
+            case "codex-owner-stale-primary-file": try codexStaleSwappedRemoval(mode: "file", primary: true)
+            case "codex-owner-stale-primary-keyring": try codexStaleSwappedRemoval(mode: "keyring", primary: true)
+            case "codex-owner-stale-primary-auto": try codexStaleSwappedRemoval(mode: "auto", primary: true)
+            case "codex-owner-missing-primary-control": try codexMissingPrimaryRemoval(appeared: false)
+            case "codex-owner-missing-primary-appeared": try codexMissingPrimaryRemoval(appeared: true)
+            case "claude-usage-owner-queued-replacement": try await usageOwnerQueued(codex: false, change: "replacement")
+            case "claude-usage-owner-queued-stable": try await usageOwnerQueued(codex: false, change: "stable")
+            case "claude-usage-owner-queued-metadata": try await usageOwnerQueued(codex: false, change: "metadata")
+            case "claude-usage-owner-queued-active": try await usageOwnerQueued(codex: false, change: "active")
+            case "codex-usage-owner-queued-replacement": try await usageOwnerQueued(codex: true, change: "replacement")
+            case "codex-usage-owner-queued-stable": try await usageOwnerQueued(codex: true, change: "stable")
+            case "codex-usage-owner-queued-metadata": try await usageOwnerQueued(codex: true, change: "metadata")
+            case "codex-usage-owner-queued-active": try await usageOwnerQueued(codex: true, change: "active")
+            case "claude-usage-owner-displayed-replacement": try await usageOwnerDisplayed(codex: false, change: "replacement")
+            case "claude-usage-owner-displayed-stable": try await usageOwnerDisplayed(codex: false, change: "stable")
+            case "claude-usage-owner-displayed-metadata": try await usageOwnerDisplayed(codex: false, change: "metadata")
+            case "claude-usage-owner-displayed-active": try await usageOwnerDisplayed(codex: false, change: "active")
+            case "codex-usage-owner-displayed-replacement": try await usageOwnerDisplayed(codex: true, change: "replacement")
+            case "codex-usage-owner-displayed-stable": try await usageOwnerDisplayed(codex: true, change: "stable")
+            case "codex-usage-owner-displayed-metadata": try await usageOwnerDisplayed(codex: true, change: "metadata")
+            case "codex-usage-owner-displayed-active": try await usageOwnerDisplayed(codex: true, change: "active")
+            case "codex-discovered-owner-replace-file": try codexDiscoveredOwnerRemoval(change: "replace", mode: "file")
+            case "codex-discovered-owner-replace-keyring": try codexDiscoveredOwnerRemoval(change: "replace", mode: "keyring")
+            case "codex-discovered-owner-replace-auto": try codexDiscoveredOwnerRemoval(change: "replace", mode: "auto")
+            case "codex-discovered-owner-retarget-file": try codexDiscoveredOwnerRemoval(change: "retarget", mode: "file")
+            case "codex-discovered-owner-retarget-keyring": try codexDiscoveredOwnerRemoval(change: "retarget", mode: "keyring")
+            case "codex-discovered-owner-retarget-auto": try codexDiscoveredOwnerRemoval(change: "retarget", mode: "auto")
+            case "codex-discovered-owner-none-file": try codexDiscoveredOwnerRemoval(change: "none", mode: "file")
+            case "codex-discovered-owner-none-keyring": try codexDiscoveredOwnerRemoval(change: "none", mode: "keyring")
+            case "codex-discovered-owner-none-auto": try codexDiscoveredOwnerRemoval(change: "none", mode: "auto")
             case "codex-shared-directory-file": try codexSharedDirectoryRemoval()
             case "codex-shared-directory-selected": try codexSharedDirectoryRemoval(selected: true)
             case "codex-shared-directory-keyring": try codexSharedDirectoryRemoval(peerBackend: "keyring")
@@ -1311,6 +1379,408 @@ enum Authentication {
         }
     }
 
+
+    @MainActor
+    private static func codexDiscoveredOwnerRemoval(change: String, mode: String) throws {
+        Fixture.keychainExists = false
+        let manager = Foundation.FileManager.default
+        let logical = ProfileDirectories.codexRoot.appendingPathComponent("discovered-owner")
+        let originalRoot = Fixture.root.appendingPathComponent("original-physical-root")
+        let replacementRoot = Fixture.root.appendingPathComponent("replacement-physical-root")
+        if change == "retarget" {
+            try manager.createDirectory(at: originalRoot, withIntermediateDirectories: true)
+            try manager.createDirectory(at: replacementRoot, withIntermediateDirectories: true)
+            try manager.createSymbolicLink(at: ProfileDirectories.codexRoot, withDestinationURL: originalRoot)
+        }
+        try Fixture.codexLogin(logical, account: "original", mode: mode, expired: false)
+        let id = "codex:discovered-owner"
+        guard let stale = Discovery$Real().discover().first(where: { $0.id == id }) else {
+            throw Failure(description: "Original Codex profile was not discovered")
+        }
+        let retired = Fixture.root.appendingPathComponent("retired-original")
+        if change == "replace" {
+            try manager.moveItem(at: logical, to: retired)
+            try Fixture.codexLogin(logical, account: "replacement", mode: mode, expired: false)
+        } else if change == "retarget" {
+            try manager.removeItem(at: ProfileDirectories.codexRoot)
+            try manager.createSymbolicLink(at: ProfileDirectories.codexRoot, withDestinationURL: replacementRoot)
+            try Fixture.codexLogin(logical, account: "replacement", mode: mode, expired: false)
+        }
+        let sentinel = logical.appendingPathComponent("settings-sentinel")
+        try Data("replacement-settings".utf8).write(to: sentinel)
+        let expected = try AuthSwap$Codex.authData(home: logical)
+        var refused = false
+        do { try AccountRemoval.remove(stale) } catch { refused = true }
+        let after = try AuthSwap$Codex.authData(home: logical)
+        let settings = try? String(contentsOf: sentinel)
+        let settingsPreserved = settings == "replacement-settings"
+        print("CODEX_DISCOVERED_OWNER change=\(change) mode=\(mode) refused=\(refused) authPreserved=\(after == expected) settingsPreserved=\(settingsPreserved)")
+        if change != "none" {
+            try expect(refused && after == expected && settings == "replacement-settings",
+                       "Stale Codex removal deleted a replacement profile discovered under a previous directory owner")
+        } else {
+            try expect(!refused && !manager.fileExists(atPath: logical.path),
+                       "Stable Codex profile could not be removed")
+        }
+    }
+
+    @MainActor
+    private static func usageOwnerFixture(codex: Bool) throws -> (DiscoveredAccount, URL) {
+        if !codex {
+            let (account, file) = try claudeFileAccount(primary: false, expired: false)
+            return (account, file.deletingLastPathComponent())
+        }
+        Fixture.keychainExists = false
+        // The existing enumeration barrier runs before codexAccounts(), so no
+        // second fixture hook is needed to queue a completed Codex response.
+        try Foundation.FileManager.default.createDirectory(at: ProfileDirectories.claudeRoot,
+                                                            withIntermediateDirectories: true)
+        let directory = ProfileDirectories.codexRoot.appendingPathComponent("usage-owner")
+        try Fixture.codexLogin(directory, account: "old-usage-owner", mode: "file", expired: false)
+        let account = DiscoveredAccount(id: AuthSwap$Codex.profileColumnID("usage-owner"),
+                                        provider: .codex, profileName: "usage-owner", source: .codexHome(directory))
+        return (account, directory)
+    }
+
+    private static func replaceUsageOwner(_ directory: URL, codex: Bool) throws {
+        let retired = Fixture.root.appendingPathComponent("retired-usage-owner")
+        try Foundation.FileManager.default.moveItem(at: directory, to: retired)
+        if codex {
+            try Fixture.codexLogin(directory, account: "replacement-usage-owner", mode: "file", expired: false)
+        } else {
+            try Foundation.FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let file = directory.appendingPathComponent(".credentials.json")
+            try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("replacement-usage-owner", expired: false))
+                .write(to: file)
+            try Foundation.FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        }
+    }
+
+    @MainActor
+    private static func expectUsageOwnerPreferences(_ store: UsageStore, id: String) throws {
+        try expect(store.customNames[id] == "Personal label" && store.hidden.contains(id)
+                   && store.columns.first(where: { $0.id == id })?.customName == "Personal label",
+                   "Rediscovery lost the same-ID column's custom name or hidden preference")
+        try expect((UserDefaults.standard.dictionary(forKey: "columnNames") as? [String: String])?[id] == "Personal label"
+                   && UserDefaults.standard.stringArray(forKey: "hiddenColumns")?.contains(id) == true,
+                   "Rediscovery removed the same-ID column's persisted preferences")
+    }
+
+    @MainActor
+    private static func expectUsageOwnerChange(_ store: UsageStore, original: DiscoveredAccount,
+                                               directory: URL, owner: DirectoryIdentity, change: String) throws {
+        guard let current = store.account(for: original.id), let currentOwner = DirectoryIdentity.capture(directory) else {
+            throw Failure(description: "Rediscovery lost the same-ID account or its physical directory")
+        }
+        try expect(current.source == original.source,
+                   "Fixture changed the logical source instead of retaining the same path and ID")
+        try expect(owner.isSameDirectory(as: currentOwner) == (change != "replacement"),
+                   "Fixture physical-owner transition did not match its scenario")
+        if change == "metadata" {
+            try expect(current.profileName == original.profileName + "-metadata"
+                       && current.email == "metadata@example.invalid" && current.isActive == original.isActive,
+                       "Metadata control did not change only discovered metadata")
+        } else if change == "active" {
+            try expect(current.isActive != original.isActive && current.profileName == original.profileName
+                       && current.email == original.email,
+                       "Activity control did not change only isActive")
+            try expect(store.columns.first(where: { $0.id == original.id })?.isActive == current.isActive,
+                       "Activity change did not reach the existing column")
+        }
+    }
+
+    @MainActor
+    private static func usageOwnerQueued(codex: Bool, change: String) async throws {
+        let (account, directory) = try usageOwnerFixture(codex: codex)
+        guard let owner = DirectoryIdentity.capture(directory) else {
+            throw Failure(description: "Initial physical directory could not be captured")
+        }
+        Fixture.holdFirstUsage = true
+        Fixture.manualPollingTimer = true
+        let provider: any UsageProvider = codex ? Provider$Codex() : Provider$Claude()
+        let probe = UsageCompletionProbe(provider)
+        let discovery = UsageOwnerDiscovery(accountID: account.id, change: change)
+        let store = UsageStore(providers: [account.provider: probe], discovery: discovery)
+        store.start()
+        guard let original = store.account(for: account.id) else {
+            throw Failure(description: "Initial account was not found by real discovery")
+        }
+        store.setCustomName("Personal label", for: account.id)
+        store.setHidden(account.id, hidden: true)
+        for _ in 0..<400 {
+            if Fixture.usageCalls == 1 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(Fixture.usageCalls == 1, "Usage did not enter the held HTTP boundary")
+        discovery.changed = true
+        Fixture.lock.lock()
+        Fixture.pauseProfileSnapshot = true
+        Fixture.profileSnapshotPaused = false
+        Fixture.resumeProfileSnapshot = false
+        Fixture.lock.unlock()
+        let replacement = Task.detached {
+            defer {
+                Fixture.lock.lock()
+                Fixture.releaseFirstUsage = true
+                Fixture.resumeProfileSnapshot = true
+                Fixture.lock.unlock()
+            }
+            var paused = false
+            for _ in 0..<400 {
+                Fixture.lock.lock()
+                paused = Fixture.profileSnapshotPaused
+                Fixture.lock.unlock()
+                if paused { break }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            try expect(paused, "Rediscovery did not enter the existing directory-enumeration boundary")
+            Fixture.lock.lock()
+            Fixture.releaseFirstUsage = true
+            Fixture.lock.unlock()
+            for _ in 0..<400 {
+                if await probe.completed == 1 { break }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            try expect(await probe.completed == 1,
+                       "Real provider did not finish while MainActor was in synchronous discovery")
+            if change == "replacement" { try replaceUsageOwner(directory, codex: codex) }
+        }
+        var observedOldUsage = false
+        let observation = store.$columns.sink { columns in
+            if columns.first(where: { $0.id == account.id })?.windows.first?.utilization == 12 {
+                observedOldUsage = true
+            }
+        }
+        defer { observation.cancel() }
+        store.rediscover(force: true)
+        try expectUsageOwnerChange(store, original: original, directory: directory, owner: owner, change: change)
+        try await replacement.value
+        guard let tick = Fixture.pollingTick else { throw Failure(description: "Missing scheduler tick") }
+        let expected: Double = change == "replacement" ? 84 : 12
+        for _ in 0..<400 {
+            if store.columns.first(where: { $0.id == account.id })?.windows.first?.utilization == expected { break }
+            tick()
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(store.columns.first(where: { $0.id == account.id })?.windows.first?.utilization == expected
+                   && UsageCache().load(id: account.id)?.windows.first?.utilization == expected,
+                   "Queued old usage crossed physical owners, or valid usage was discarded by a metadata-only rediscovery")
+        try expect(observedOldUsage == (change != "replacement"),
+                   "Queued old usage was briefly published for a replacement, or valid usage was never published")
+        for _ in 0..<16 { tick(); try await Task.sleep(nanoseconds: 5_000_000) }
+        let expectedCalls = change == "replacement" ? 2 : 1
+        try expect(await probe.completed == expectedCalls && Fixture.usageCalls == expectedCalls,
+                   "Rediscovery lost normal polling or repeated a valid in-flight request")
+        try expect(Fixture.refreshCalls == 0, "Rediscovery spent a fresh owner's refresh grant")
+        try expectUsageOwnerPreferences(store, id: account.id)
+    }
+
+    @MainActor
+    private static func usageOwnerDisplayed(codex: Bool, change: String) async throws {
+        let (account, directory) = try usageOwnerFixture(codex: codex)
+        guard let owner = DirectoryIdentity.capture(directory) else {
+            throw Failure(description: "Initial physical directory could not be captured")
+        }
+        Fixture.holdFirstUsage = true
+        Fixture.releaseFirstUsage = true
+        Fixture.manualPollingTimer = true
+        let provider: any UsageProvider = codex ? Provider$Codex() : Provider$Claude()
+        let probe = UsageCompletionProbe(provider)
+        let discovery = UsageOwnerDiscovery(accountID: account.id, change: change)
+        let store = UsageStore(providers: [account.provider: probe], discovery: discovery)
+        store.start()
+        guard let original = store.account(for: account.id) else {
+            throw Failure(description: "Initial account was not found by real discovery")
+        }
+        store.setCustomName("Personal label", for: account.id)
+        store.setHidden(account.id, hidden: true)
+        for _ in 0..<400 {
+            if store.columns.first(where: { $0.id == account.id })?.updatedAt != nil { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        guard let before = store.columns.first(where: { $0.id == account.id }), let updatedAt = before.updatedAt else {
+            throw Failure(description: "Initial successful usage was not displayed")
+        }
+        try expect(before.windows.first?.utilization == 12
+                   && UsageCache().load(id: account.id)?.windows.first?.utilization == 12,
+                   "Initial real provider usage did not populate the column and persistent cache")
+        discovery.changed = true
+        if change == "replacement" { try replaceUsageOwner(directory, codex: codex) }
+        store.rediscover(force: true)
+        try expectUsageOwnerChange(store, original: original, directory: directory, owner: owner, change: change)
+        guard let after = store.columns.first(where: { $0.id == account.id }) else {
+            throw Failure(description: "Rediscovery dropped the same-ID column")
+        }
+        // Check before yielding to any new fetch: old displayed/cached usage
+        // must disappear as soon as the replacement owner is discovered.
+        if change == "replacement" {
+            try expect(after.windows.isEmpty && after.stats.isEmpty && after.subtitle == nil
+                       && after.updatedAt == nil && !after.fromCache && after.status == .loading,
+                       "Replacement physical owner inherited the retired owner's displayed usage")
+            try expect(UsageCache().load(id: account.id) == nil,
+                       "Replacement physical owner retained the retired owner's persistent cache")
+        } else {
+            try expect(after.windows == before.windows && after.subtitle == before.subtitle && after.stats == before.stats
+                       && after.updatedAt == updatedAt && after.fromCache == before.fromCache && after.status == before.status,
+                       "Stable owner lost its valid displayed usage after metadata or activity changed")
+            try expect(UsageCache().load(id: account.id)?.updatedAt == updatedAt
+                       && UsageCache().load(id: account.id)?.windows == before.windows,
+                       "Stable owner lost its valid persistent cache")
+        }
+        try expectUsageOwnerPreferences(store, id: account.id)
+        guard let tick = Fixture.pollingTick else { throw Failure(description: "Missing scheduler tick") }
+        let expected: Double = change == "replacement" ? 84 : 12
+        for _ in 0..<400 {
+            tick()
+            if store.columns.first(where: { $0.id == account.id })?.windows.first?.utilization == expected { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(store.columns.first(where: { $0.id == account.id })?.windows.first?.utilization == expected
+                   && UsageCache().load(id: account.id)?.windows.first?.utilization == expected,
+                   "The regular scheduler did not populate current usage after rediscovery")
+        for _ in 0..<16 { tick(); try await Task.sleep(nanoseconds: 5_000_000) }
+        let expectedCalls = change == "replacement" ? 2 : 1
+        try expect(await probe.completed == expectedCalls && Fixture.usageCalls == expectedCalls,
+                   "Rediscovery skipped the replacement poll or prematurely repeated the stable owner's poll")
+        try expect(Fixture.refreshCalls == 0, "Rediscovery spent a fresh owner's refresh grant")
+    }
+
+    @MainActor
+    private static func codexOwnerMetadataRemoval(mode: String) throws {
+        Fixture.keychainExists = false
+        let manager = Foundation.FileManager.default
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("metadata-owner")
+        let id = "codex:metadata-owner"
+        try Fixture.codexLogin(home, account: "unchanged", mode: mode, expired: false)
+        guard let account = Discovery$Real().discover().first(where: { $0.id == id }) else {
+            throw Failure(description: "Metadata control did not discover its original owner")
+        }
+        try Data("updated-settings".utf8).write(to: home.appendingPathComponent("settings-sentinel"))
+        try manager.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_600_000_000),
+                                   .posixPermissions: 0o700], ofItemAtPath: home.path)
+        try AccountRemoval.remove(account)
+        try expect(!manager.fileExists(atPath: home.path)
+                   && Fixture.codexKeychain[Fixture.codexKey(home)] == nil,
+                   "Ordinary directory metadata changes blocked the original owner's removal")
+    }
+
+    @MainActor
+    private static func codexMissingRemovalOwner(appeared: Bool) throws {
+        Fixture.keychainExists = false
+        let manager = Foundation.FileManager.default
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("missing-owner")
+        if !appeared { try Fixture.codexLogin(home, account: "original", mode: "keyring", expired: false) }
+        let account = DiscoveredAccount(id: "codex:missing-owner", provider: .codex,
+                                        profileName: "missing-owner", source: .codexHome(home))
+        if appeared { try Fixture.codexLogin(home, account: "replacement", mode: "keyring", expired: false) }
+        else { try manager.removeItem(at: home) }
+        let key = Fixture.codexKey(home)
+        let expected = Fixture.codexKeychain[key]
+        var refused = false
+        do { try AccountRemoval.remove(account) } catch { refused = true }
+        try expect(refused && Fixture.codexKeychain[key] == expected
+                   && manager.fileExists(atPath: home.path) == appeared,
+                   "Missing directory proof authorized removal or changed a replacement owner")
+    }
+
+    @MainActor
+    private static func codexStaleSwappedRemoval(mode: String, primary: Bool) throws {
+        Fixture.keychainExists = false
+        let manager = Foundation.FileManager.default
+        let base = AuthSwap$Codex.baseHome
+        let profile = ProfileDirectories.codexRoot.appendingPathComponent("selected-owner")
+        let selectedID = "codex:selected-owner"
+        try Fixture.codexLogin(base, account: "primary", mode: mode, expired: false)
+        try Fixture.codexLogin(profile, account: "selected", mode: mode, expired: false)
+        try AuthSwap$Codex.activate(columnID: selectedID, home: profile)
+        let home = primary ? base : profile
+        let id = primary ? AuthSwap$Codex.defaultColumnID : selectedID
+        guard let account = Discovery$Real().discover().first(where: { $0.id == id }) else {
+            throw Failure(description: "Swapped stale-removal scenario did not discover its original owner")
+        }
+        try manager.moveItem(at: home, to: Fixture.root.appendingPathComponent("retired-swapped-owner"))
+        try Fixture.codexLogin(home, account: "replacement", mode: mode, expired: false)
+        let sentinel = home.appendingPathComponent("settings-sentinel")
+        let settings = Data("replacement-settings".utf8)
+        try settings.write(to: sentinel)
+        let live = try AuthSwap$Codex.authData(home: base)
+        let backup = try AuthSwap$Codex.authData(home: AuthSwap$Codex.stashHome)
+        let target = try AuthSwap$Codex.authData(home: home)
+        let selected = try AuthSwap$Codex.authData(home: profile)
+        var refused = false
+        do { try AccountRemoval.remove(account) } catch { refused = true }
+        let retainedLive = try AuthSwap$Codex.authData(home: base)
+        let retainedBackup = try AuthSwap$Codex.authData(home: AuthSwap$Codex.stashHome)
+        let retainedTarget = try AuthSwap$Codex.authData(home: home)
+        let retainedSelected = try AuthSwap$Codex.authData(home: profile)
+        try expect(refused && AuthSwap$Codex.activeColumnID == selectedID
+                   && retainedLive == live && retainedBackup == backup && retainedTarget == target
+                   && retainedSelected == selected && (try? Data(contentsOf: sentinel)) == settings,
+                   "Stale removal changed native auth, the primary backup or replacement profile before validating its owner")
+    }
+
+    @MainActor
+    private static func codexMissingPrimaryRemoval(appeared: Bool) throws {
+        Fixture.keychainExists = false
+        let manager = Foundation.FileManager.default
+        let base = AuthSwap$Codex.baseHome
+        let profile = ProfileDirectories.codexRoot.appendingPathComponent("selected-owner")
+        let selectedID = "codex:selected-owner"
+        try Fixture.codexLogin(base, account: "primary", mode: "file", expired: false)
+        try Fixture.codexLogin(profile, account: "selected", mode: "file", expired: false)
+        try AuthSwap$Codex.activate(columnID: selectedID, home: profile)
+        try manager.removeItem(at: base)
+        guard let account = Discovery$Real().discover().first(where: { $0.id == AuthSwap$Codex.defaultColumnID }) else {
+            throw Failure(description: "Missing native home hid the primary login retained in its backup")
+        }
+        if appeared { try Fixture.codexLogin(base, account: "replacement", mode: "file", expired: false) }
+        let backup = try AuthSwap$Codex.authData(home: AuthSwap$Codex.stashHome)
+        let native = try AuthSwap$Codex.authData(home: base)
+        let selected = try AuthSwap$Codex.authData(home: profile)
+        var refused = false
+        do { try AccountRemoval.remove(account) } catch { refused = true }
+        let retainedBackup = try AuthSwap$Codex.authData(home: AuthSwap$Codex.stashHome)
+        let retainedNative = try AuthSwap$Codex.authData(home: base)
+        let retainedSelected = try AuthSwap$Codex.authData(home: profile)
+        if appeared {
+            try expect(refused && AuthSwap$Codex.activeColumnID == selectedID
+                       && retainedBackup == backup && retainedNative == native && retainedSelected == selected,
+                       "A primary home created after discovery authorized stale backup/native removal")
+        } else {
+            try expect(!refused && AuthSwap$Codex.activeColumnID == AuthSwap$Codex.defaultColumnID
+                       && retainedBackup == nil && retainedNative == nil && retainedSelected == selected,
+                       "A proven absent native home blocked primary cleanup through its retained backup")
+        }
+    }
+
+    @MainActor
+    private static func codexDanglingPrimaryRemoval() throws {
+        Fixture.keychainExists = false
+        let manager = Foundation.FileManager.default
+        let base = AuthSwap$Codex.baseHome
+        let profile = ProfileDirectories.codexRoot.appendingPathComponent("selected-owner")
+        let selectedID = "codex:selected-owner"
+        try Fixture.codexLogin(base, account: "primary", mode: "file", expired: false)
+        try Fixture.codexLogin(profile, account: "selected", mode: "file", expired: false)
+        try AuthSwap$Codex.activate(columnID: selectedID, home: profile)
+        try manager.removeItem(at: base)
+        let absent = Fixture.root.appendingPathComponent("absent-native-target")
+        try manager.createSymbolicLink(at: base, withDestinationURL: absent)
+        guard let account = Discovery$Real().discover().first(where: { $0.id == AuthSwap$Codex.defaultColumnID }) else {
+            throw Failure(description: "Dangling native home hid the primary backup")
+        }
+        let backup = try AuthSwap$Codex.authData(home: AuthSwap$Codex.stashHome)
+        let selected = try AuthSwap$Codex.authData(home: profile)
+        var refused = false
+        do { try AccountRemoval.remove(account) } catch { refused = true }
+        let retainedBackup = try AuthSwap$Codex.authData(home: AuthSwap$Codex.stashHome)
+        let retainedSelected = try AuthSwap$Codex.authData(home: profile)
+        let destination = try? manager.destinationOfSymbolicLink(atPath: base.path)
+        try expect(refused && AuthSwap$Codex.activeColumnID == selectedID
+                   && retainedBackup == backup && retainedSelected == selected
+                   && destination == absent.path && !manager.fileExists(atPath: absent.path),
+                   "A dangling native symlink was treated as a proven absent primary home")
+    }
 
     @MainActor
     private static func waitForRefresh(_ count: Int) async throws {
@@ -4521,6 +4991,8 @@ enum Authentication {
         try Foundation.FileManager.default.createSymbolicLink(at: ProfileDirectories.codexRoot, withDestinationURL: second)
         try Fixture.writeAuth(home, account: "replacement", refresh: "replacement-refresh", expired: false)
         if ["remove", "usage"].contains(action) {
+            // The user removes the newly discovered owner after retargeting.
+            store.rediscover(force: true)
             try store.removeAccount(id: account.id)
             if action == "usage" {
                 // Return to the old physical path: only the logical generation
@@ -6114,8 +6586,8 @@ enum Authentication {
               let preferred = Fixture.codexKeychain[Fixture.codexKey(alias)] else {
             throw Failure(description: "Fixture did not discover the original managed account")
         }
-        // Preserve a discovered account while its managed path is migrated to a
-        // child symlink. The native login moves to that alias's new namespace.
+        // Migrate the managed path to a child symlink. The native login moves
+        // to that alias's new namespace before a fresh removal request.
         Fixture.codexKeychain[Fixture.codexKey(alias)] = nil
         try Foundation.FileManager.default.removeItem(at: alias)
         try Fixture.codexMode(physical, "auto")
@@ -6123,6 +6595,10 @@ enum Authentication {
         try Foundation.FileManager.default.createSymbolicLink(
             at: alias, withDestinationURL: URL(fileURLWithPath: "/System/Volumes/Data" + physical.path))
         Fixture.codexKeychain[Fixture.codexKey(alias)] = preferred
+        // Enumerated children exclude symlinks; capture a fresh removal request
+        // directly so this fixture still exercises independent alias cleanup.
+        let currentAccount = DiscoveredAccount(id: account.id, provider: account.provider,
+            profileName: account.profileName, source: account.source)
         let peer = try Data(contentsOf: physical.appendingPathComponent("auth.json"))
         let settings = physical.appendingPathComponent("settings-sentinel")
         let settingsData = Data("physical-profile-settings".utf8)
@@ -6130,7 +6606,7 @@ enum Authentication {
         var refused = false
         do {
             if direct { try AuthSwap$Codex.removeAuth(home: alias, columnID: account.id) }
-            else { try AccountRemoval.remove(account) }
+            else { try AccountRemoval.remove(currentAccount) }
         } catch { refused = true }
         try expect(refused == direct,
                    "Removal confused unlinking a managed alias with credential-only deletion")
@@ -6300,6 +6776,10 @@ enum Authentication {
             withDestinationURL: URL(fileURLWithPath: "/System/Volumes/Data" + physical.path))
         let aliasKey = Fixture.codexKey(alias)
         Fixture.codexKeychain[aliasKey] = preferred
+        // Capture the current alias owner after migration, before starting
+        // the retained file owner's rotation.
+        let currentAlias = DiscoveredAccount(id: aliasAccount.id, provider: aliasAccount.provider,
+            profileName: aliasAccount.profileName, source: aliasAccount.source)
         let fileAccount = DiscoveredAccount(id: "codex:retained-file-owner", provider: .codex,
             profileName: "retained-file-owner", source: .codexHome(physical))
         Fixture.response = .heldRenewed
@@ -6312,7 +6792,7 @@ enum Authentication {
             try expect(Renewal$Codex.refreshToken(physical.appendingPathComponent("auth.json")) == "peer-refresh",
                        "Fixture did not retain the rotated response in pending storage")
         }
-        if remove { try AccountRemoval.remove(aliasAccount) }
+        if remove { try AccountRemoval.remove(currentAlias) }
         if pending {
             Fixture.failCodexFileWrite = false
             let ready = await Renewal$Codex.shared.prepareForTermination(timeout: 2)

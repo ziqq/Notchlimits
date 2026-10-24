@@ -538,13 +538,21 @@ enum AuthSwap$Codex {
     static func hasAuth(home: URL) -> Bool { (try? storage(at: home))?.contains() ?? false }
 
     static func removeAuth(home: URL, columnID: String? = nil, removingProfileLink: Bool = false,
-                           requireIncomplete: Bool = false,
+                           requireIncomplete: Bool = false, expectedAccount: DiscoveredAccount? = nil,
                            operation: (AuthStorage$Codex) throws -> Void = { try $0.delete() }) throws {
         lock.lock()
         defer { lock.unlock() }
         let key = homeKey(home)
         let target = try storage(at: home)
         guard target.home.path == key, homeKey(home) == key else { throw Failure.busy }
+        // A discovered column cannot authorize a replacement directory. Check
+        // under the swap lock before restoring native auth or deleting a backup.
+        if let expectedAccount {
+            let missingPrimary = columnID == defaultColumnID && isBaseHome(home)
+                && expectedAccount.codexHomeMissingPath != nil
+                && expectedAccount.codexHomeMissingPath == DirectoryIdentity.missingPath(home)
+            guard expectedAccount.codexHomeOwner?.matches(home) == true || missingPrimary else { throw Failure.busy }
+        }
         // Stale discovery or a caller without a column ID cannot authorize
         // deleting the primary through another name for its current backup.
         // The proven primary transaction removes credentials, never its home.

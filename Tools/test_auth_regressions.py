@@ -105,6 +105,123 @@ final class NSMenuItem { var representedObject: Any? }
             result = run_fixture(self.executable, scenario, pathlib.Path(directory))
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_claude_usage_owner_queued_replacement(self):
+        self.check_scenario("claude-usage-owner-queued-replacement")
+
+    def test_claude_usage_owner_queued_stable(self):
+        self.check_scenario("claude-usage-owner-queued-stable")
+
+    def test_claude_usage_owner_queued_metadata(self):
+        self.check_scenario("claude-usage-owner-queued-metadata")
+
+    def test_claude_usage_owner_queued_active(self):
+        self.check_scenario("claude-usage-owner-queued-active")
+
+    def test_codex_usage_owner_queued_replacement(self):
+        self.check_scenario("codex-usage-owner-queued-replacement")
+
+    def test_codex_usage_owner_queued_stable(self):
+        self.check_scenario("codex-usage-owner-queued-stable")
+
+    def test_codex_usage_owner_queued_metadata(self):
+        self.check_scenario("codex-usage-owner-queued-metadata")
+
+    def test_codex_usage_owner_queued_active(self):
+        self.check_scenario("codex-usage-owner-queued-active")
+
+    def test_claude_usage_owner_displayed_replacement(self):
+        self.check_scenario("claude-usage-owner-displayed-replacement")
+
+    def test_claude_usage_owner_displayed_stable(self):
+        self.check_scenario("claude-usage-owner-displayed-stable")
+
+    def test_claude_usage_owner_displayed_metadata(self):
+        self.check_scenario("claude-usage-owner-displayed-metadata")
+
+    def test_claude_usage_owner_displayed_active(self):
+        self.check_scenario("claude-usage-owner-displayed-active")
+
+    def test_codex_usage_owner_displayed_replacement(self):
+        self.check_scenario("codex-usage-owner-displayed-replacement")
+
+    def test_codex_usage_owner_displayed_stable(self):
+        self.check_scenario("codex-usage-owner-displayed-stable")
+
+    def test_codex_usage_owner_displayed_metadata(self):
+        self.check_scenario("codex-usage-owner-displayed-metadata")
+
+    def test_codex_usage_owner_displayed_active(self):
+        self.check_scenario("codex-usage-owner-displayed-active")
+
+    def test_codex_owner_metadata_file_control(self):
+        self.check_scenario("codex-owner-metadata-file-control")
+
+    def test_codex_owner_metadata_keyring_control(self):
+        self.check_scenario("codex-owner-metadata-keyring-control")
+
+    def test_codex_owner_metadata_auto_control(self):
+        self.check_scenario("codex-owner-metadata-auto-control")
+
+    def test_codex_owner_missing_snapshot(self):
+        self.check_scenario("codex-owner-missing-snapshot")
+
+    def test_codex_owner_missing_current(self):
+        self.check_scenario("codex-owner-missing-current")
+
+    def test_codex_owner_stale_selected_file(self):
+        self.check_scenario("codex-owner-stale-selected-file")
+
+    def test_codex_owner_stale_selected_keyring(self):
+        self.check_scenario("codex-owner-stale-selected-keyring")
+
+    def test_codex_owner_stale_selected_auto(self):
+        self.check_scenario("codex-owner-stale-selected-auto")
+
+    def test_codex_owner_stale_primary_file(self):
+        self.check_scenario("codex-owner-stale-primary-file")
+
+    def test_codex_owner_stale_primary_keyring(self):
+        self.check_scenario("codex-owner-stale-primary-keyring")
+
+    def test_codex_owner_stale_primary_auto(self):
+        self.check_scenario("codex-owner-stale-primary-auto")
+
+    def test_codex_owner_missing_primary_control(self):
+        self.check_scenario("codex-owner-missing-primary-control")
+
+    def test_codex_owner_missing_primary_appeared(self):
+        self.check_scenario("codex-owner-missing-primary-appeared")
+
+    def test_codex_owner_dangling_primary_control(self):
+        self.check_scenario("codex-owner-dangling-primary-control")
+
+    def test_codex_discovered_owner_replace_file(self):
+        self.check_scenario("codex-discovered-owner-replace-file")
+
+    def test_codex_discovered_owner_replace_keyring(self):
+        self.check_scenario("codex-discovered-owner-replace-keyring")
+
+    def test_codex_discovered_owner_replace_auto(self):
+        self.check_scenario("codex-discovered-owner-replace-auto")
+
+    def test_codex_discovered_owner_retarget_file(self):
+        self.check_scenario("codex-discovered-owner-retarget-file")
+
+    def test_codex_discovered_owner_retarget_keyring(self):
+        self.check_scenario("codex-discovered-owner-retarget-keyring")
+
+    def test_codex_discovered_owner_retarget_auto(self):
+        self.check_scenario("codex-discovered-owner-retarget-auto")
+
+    def test_codex_discovered_owner_none_file(self):
+        self.check_scenario("codex-discovered-owner-none-file")
+
+    def test_codex_discovered_owner_none_keyring(self):
+        self.check_scenario("codex-discovered-owner-none-keyring")
+
+    def test_codex_discovered_owner_none_auto(self):
+        self.check_scenario("codex-discovered-owner-none-auto")
+
     def test_codex_incomplete_preserves_completed_file_login(self):
         self.check_scenario("codex-incomplete-completed-file")
 
