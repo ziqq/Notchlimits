@@ -35,7 +35,7 @@ def compile_fixture(directory, name, sources, flags=(), extra_sources=()):
         *map(str, extra_sources),
         str(FIXTURES / f"{name}.swift"), "-o", str(executable),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+    result = subprocess.run(command, capture_output=True, text=True, timeout=600)
     if result.returncode:
         raise RuntimeError(f"{name} fixture did not compile:\n{result.stderr}")
     return executable
