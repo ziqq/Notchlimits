@@ -105,6 +105,20 @@ enum AuthSwap$Codex {
         return home
     }
 
+    struct UsageOwner: Equatable {
+        let path: String
+        let directory: DirectoryIdentity?
+    }
+
+    /// Polling follows the routed credentials; removal owns the profile itself.
+    /// Capture routing and physical identity together, including backup recovery.
+    static func usageOwner(columnID: String, home: URL) -> UsageOwner {
+        lock.lock()
+        defer { lock.unlock() }
+        let path = homeKey(liveHome(columnID: columnID, home: home))
+        return UsageOwner(path: path, directory: DirectoryIdentity.capture(URL(fileURLWithPath: path)))
+    }
+
     static func isBaseHome(_ url: URL) -> Bool {
         (try? sameOwner(url, baseHome)) == true
     }
