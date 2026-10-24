@@ -40,6 +40,7 @@ final class UsageStore: ObservableObject {
 
     private struct Runtime {
         let generation = UUID()
+        let codexUsageOwner: AuthSwap$Codex.UsageOwner?
         var nextDue: Date
         var backoffStep: Int = 0
         var inFlight: Bool = false
@@ -72,9 +73,15 @@ final class UsageStore: ObservableObject {
         lastDiscovery = now
 
         let found = discovery.discover()
+        let usageOwners = Dictionary(uniqueKeysWithValues: found.compactMap { account -> (String, AuthSwap$Codex.UsageOwner)? in
+            guard case .codexHome(let home) = account.source else { return nil }
+            return (account.id, AuthSwap$Codex.usageOwner(columnID: account.id, home: home))
+        })
         // Пересобираем при любой смене состава ИЛИ активного (после свича id
         // могут совпасть, а флаг isActive — нет).
-        guard found != accounts else { return }
+        guard found != accounts || found.contains(where: {
+            runtime[$0.id]?.codexUsageOwner != usageOwners[$0.id]
+        }) else { return }
         let previousAccounts = accounts
         accounts = found
 
@@ -86,6 +93,7 @@ final class UsageStore: ObservableObject {
                     || $0.claudeConfigOwner != account.claudeConfigOwner
                     || $0.codexHomeOwner != account.codexHomeOwner
                     || $0.codexHomeMissingPath != account.codexHomeMissingPath
+                    || runtime[account.id]?.codexUsageOwner != usageOwners[account.id]
             } ?? false
             if replaced {
                 // A queued result must not populate a newly discovered owner.
@@ -113,7 +121,8 @@ final class UsageStore: ObservableObject {
                     column.status = .ok
                 }
                 next.append(column)
-                runtime[account.id] = Runtime(nextDue: now.addingTimeInterval(Double(index) * Schedule.stagger))
+                runtime[account.id] = Runtime(codexUsageOwner: usageOwners[account.id],
+                                              nextDue: now.addingTimeInterval(Double(index) * Schedule.stagger))
             }
         }
         // Забываем расписание исчезнувших профилей.

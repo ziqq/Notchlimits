@@ -817,11 +817,55 @@ private final class UsageOwnerDiscovery: AccountDiscovery {
     }
 }
 
+// Keep real discovery and provider routing; isolate the target column so its
+// first request is not affected by another account's poll or scheduler stagger.
+private struct RoutedUsageDiscovery: AccountDiscovery {
+    let accountID: String
+    func discover() -> [DiscoveredAccount] {
+        Discovery$Real().discover().filter { $0.id == accountID }
+    }
+}
+
+private actor RoutedUsageCompletionProbe: UsageProvider {
+    private let provider = Provider$Codex()
+    private(set) var completed = 0
+    private(set) var firstSuccess: Double?
+
+    func fetch(_ account: DiscoveredAccount) async -> FetchOutcome {
+        let result = await provider.fetch(account)
+        if completed == 0, case .success(let snapshot) = result {
+            firstSuccess = snapshot.windows.first?.utilization
+        }
+        completed += 1
+        return result
+    }
+}
+
 @main
 enum Authentication {
     static func main() async {
         do {
             switch CommandLine.arguments[1] {
+            case "codex-routed-usage-queued-primary-replacement-file": try await codexRoutedUsageOwner(primary: true, mode: "file", queued: true, change: "replacement")
+            case "codex-routed-usage-queued-primary-replacement-keyring": try await codexRoutedUsageOwner(primary: true, mode: "keyring", queued: true, change: "replacement")
+            case "codex-routed-usage-queued-primary-replacement-auto": try await codexRoutedUsageOwner(primary: true, mode: "auto", queued: true, change: "replacement")
+            case "codex-routed-usage-queued-primary-stable-control": try await codexRoutedUsageOwner(primary: true, mode: "file", queued: true, change: "stable")
+            case "codex-routed-usage-queued-selected-replacement-file": try await codexRoutedUsageOwner(primary: false, mode: "file", queued: true, change: "replacement")
+            case "codex-routed-usage-queued-selected-replacement-keyring": try await codexRoutedUsageOwner(primary: false, mode: "keyring", queued: true, change: "replacement")
+            case "codex-routed-usage-queued-selected-replacement-auto": try await codexRoutedUsageOwner(primary: false, mode: "auto", queued: true, change: "replacement")
+            case "codex-routed-usage-queued-selected-stable-control": try await codexRoutedUsageOwner(primary: false, mode: "file", queued: true, change: "stable")
+            case "codex-routed-usage-displayed-primary-replacement-file": try await codexRoutedUsageOwner(primary: true, mode: "file", queued: false, change: "replacement")
+            case "codex-routed-usage-displayed-primary-replacement-keyring": try await codexRoutedUsageOwner(primary: true, mode: "keyring", queued: false, change: "replacement")
+            case "codex-routed-usage-displayed-primary-replacement-auto": try await codexRoutedUsageOwner(primary: true, mode: "auto", queued: false, change: "replacement")
+            case "codex-routed-usage-displayed-primary-metadata-control": try await codexRoutedUsageOwner(primary: true, mode: "file", queued: false, change: "metadata")
+            case "codex-routed-usage-displayed-selected-replacement-file": try await codexRoutedUsageOwner(primary: false, mode: "file", queued: false, change: "replacement")
+            case "codex-routed-usage-displayed-selected-replacement-keyring": try await codexRoutedUsageOwner(primary: false, mode: "keyring", queued: false, change: "replacement")
+            case "codex-routed-usage-displayed-selected-replacement-auto": try await codexRoutedUsageOwner(primary: false, mode: "auto", queued: false, change: "replacement")
+            case "codex-routed-usage-displayed-selected-metadata-control": try await codexRoutedUsageOwner(primary: false, mode: "file", queued: false, change: "metadata")
+            case "codex-routed-usage-primary-switch-control": try await codexRoutedUsageSwitch(primary: true)
+            case "codex-routed-usage-selected-switch-control": try await codexRoutedUsageSwitch(primary: false)
+            case "codex-routed-usage-recovery-relocation": try await codexRoutedUsageRecovery()
+            case "codex-routed-usage-startup-cache-control": try await codexRoutedUsageCacheStartup()
             case "codex-owner-dangling-primary-control": try codexDanglingPrimaryRemoval()
             case "codex-owner-metadata-file-control": try codexOwnerMetadataRemoval(mode: "file")
             case "codex-owner-metadata-keyring-control": try codexOwnerMetadataRemoval(mode: "keyring")
@@ -1780,6 +1824,350 @@ enum Authentication {
                    && retainedBackup == backup && retainedSelected == selected
                    && destination == absent.path && !manager.fileExists(atPath: absent.path),
                    "A dangling native symlink was treated as a proven absent primary home")
+    }
+
+    @MainActor
+    private static func routedUsageSetup(primary: Bool, mode: String, profileMode: String? = nil) throws
+        -> (account: DiscoveredAccount, live: URL, snapshot: AuthSwap$Codex.AuthSnapshot) {
+        Fixture.keychainExists = false
+        let manager = Foundation.FileManager.default
+        try manager.createDirectory(at: ProfileDirectories.claudeRoot, withIntermediateDirectories: true)
+        let base = AuthSwap$Codex.baseHome
+        let profile = ProfileDirectories.codexRoot.appendingPathComponent("routed-usage-owner")
+        let selectedID = AuthSwap$Codex.profileColumnID("routed-usage-owner")
+        try Fixture.codexLogin(base, account: "original-primary", mode: mode, expired: false)
+        try Fixture.codexLogin(profile, account: "original-selected", mode: profileMode ?? mode, expired: false)
+        try AuthSwap$Codex.activate(columnID: selectedID, home: profile)
+        let id = primary ? AuthSwap$Codex.defaultColumnID : selectedID
+        let logicalHome = primary ? base : profile
+        let live = primary ? AuthSwap$Codex.stashHome : base
+        guard let logicalOwner = DirectoryIdentity.capture(logicalHome), let liveOwner = DirectoryIdentity.capture(live),
+              let snapshot = try AuthSwap$Codex.authSnapshot(columnID: id, home: logicalHome),
+              let account = Discovery$Real().discover().first(where: { $0.id == id }) else {
+            throw Failure(description: "Could not capture the switched column and its initial source owners")
+        }
+        try expect(!logicalOwner.isSameDirectory(as: liveOwner),
+                   "The scenario did not establish distinct logical and actual credential directories")
+        try expect(AuthSwap$Codex.liveHome(columnID: id, home: logicalHome).path == live.path,
+                   "The scenario did not establish the intended production credential route")
+        try expect(Provider$Codex.parseAuth(snapshot.data)?.accountID == (primary ? "original-primary" : "original-selected"),
+                   "The initial routed snapshot belongs to the wrong login")
+        try expect(AuthSwap$Codex.activeColumnID == selectedID
+                   && UserDefaults.standard.string(forKey: "codexAppSourceAuth") != nil,
+                   "Real activation did not establish its selected login proof")
+        return (account, live, snapshot)
+    }
+
+    private static func mutateRoutedUsageSource(_ live: URL, mode: String, change: String, login: String) throws {
+        if change == "replacement" {
+            try Foundation.FileManager.default.moveItem(at: live,
+                to: Fixture.root.appendingPathComponent("retired-routed-usage-source"))
+            try Fixture.codexLogin(live, account: login, mode: mode, expired: false)
+        } else if change == "metadata" {
+            try Data("metadata-only".utf8).write(to: live.appendingPathComponent("settings-sentinel"))
+            var root = try JSONSerialization.jsonObject(with: AuthSwap$Codex.authData(home: live)!) as! [String: Any]
+            root["last_refresh"] = "metadata-only"
+            try AuthStorage$Codex(home: live).save(JSONSerialization.data(withJSONObject: root))
+            try Foundation.FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_600_000_000)],
+                                                             ofItemAtPath: live.path)
+        }
+    }
+
+    @MainActor
+    private static func codexRoutedUsageOwner(primary: Bool, mode: String, queued: Bool, change: String) async throws {
+        let (account, live, initialSnapshot) = try routedUsageSetup(primary: primary, mode: mode)
+        guard case .codexHome(let logicalHome) = account.source,
+              let logicalOwner = DirectoryIdentity.capture(logicalHome), let liveOwner = DirectoryIdentity.capture(live) else {
+            throw Failure(description: "Missing logical or actual credential directory")
+        }
+        let id = account.id
+        let selectedID = AuthSwap$Codex.activeColumnID
+        let sourceProof = UserDefaults.standard.string(forKey: "codexAppSourceAuth")
+        let replacing = change == "replacement"
+        let originalLogin = primary ? "original-primary" : "original-selected"
+        let replacementLogin = primary ? "replacement-primary" : "replacement-selected"
+        Fixture.holdFirstUsage = true
+        Fixture.releaseFirstUsage = !queued
+        Fixture.manualPollingTimer = true
+        let probe = RoutedUsageCompletionProbe()
+        let store = UsageStore(providers: [.codex: probe], discovery: RoutedUsageDiscovery(accountID: id))
+        store.start()
+        try expect(store.account(for: id) != nil, "Real discovery did not return the switched column")
+        store.setCustomName("Personal label", for: id)
+        store.setHidden(id, hidden: true)
+        for _ in 0..<400 {
+            let ready = queued ? Fixture.usageCalls == 1 : store.columns.first(where: { $0.id == id })?.updatedAt != nil
+            if ready { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(Fixture.usageCalls == 1, "Routed usage did not reach its initial HTTP boundary")
+        let before = store.columns.first(where: { $0.id == id })
+        if !queued {
+            try expect(before?.windows.first?.utilization == 12 && before?.updatedAt != nil
+                       && UsageCache().load(id: id)?.windows.first?.utilization == 12,
+                       "Initial real provider usage did not populate the column and cache")
+        }
+
+        var oldPublished = false
+        var observation: AnyCancellable?
+        if queued {
+            observation = store.$columns.sink { columns in
+                if columns.first(where: { $0.id == id })?.windows.first?.utilization == 12 { oldPublished = true }
+            }
+        }
+        defer { observation?.cancel() }
+        if queued {
+            Fixture.lock.lock()
+            Fixture.pauseProfileSnapshot = true
+            Fixture.profileSnapshotPaused = false
+            Fixture.resumeProfileSnapshot = false
+            Fixture.lock.unlock()
+            let replacement = Task.detached {
+                defer {
+                    Fixture.lock.lock()
+                    Fixture.releaseFirstUsage = true
+                    Fixture.resumeProfileSnapshot = true
+                    Fixture.lock.unlock()
+                }
+                var paused = false
+                for _ in 0..<400 {
+                    Fixture.lock.lock()
+                    paused = Fixture.profileSnapshotPaused
+                    Fixture.lock.unlock()
+                    if paused { break }
+                    try await Task.sleep(nanoseconds: 5_000_000)
+                }
+                try expect(paused, "Rediscovery did not pause at the existing directory enumeration boundary")
+                Fixture.lock.lock()
+                Fixture.releaseFirstUsage = true
+                Fixture.lock.unlock()
+                for _ in 0..<400 {
+                    if await probe.completed == 1 { break }
+                    try await Task.sleep(nanoseconds: 5_000_000)
+                }
+                let firstCompleted = await probe.completed
+                let firstSuccess = await probe.firstSuccess
+                try expect(firstCompleted == 1 && firstSuccess == 12,
+                           "The real provider did not return successful old usage before source replacement")
+                try mutateRoutedUsageSource(live, mode: mode, change: change, login: replacementLogin)
+            }
+            store.rediscover(force: true)
+            try await replacement.value
+        } else {
+            try mutateRoutedUsageSource(live, mode: mode, change: change, login: replacementLogin)
+            store.rediscover(force: true)
+            guard let after = store.columns.first(where: { $0.id == id }) else {
+                throw Failure(description: "Rediscovery dropped the routed column")
+            }
+            // Inspect before yielding: replacement cannot inherit already
+            // displayed usage or hydrate that usage again from persistent cache.
+            if replacing {
+                try expect(after.windows.isEmpty && after.stats.isEmpty && after.subtitle == nil
+                           && after.updatedAt == nil && !after.fromCache && after.status == .loading,
+                           "The new routed source retained the previous source's displayed usage")
+                try expect(UsageCache().load(id: id) == nil,
+                           "The new routed source retained the previous source's persistent cache")
+            } else {
+                try expect(after.windows == before?.windows && after.subtitle == before?.subtitle
+                           && after.stats == before?.stats && after.updatedAt == before?.updatedAt
+                           && after.fromCache == before?.fromCache && after.status == before?.status,
+                           "Metadata-only changes discarded valid displayed usage")
+                try expect(UsageCache().load(id: id)?.updatedAt == before?.updatedAt
+                           && UsageCache().load(id: id)?.windows == before?.windows,
+                           "Metadata-only changes discarded valid persistent cache")
+            }
+        }
+        guard let current = store.account(for: id), let currentLive = DirectoryIdentity.capture(live),
+              let currentSnapshot = try AuthSwap$Codex.authSnapshot(columnID: id, home: logicalHome) else {
+            throw Failure(description: "Rediscovery lost the column or its current routed source")
+        }
+        try expect(current.id == account.id && current.source == account.source && current.isActive == account.isActive
+                   && logicalOwner.matches(logicalHome)
+                   && liveOwner.isSameDirectory(as: currentLive) == !replacing,
+                   "The scenario changed logical selection instead of only the routed physical owner")
+        let currentLogin = Provider$Codex.parseAuth(currentSnapshot.data)?.accountID
+        let isOriginalCurrent = try AuthSwap$Codex.isCurrent(initialSnapshot, columnID: id, home: logicalHome)
+        try expect(currentLogin == (replacing ? replacementLogin : originalLogin) && isOriginalCurrent == !replacing,
+                   "Production authSnapshot did not identify the current routed login")
+        try expect(AuthSwap$Codex.activeColumnID == selectedID
+                   && UserDefaults.standard.string(forKey: "codexAppSourceAuth") == sourceProof,
+                   "Rediscovery changed selection or its source proof")
+        try expectUsageOwnerPreferences(store, id: id)
+        guard let tick = Fixture.pollingTick else { throw Failure(description: "Missing scheduler tick") }
+        for _ in 0..<400 {
+            if store.columns.first(where: { $0.id == id })?.updatedAt != nil { break }
+            tick()
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        let expected: Double = replacing ? 84 : 12
+        try expect(store.columns.first(where: { $0.id == id })?.windows.first?.utilization == expected
+                   && UsageCache().load(id: id)?.windows.first?.utilization == expected,
+                   "Previous routed-source usage populated the current login's column/cache")
+        if queued {
+            try expect(oldPublished == !replacing,
+                       "Queued usage was briefly published for a replacement, or valid usage was discarded")
+        }
+        for _ in 0..<16 { tick(); try await Task.sleep(nanoseconds: 5_000_000) }
+        let expectedCalls = replacing ? 2 : 1
+        try expect(await probe.completed == expectedCalls && Fixture.usageCalls == expectedCalls && Fixture.refreshCalls == 0,
+                   "Routed-source rediscovery repeated valid usage, skipped replacement polling or refreshed a fresh grant")
+    }
+
+    @MainActor
+    private static func codexRoutedUsageSwitch(primary: Bool) async throws {
+        let (account, _, _) = try routedUsageSetup(primary: primary, mode: "file")
+        guard case .codexHome(let logicalHome) = account.source, let logicalOwner = DirectoryIdentity.capture(logicalHome) else {
+            throw Failure(description: "Could not capture the original removal owner")
+        }
+        Fixture.holdFirstUsage = true
+        Fixture.releaseFirstUsage = true
+        Fixture.manualPollingTimer = true
+        let probe = RoutedUsageCompletionProbe()
+        let store = UsageStore(providers: [.codex: probe], discovery: RoutedUsageDiscovery(accountID: account.id))
+        store.start()
+        for _ in 0..<400 {
+            if store.columns.first(where: { $0.id == account.id })?.windows.first?.utilization == 12 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(store.columns.first(where: { $0.id == account.id })?.windows.first?.utilization == 12,
+                   "Initial usage did not finish before the real switch")
+        try AuthSwap$Codex.restoreDefault()
+        store.rediscover(force: true)
+        guard let current = store.account(for: account.id),
+              let snapshot = try AuthSwap$Codex.authSnapshot(columnID: account.id, home: logicalHome) else {
+            throw Failure(description: "Real restoration lost the account or its current source")
+        }
+        try expect(AuthSwap$Codex.activeColumnID == AuthSwap$Codex.defaultColumnID
+                   && current.isActive != account.isActive && current.source == account.source
+                   && AuthSwap$Codex.liveHome(columnID: account.id, home: logicalHome).path == logicalHome.path
+                   && logicalOwner.matches(logicalHome)
+                   && Provider$Codex.parseAuth(snapshot.data)?.accountID == (primary ? "original-primary" : "original-selected"),
+                   "Real restoration changed the logical owner or lost its original login")
+        // A user refresh must recover normal polling on either old or new code;
+        // this is a control, not an assertion about how soon a switch polls.
+        store.refreshAll(force: true)
+        for _ in 0..<400 {
+            if store.columns.first(where: { $0.id == account.id })?.windows.first?.utilization == 84 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(store.columns.first(where: { $0.id == account.id })?.windows.first?.utilization == 84
+                   && UsageCache().load(id: account.id)?.windows.first?.utilization == 84,
+                   "The real switch left polling stuck on its previous route")
+        try expect(await probe.completed == 2 && Fixture.usageCalls == 2 && Fixture.refreshCalls == 0,
+                   "The real switch replayed a poll or refreshed a fresh grant")
+        // This original discovery still authorizes its own physical directory.
+        // A usage-source snapshot must not replace the removal-owner snapshot.
+        try AccountRemoval.remove(account)
+        let base = AuthSwap$Codex.baseHome
+        let profile = ProfileDirectories.codexRoot.appendingPathComponent("routed-usage-owner")
+        if primary {
+            let remaining = try AuthSwap$Codex.authData(home: base)
+            try expect(logicalOwner.matches(base) && remaining == nil
+                       && Provider$Codex.readAuth(codexHome: profile)?.accountID == "original-selected",
+                       "Primary removal after switching deleted its directory or the selected profile's login")
+        } else {
+            try expect(!Foundation.FileManager.default.fileExists(atPath: profile.path)
+                       && Provider$Codex.readAuth(codexHome: base)?.accountID == "original-primary",
+                       "Profile removal after switching touched the restored primary login")
+        }
+    }
+
+    @MainActor
+    private static func codexRoutedUsageRecovery() async throws {
+        let (account, oldStash, initialSnapshot) = try routedUsageSetup(primary: true, mode: "file", profileMode: "keyring")
+        let base = AuthSwap$Codex.baseHome
+        let selectedID = AuthSwap$Codex.profileColumnID("routed-usage-owner")
+        guard let selected = Discovery$Real().discover().first(where: { $0.id == selectedID }),
+              case .codexHome(let profile) = selected.source,
+              let oldOwner = DirectoryIdentity.capture(oldStash) else {
+            throw Failure(description: "Recovery setup did not discover the selected removal target")
+        }
+        let native = try AuthSwap$Codex.authData(home: base)
+        let sourceProof = UserDefaults.standard.string(forKey: "codexAppSourceAuth")
+        Fixture.holdFirstUsage = true
+        Fixture.releaseFirstUsage = true
+        Fixture.manualPollingTimer = true
+        let probe = RoutedUsageCompletionProbe()
+        let store = UsageStore(providers: [.codex: probe], discovery: RoutedUsageDiscovery(accountID: account.id))
+        store.start()
+        for _ in 0..<400 {
+            if store.columns.first(where: { $0.id == account.id })?.windows.first?.utilization == 12 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(store.columns.first(where: { $0.id == account.id })?.windows.first?.utilization == 12
+                   && UsageCache().load(id: account.id)?.windows.first?.utilization == 12,
+                   "Initial primary usage was not displayed before recovery")
+        // Reuse existing OS faults to execute the real backup-recovery path.
+        Fixture.denyCredentialChmodHome = AuthStorage$Codex.canonicalPath(oldStash)
+        Fixture.denyCodexDeleteAccount = Fixture.codexKey(profile)
+        var refused = false
+        do { try AccountRemoval.remove(selected) } catch { refused = true }
+        Fixture.denyCredentialChmodHome = nil
+        Fixture.denyCodexDeleteAccount = nil
+        let recovery = AuthSwap$Codex.stashHome
+        guard let recoveredOwner = DirectoryIdentity.capture(recovery),
+              let currentSnapshot = try AuthSwap$Codex.authSnapshot(columnID: account.id, home: base) else {
+            throw Failure(description: "Refused removal did not retain a readable recovery source")
+        }
+        let retainedNative = try AuthSwap$Codex.authData(home: base)
+        let originalCurrent = try AuthSwap$Codex.isCurrent(initialSnapshot, columnID: account.id, home: base)
+        try expect(refused && recovery.path != oldStash.path && !oldOwner.isSameDirectory(as: recoveredOwner)
+                   && AuthSwap$Codex.activeColumnID == selectedID && retainedNative == native
+                   && UserDefaults.standard.string(forKey: "codexAppSourceAuth") == sourceProof
+                   && Provider$Codex.parseAuth(currentSnapshot.data)?.accountID == "original-primary" && !originalCurrent,
+                   "The fixture did not execute recovery relocation while preserving both logins and selection")
+        store.rediscover(force: true)
+        guard let column = store.columns.first(where: { $0.id == account.id }) else {
+            throw Failure(description: "Recovery relocation hid the primary column")
+        }
+        try expect(column.windows.isEmpty && column.updatedAt == nil && UsageCache().load(id: account.id) == nil,
+                   "Recovery relocation retained usage bound to the former physical source")
+        guard let tick = Fixture.pollingTick else { throw Failure(description: "Missing scheduler tick") }
+        for _ in 0..<400 {
+            if store.columns.first(where: { $0.id == account.id })?.windows.first?.utilization == 84 { break }
+            tick()
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(store.columns.first(where: { $0.id == account.id })?.windows.first?.utilization == 84
+                   && UsageCache().load(id: account.id)?.windows.first?.utilization == 84,
+                   "The regular scheduler did not poll the recovered primary source")
+        try expect(await probe.completed == 2 && Fixture.usageCalls == 2 && Fixture.refreshCalls == 0,
+                   "Recovery relocation repeated a poll or refreshed an already valid grant")
+    }
+
+    @MainActor
+    private static func codexRoutedUsageCacheStartup() async throws {
+        let (account, _, _) = try routedUsageSetup(primary: true, mode: "file")
+        Fixture.holdFirstUsage = true
+        Fixture.releaseFirstUsage = true
+        Fixture.manualPollingTimer = true
+        let probe = RoutedUsageCompletionProbe()
+        let discovery = RoutedUsageDiscovery(accountID: account.id)
+        let firstStore = UsageStore(providers: [.codex: probe], discovery: discovery)
+        firstStore.start()
+        firstStore.setCustomName("Personal label", for: account.id)
+        firstStore.setHidden(account.id, hidden: true)
+        for _ in 0..<400 {
+            if firstStore.columns.first(where: { $0.id == account.id })?.updatedAt != nil { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        guard let before = firstStore.columns.first(where: { $0.id == account.id }), let updatedAt = before.updatedAt else {
+            throw Failure(description: "Initial store did not save real usage for startup hydration")
+        }
+        try expect(before.windows.first?.utilization == 12 && UsageCache().load(id: account.id)?.windows == before.windows,
+                   "Startup control did not establish valid persistent usage")
+        let restarted = UsageStore(providers: [.codex: probe], discovery: discovery)
+        restarted.rediscover(force: true)
+        guard let hydrated = restarted.columns.first(where: { $0.id == account.id }) else {
+            throw Failure(description: "A new store did not discover the cached routed account")
+        }
+        try expect(hydrated.fromCache && hydrated.status == .ok && hydrated.windows == before.windows
+                   && hydrated.updatedAt == updatedAt && hydrated.subtitle == before.subtitle && hydrated.stats == before.stats
+                   && UsageCache().load(id: account.id)?.updatedAt == updatedAt,
+                   "Initial source-owner capture purged or skipped valid startup cache")
+        try expectUsageOwnerPreferences(restarted, id: account.id)
+        try expect(await probe.completed == 1 && Fixture.usageCalls == 1 && Fixture.refreshCalls == 0,
+                   "Startup cache hydration unexpectedly requested usage or refreshed credentials")
     }
 
     @MainActor

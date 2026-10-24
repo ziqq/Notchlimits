@@ -105,6 +105,66 @@ final class NSMenuItem { var representedObject: Any? }
             result = run_fixture(self.executable, scenario, pathlib.Path(directory))
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_codex_routed_usage_queued_primary_replacement_file(self):
+        self.check_scenario("codex-routed-usage-queued-primary-replacement-file")
+
+    def test_codex_routed_usage_queued_primary_replacement_keyring(self):
+        self.check_scenario("codex-routed-usage-queued-primary-replacement-keyring")
+
+    def test_codex_routed_usage_queued_primary_replacement_auto(self):
+        self.check_scenario("codex-routed-usage-queued-primary-replacement-auto")
+
+    def test_codex_routed_usage_queued_primary_stable_control(self):
+        self.check_scenario("codex-routed-usage-queued-primary-stable-control")
+
+    def test_codex_routed_usage_queued_selected_replacement_file(self):
+        self.check_scenario("codex-routed-usage-queued-selected-replacement-file")
+
+    def test_codex_routed_usage_queued_selected_replacement_keyring(self):
+        self.check_scenario("codex-routed-usage-queued-selected-replacement-keyring")
+
+    def test_codex_routed_usage_queued_selected_replacement_auto(self):
+        self.check_scenario("codex-routed-usage-queued-selected-replacement-auto")
+
+    def test_codex_routed_usage_queued_selected_stable_control(self):
+        self.check_scenario("codex-routed-usage-queued-selected-stable-control")
+
+    def test_codex_routed_usage_displayed_primary_replacement_file(self):
+        self.check_scenario("codex-routed-usage-displayed-primary-replacement-file")
+
+    def test_codex_routed_usage_displayed_primary_replacement_keyring(self):
+        self.check_scenario("codex-routed-usage-displayed-primary-replacement-keyring")
+
+    def test_codex_routed_usage_displayed_primary_replacement_auto(self):
+        self.check_scenario("codex-routed-usage-displayed-primary-replacement-auto")
+
+    def test_codex_routed_usage_displayed_primary_metadata_control(self):
+        self.check_scenario("codex-routed-usage-displayed-primary-metadata-control")
+
+    def test_codex_routed_usage_displayed_selected_replacement_file(self):
+        self.check_scenario("codex-routed-usage-displayed-selected-replacement-file")
+
+    def test_codex_routed_usage_displayed_selected_replacement_keyring(self):
+        self.check_scenario("codex-routed-usage-displayed-selected-replacement-keyring")
+
+    def test_codex_routed_usage_displayed_selected_replacement_auto(self):
+        self.check_scenario("codex-routed-usage-displayed-selected-replacement-auto")
+
+    def test_codex_routed_usage_displayed_selected_metadata_control(self):
+        self.check_scenario("codex-routed-usage-displayed-selected-metadata-control")
+
+    def test_codex_routed_usage_primary_switch_control(self):
+        self.check_scenario("codex-routed-usage-primary-switch-control")
+
+    def test_codex_routed_usage_selected_switch_control(self):
+        self.check_scenario("codex-routed-usage-selected-switch-control")
+
+    def test_codex_routed_usage_recovery_relocation(self):
+        self.check_scenario("codex-routed-usage-recovery-relocation")
+
+    def test_codex_routed_usage_startup_cache_control(self):
+        self.check_scenario("codex-routed-usage-startup-cache-control")
+
     def test_claude_usage_owner_queued_replacement(self):
         self.check_scenario("claude-usage-owner-queued-replacement")
 
