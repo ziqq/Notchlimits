@@ -137,7 +137,7 @@ enum AccountRemoval {
             let removesLink = !isBase && url.deletingLastPathComponent().path == ProfileDirectories.codexRoot.path
                 && url.path.withCString({ Darwin.lstat($0, &link) }) == 0 && link.st_mode & S_IFMT == S_IFLNK
             try AuthSwap$Codex.removeAuth(home: url, columnID: account.id, removingProfileLink: removesLink,
-                                        requireIncomplete: requireIncomplete) { storage in
+                                        requireIncomplete: requireIncomplete, expectedAccount: account) { storage in
                 if isBase {
                     try storage.delete()
                 } else {

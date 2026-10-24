@@ -75,11 +75,26 @@ final class UsageStore: ObservableObject {
         // Пересобираем при любой смене состава ИЛИ активного (после свича id
         // могут совпасть, а флаг isActive — нет).
         guard found != accounts else { return }
+        let previousAccounts = accounts
         accounts = found
 
         var next: [AccountColumn] = []
         for (index, account) in found.enumerated() {
-            if var existing = columns.first(where: { $0.id == account.id }) {
+            let previous = previousAccounts.first { $0.id == account.id }
+            let replaced = previous.map {
+                $0.source != account.source
+                    || $0.claudeConfigOwner != account.claudeConfigOwner
+                    || $0.codexHomeOwner != account.codexHomeOwner
+                    || $0.codexHomeMissingPath != account.codexHomeMissingPath
+            } ?? false
+            if replaced {
+                // A queued result must not populate a newly discovered owner.
+                // Keep user preferences, but retire usage and its generation.
+                cache.remove(id: account.id)
+                history.purge(columnID: account.id)
+                notifier.purge(columnID: account.id)
+            }
+            if !replaced, var existing = columns.first(where: { $0.id == account.id }) {
                 // Уже известная колонка — данные сохраняем, обновляем активность.
                 existing.isActive = account.isActive
                 next.append(existing)
