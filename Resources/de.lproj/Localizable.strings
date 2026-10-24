@@ -68,6 +68,8 @@
 "menu.hotKey.standard" = "Standard (⌘P)";
 "menu.hotKey.disable" = "Ausschalten";
 "menu.loginItem" = "Beim Anmelden starten";
+"menu.switchCLI" = "CLI wechseln";
+"menu.switchCLI.help" = "Auch Claude Code wechseln. Nach dem ersten Wechsel ein neues Terminal öffnen. Laufende CLI-Sitzungen behalten ihr Konto.";
 "menu.about" = "Über Notchlimits";
 "menu.quit" = "Notchlimits beenden";
 "menu.telemetry" = "Telemetrie anzeigen";
@@ -78,6 +80,7 @@
 "remove.body" = "Die Zugangsdaten des Kontos werden endgültig gelöscht. Melde dich mit claude oder codex erneut an, um es zurückzuholen.";
 "remove.delete" = "Löschen";
 "remove.failed.title" = "Konto konnte nicht entfernt werden";
+"remove.busy" = "Dieses Konto wird gerade aktualisiert. Warte, bis der Vorgang abgeschlossen ist, und versuche es erneut.";
 "remove.incomplete" = "%@ — nicht angemeldet";
 
 // Обновления
@@ -154,12 +157,17 @@
 
 // Ошибки в колонке
 "error.network" = "Netzwerkfehler";
+"error.codexStorage" = "Die Codex-Speichereinstellungen können nicht gelesen werden oder dieses Speicherverfahren wird nicht unterstützt.";
+"error.codexEphemeral" = "Codex speichert diese Anmeldung nur im eigenen Prozess. Wähle in Codex file, keyring oder auto für dauerhafte Konten.";
 "error.keychainWrite" = "kein Schreibzugriff auf den Schlüsselbund";
+"error.pendingCredentials" = "Anmeldedaten werden noch gespeichert. Entsperre den Schlüsselbund und versuche erneut zu beenden.";
 "error.timeout" = "Zeitüberschreitung";
 "error.noHTTP" = "keine HTTP-Antwort";
 "error.http" = "HTTP %d";
 "error.parse" = "Antwort nicht lesbar";
 "error.unknownSource" = "unbekannte Quelle";
+"error.cliProfile" = "Das CLI-Profilverzeichnis wurde nicht gefunden.";
+"error.cliShell" = "CLI-Wechsel unterstützt zsh und bash. Öffne nach dem ersten Wechsel ein neues Terminal.";
 "error.noProvider" = "kein Anbieter";
 "error.unreachable" = "Netzwerk nicht verfügbar";
 
@@ -172,4 +180,5 @@
 "appswitch.error.title" = "Konto konnte nicht gewechselt werden";
 "appswitch.error.notInstalled" = "%@ ist nicht installiert.";
 "appswitch.error.didNotQuit" = "%@ wurde nicht beendet – schließe die App und versuche es erneut.";
-"appswitch.error.noAuth" = "Dieses Konto hat keine Codex-Anmeldung (auth.json). Melde dich erneut an.";
+"appswitch.error.noAuth" = "Dieses Konto hat keine Codex-Anmeldung. Melde dich erneut an.";
+"appswitch.error.inProgress" = "Ein Kontowechsel läuft bereits.";

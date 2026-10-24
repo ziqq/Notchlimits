@@ -5,7 +5,7 @@ import Foundation
 /// Запрос собран ровно как в codex-rs/backend-client (rate_limit_resets.rs):
 /// Bearer-токен из auth.json, идентификатор аккаунта отдельным заголовком
 /// и User-Agent вида codex_cli_rs/<версия>.
-struct CodexProvider: UsageProvider {
+struct Provider$Codex: UsageProvider {
 
     private let endpoint = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
 
@@ -22,27 +22,34 @@ struct CodexProvider: UsageProvider {
         }
 
         // Спящий вход продлеваем заранее, пока приложение на другом аккаунте.
-        let renewal = await CodexRenewal.shared.renew(columnID: account.id, home: home, force: false)
+        let renewal = await Renewal$Codex.shared.renew(columnID: account.id, home: home, force: false)
         if renewal == .rejected || renewal == .uncertain {
             return .reauth(L.t("column.reauth"))
         }
 
-        let outcome = await request(account, home: home)
+        let snapshot: AuthSwap$Codex.AuthSnapshot?
+        do { snapshot = try AuthSwap$Codex.authSnapshot(columnID: account.id, home: home) }
+        catch { return .failure(error.localizedDescription) }
+        let outcome = await request(snapshot, columnID: account.id, home: home)
         guard case .reauth = outcome else { return outcome }
         if renewal == .unavailable { return .failure(L.t("error.network")) }
         // Не продлеваем второй раз в одном опросе после успешной ротации.
-        guard renewal == .skipped else { return outcome }
+        guard renewal == .skipped, let snapshot else { return outcome }
         // Сервер отверг ещё живой по сроку токен — пробуем продлить и повторить.
-        guard await CodexRenewal.shared.renew(columnID: account.id, home: home, force: true) == .renewed else {
+        guard await Renewal$Codex.shared.renew(columnID: account.id, home: home, force: true,
+                                             expected: snapshot) == .renewed else {
+            // A forced refresh yields while CLI can replace the usage session.
+            do {
+                guard try AuthSwap$Codex.isCurrent(snapshot, columnID: account.id, home: home) else { return .superseded }
+            } catch { return .failure(error.localizedDescription) }
             return outcome
         }
-        return await request(account, home: home)
+        do { return await request(try AuthSwap$Codex.authSnapshot(columnID: account.id, home: home), columnID: account.id, home: home) }
+        catch { return .failure(error.localizedDescription) }
     }
 
-    private func request(_ account: DiscoveredAccount, home: URL) async -> FetchOutcome {
-        // Вход колонки может быть временно в ~/.codex (открыт в приложении).
-        let live = CodexAuthSwap.liveHome(columnID: account.id, home: home)
-        guard let auth = Self.readAuth(codexHome: live) else {
+    private func request(_ snapshot: AuthSwap$Codex.AuthSnapshot?, columnID: String, home: URL) async -> FetchOutcome {
+        guard let snapshot, let auth = Self.parseAuth(snapshot.data) else {
             return .reauth(L.t("column.reauth"))
         }
         if let expiresAt = auth.expiresAt, expiresAt.timeIntervalSinceNow < 60 {
@@ -56,7 +63,11 @@ struct CodexProvider: UsageProvider {
             "Accept": "application/json"
         ]
 
-        switch await HTTPClient.shared.get(endpoint, headers: headers) {
+        let response = await HTTPClient.shared.get(endpoint, headers: headers)
+        do {
+            guard try AuthSwap$Codex.isCurrent(snapshot, columnID: columnID, home: home) else { return .superseded }
+        } catch { return .failure(error.localizedDescription) }
+        switch response {
         case .failure(let error):
             if case .transport(let message) = error { return .failure(message) }
             return .failure(L.t("error.network"))
@@ -71,8 +82,10 @@ struct CodexProvider: UsageProvider {
                 return .success(UsageSnapshot(subtitle: Self.subtitle(from: response.data, email: email),
                                               windows: windows,
                                               stats: Self.stats(from: response.data)))
-            case 401, 403:
+            case 401:
                 return .reauth(L.t("column.reauth"))
+            case 403:
+                return .failure(L.t("error.http", response.status))
             case 429:
                 return .rateLimited(retryAfter: response.retryAfter)
             default:
@@ -84,9 +97,12 @@ struct CodexProvider: UsageProvider {
     // MARK: - auth.json
 
     static func readAuth(codexHome: URL) -> Auth? {
-        let url = codexHome.appendingPathComponent("auth.json")
-        guard let data = try? Data(contentsOf: url),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let data = try? AuthSwap$Codex.authData(home: codexHome) else { return nil }
+        return parseAuth(data)
+    }
+
+    static func parseAuth(_ data: Data) -> Auth? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
 
         // Режим apikey до usage-эндпоинта не дотягивается — нужен вход через ChatGPT.
@@ -124,7 +140,7 @@ struct CodexProvider: UsageProvider {
     static func subtitle(from data: Data, email: String?) -> String? {
         let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         let plan = (root?["plan_type"] as? String)
-            .flatMap { $0.isEmpty ? nil : ClaudeProvider.humanized($0) }
+            .flatMap { $0.isEmpty ? nil : Provider$Claude.humanized($0) }
         let parts = [plan, email].compactMap { $0 }.filter { !$0.isEmpty }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }

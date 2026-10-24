@@ -68,6 +68,8 @@
 "menu.hotKey.standard" = "Default (⌘P)";
 "menu.hotKey.disable" = "Turn off";
 "menu.loginItem" = "Launch at login";
+"menu.switchCLI" = "Switch CLI";
+"menu.switchCLI.help" = "Also switch Claude Code. Open a new terminal after the first switch. Running CLI sessions keep their account.";
 "menu.about" = "About Notchlimits";
 "menu.quit" = "Quit Notchlimits";
 "menu.telemetry" = "Show telemetry";
@@ -78,6 +80,7 @@
 "remove.body" = "The account's credentials will be deleted permanently. Sign in again with claude or codex to bring it back.";
 "remove.delete" = "Delete";
 "remove.failed.title" = "Couldn't remove the account";
+"remove.busy" = "This account is being updated. Wait for it to finish, then try again.";
 "remove.incomplete" = "%@ — not signed in";
 
 // Обновления
@@ -154,12 +157,17 @@
 
 // Ошибки в колонке
 "error.network" = "network error";
+"error.codexStorage" = "Cannot read the Codex storage settings or this storage backend is unsupported.";
+"error.codexEphemeral" = "Codex keeps this sign-in only in its process. Choose file, keyring or auto in Codex to use persistent accounts.";
 "error.keychainWrite" = "no Keychain write access";
+"error.pendingCredentials" = "Credentials are still being saved. Unlock the Keychain and try quitting again.";
 "error.timeout" = "timeout";
 "error.noHTTP" = "no HTTP response";
 "error.http" = "HTTP %d";
 "error.parse" = "could not parse response";
 "error.unknownSource" = "unknown source";
+"error.cliProfile" = "The CLI profile directory could not be identified.";
+"error.cliShell" = "CLI switching supports zsh and bash. Open a new terminal after the first switch.";
 "error.noProvider" = "no provider";
 "error.unreachable" = "network unavailable";
 
@@ -172,4 +180,5 @@
 "appswitch.error.title" = "Couldn't switch the account";
 "appswitch.error.notInstalled" = "%@ isn't installed.";
 "appswitch.error.didNotQuit" = "%@ didn't quit — close it and try again.";
-"appswitch.error.noAuth" = "This account has no Codex sign-in (auth.json). Sign in to it again.";
+"appswitch.error.noAuth" = "This account has no Codex sign-in. Sign in to it again.";
+"appswitch.error.inProgress" = "An account switch is already in progress.";

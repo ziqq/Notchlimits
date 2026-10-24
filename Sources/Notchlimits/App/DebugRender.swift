@@ -46,7 +46,7 @@ enum DebugRender {
     @MainActor
     private static func renderPanel(to url: URL, columns: [AccountColumn], extraHeight: CGFloat = 16,
                                     hint: String? = nil) {
-        let store = UsageStore(providers: [:], discovery: MockDiscovery())
+        let store = UsageStore(providers: [:], discovery: Discovery$Mock())
         store.setColumnsForRendering(columns)
 
         let state = PanelState()
@@ -79,7 +79,7 @@ enum DebugRender {
 
     @MainActor
     private static func renderCollapsed(to url: URL) {
-        let store = UsageStore(providers: [:], discovery: MockDiscovery())
+        let store = UsageStore(providers: [:], discovery: Discovery$Mock())
         store.setColumnsForRendering(healthyColumns())
 
         let state = PanelState()

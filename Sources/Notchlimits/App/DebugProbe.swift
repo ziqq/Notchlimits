@@ -47,7 +47,7 @@ enum DebugProbe {
         } else {
             print("codex:  НЕ НАЙДЕН")
         }
-        let services = ClaudeKeychain.services()
+        let services = AuthStorage$Claude.services()
         print("записи Keychain «Claude Code-credentials»: \(services.isEmpty ? "нет" : services.joined(separator: ", "))")
     }
 
@@ -101,7 +101,7 @@ enum DebugProbe {
           "nested": {"no_utilization": 1}
         }
         """
-        guard let windows = ClaudeProvider.parse(Data(payload.utf8)) else {
+        guard let windows = Provider$Claude.parse(Data(payload.utf8)) else {
             print("парсер Claude: НЕ РАЗОБРАЛ")
             return
         }
@@ -124,15 +124,15 @@ enum DebugProbe {
 
         checkClaudeTokens()
 
-        let accounts = RealDiscovery().discover()
+        let accounts = Discovery$Real().discover()
         print("найдено аккаунтов: \(accounts.count)")
         for account in accounts {
             print("  • \(account.id)  провайдер=\(account.provider.rawValue)  профиль=\(account.profileName)")
         }
 
         let providers: [Provider: UsageProvider] = [
-            .claude: ClaudeProvider(),
-            .codex: CodexProvider()
+            .claude: Provider$Claude(),
+            .codex: Provider$Codex()
         ]
 
         let group = DispatchGroup()
@@ -157,6 +157,8 @@ enum DebugProbe {
                     print("  ошибка: \(message)")
                 case .notAnAccount:
                     print("  не аккаунт: в записи нет входа")
+                case .superseded:
+                    print("  Login changed; current usage will be fetched on the next poll")
                 }
                 group.leave()
             }
@@ -173,13 +175,13 @@ enum DebugProbe {
     /// Почему колонка Claude просит re-auth: по шагам, без самих токенов.
     private static func checkClaudeTokens() {
         print("\nКлюч Claude в Keychain:")
-        for service in ClaudeKeychain.services() {
-            print("  \(service): запись \(ClaudeKeychain.canWrite(service: service) ? "можно" : "НЕЛЬЗЯ")")
-            guard let credentials = ClaudeKeychain.credentials(service: service) else {
-                let status = ClaudeKeychain.readStatus(service: service)
+        for service in AuthStorage$Claude.services() {
+            print("  \(service): запись \(AuthStorage$Claude.canWrite(service: service) ? "можно" : "НЕЛЬЗЯ")")
+            guard let credentials = AuthStorage$Claude.credentials(service: service) else {
+                let status = AuthStorage$Claude.readStatus(service: service)
                 let text = SecCopyErrorMessageString(status, nil) as String? ?? ""
                 print("  \(service): не прочитано, OSStatus \(status) \(text)")
-                print("    форма: \(shape(ClaudeKeychain.rawData(service: service)))")
+                print("    форма: \(shape(AuthStorage$Claude.rawData(service: service)))")
                 continue
             }
             let hours = credentials.expiresAt.map { String(format: "%.1f ч", $0.timeIntervalSinceNow / 3600) } ?? "без срока"

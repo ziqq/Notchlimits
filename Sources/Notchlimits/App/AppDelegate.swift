@@ -6,6 +6,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var store: UsageStore!
     private var panel: PanelController!
+    private var claudeProvider: Provider$Claude?
+    private var terminationPending = false
     private var hotKeys: HotKeyManager!
     private lazy var updater = UpdaterController(
         suppressPanel: { [weak self] in self?.panel.setModalSuppression($0) },
@@ -15,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
 
     private enum Setting: Int {
-        case telemetry, keepAwake, keepDisplayOn, loginItem
+        case telemetry, keepAwake, keepDisplayOn, loginItem, switchCLI
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -25,10 +27,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if DebugProbe.runIfRequested() { return }
 
         let useMock = ProcessInfo.processInfo.environment["NOTCHLIMITS_MOCK"] == "1"
-        let discovery: AccountDiscovery = useMock ? MockDiscovery() : RealDiscovery()
+        let discovery: AccountDiscovery = useMock ? Discovery$Mock() : Discovery$Real()
+        let claude = Provider$Claude()
+        claudeProvider = useMock ? nil : claude
         let providers: [Provider: UsageProvider] = useMock
-            ? [.claude: MockProvider(), .codex: MockProvider()]
-            : [.claude: ClaudeProvider(), .codex: CodexProvider()]
+            ? [.claude: Provider$Mock(), .codex: Provider$Mock()]
+            : [.claude: claude, .codex: Provider$Codex()]
 
         store = UsageStore(providers: providers, discovery: discovery)
         panel = PanelController(store: store, keepAwake: .shared, power: .shared)
@@ -67,6 +71,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Открытие панели с клавиатуры. Carbon-хоткей не требует Accessibility.
         hotKeys = HotKeyManager { [weak self] in self?.panel.toggle() }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !terminationPending else { return .terminateLater }
+        terminationPending = true
+        Task {
+            async let claudeReady = claudeProvider?.prepareForTermination() ?? true
+            async let codexReady = Renewal$Codex.shared.prepareForTermination()
+            let results = await (claudeReady, codexReady)
+            let ready = results.0 && results.1
+            if !ready {
+                await claudeProvider?.cancelTermination()
+                await Renewal$Codex.shared.cancelTermination()
+                let alert = NSAlert()
+                alert.messageText = L.t("error.pendingCredentials")
+                alert.informativeText = L.t("error.keychainWrite")
+                alert.addButton(withTitle: L.t("common.ok"))
+                runModalAbovePanel(alert)
+            }
+            terminationPending = false
+            sender.reply(toApplicationShouldTerminate: ready)
+        }
+        return .terminateLater
     }
 
     // MARK: - Контекстное меню
@@ -181,6 +208,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         addKeepAwakeItems(to: menu)
         menu.addItem(settingItem(L.t("menu.loginItem"), .loginItem,
                           state: LoginItem.isEnabled ? .on : .off))
+        let switchCLI = settingItem(L.t("menu.switchCLI"), .switchCLI,
+                                    state: CLISelection$Claude.isEnabled ? .on : .off)
+        switchCLI.toolTip = L.t("menu.switchCLI.help")
+        switchCLI.view?.toolTip = switchCLI.toolTip
+        menu.addItem(switchCLI)
         menu.addItem(.separator())
 
         let hotKeyItem = NSMenuItem(title: L.t("menu.hotKey", hotKeys.displayName),
@@ -263,6 +295,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .loginItem:
             toggleLoginItem()
             enabled = LoginItem.isEnabled
+        case .switchCLI:
+            CLISelection$Claude.isEnabled.toggle()
+            enabled = CLISelection$Claude.isEnabled
         case nil:
             return
         }
@@ -322,10 +357,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         })
         var result: [(label: String, url: URL)] = []
         for dir in ProfileDirectories.codexProfiles()
-            where !codexIds.contains(CodexAuthSwap.profileColumnID(dir.lastPathComponent)) {
+            where !ProfileDirectories.containsNativeHome(dir)
+                && !AuthSwap$Codex.containsPrimaryBackup(dir)
+                && !codexIds.contains(AuthSwap$Codex.profileColumnID(dir.lastPathComponent)) {
             result.append(("CODEX · \(dir.lastPathComponent)", dir))
         }
-        for dir in ProfileDirectories.claudeProfiles() where !claudeDirs.contains(dir.path) {
+        for dir in ProfileDirectories.claudeProfiles()
+            where !ProfileDirectories.containsNativeHome(dir) && !claudeDirs.contains(dir.path) {
             result.append(("CLAUDE · \(dir.lastPathComponent)", dir))
         }
         return result
@@ -346,11 +384,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cancelButton.keyEquivalent = "\r"
         guard runModalAbovePanel(alert) == .alertFirstButtonReturn else { return }
 
-        do {
-            try FileManager.default.removeItem(at: url)
-            store.rediscover(force: true)
-        } catch {
-            errorAlert(L.t("remove.failed.title"), error)
+        if url.path.hasPrefix(ProfileDirectories.codexRoot.path + "/") {
+            AccountRemoval.remove(DiscoveredAccount(
+                id: AuthSwap$Codex.profileColumnID(url.lastPathComponent), provider: .codex,
+                profileName: url.lastPathComponent, source: .codexHome(url)), requireIncomplete: true) { result in
+                switch result {
+                case .success: self.store.rediscover(force: true)
+                case .failure(let error): self.errorAlert(L.t("remove.failed.title"), error)
+                }
+            }
+        } else {
+            defer { store.rediscover(force: true) }
+            do {
+                try AccountRemoval.removeIncompleteClaudeProfile(at: url)
+            } catch {
+                errorAlert(L.t("remove.failed.title"), error)
+            }
         }
     }
 
@@ -371,10 +420,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard runModalAbovePanel(alert) == .alertFirstButtonReturn else { return }
 
-        do {
-            try store.removeAccount(id: id)
-        } catch {
-            errorAlert(L.t("remove.failed.title"), error)
+        store.removeAccount(id: id) { result in
+            if case .failure(let error) = result { self.errorAlert(L.t("remove.failed.title"), error) }
         }
     }
 
