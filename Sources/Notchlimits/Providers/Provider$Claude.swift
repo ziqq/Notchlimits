@@ -33,6 +33,7 @@ actor Provider$Claude: UsageProvider {
     private struct Resolution {
         let id = UUID()
         let generation: UUID?
+        let pendingOnly: Bool
         let task: Task<ResolvedToken, Never>
     }
     private var inFlight: [String: Resolution] = [:]
@@ -167,15 +168,16 @@ actor Provider$Claude: UsageProvider {
 
     // MARK: - Токен
 
-    private func token(for service: String) async -> ResolvedToken? {
+    private func token(for service: String, pendingOnly: Bool = false) async -> ResolvedToken? {
         let generation = removalGenerations[service]
         while removalGenerations[service] == generation {
             let running: Resolution
             if let current = inFlight[service] {
                 running = current
             } else {
-                running = Resolution(generation: generation, task: Task {
-                    let token = await resolveToken(for: service, generation: generation)
+                if pendingOnly && unsaved[service] == nil { return nil }
+                running = Resolution(generation: generation, pendingOnly: pendingOnly, task: Task {
+                    let token = await resolveToken(for: service, generation: generation, pendingOnly: pendingOnly)
                     return ResolvedToken(token: token, origin: token?.origin ?? origins[service], issue: issues[service])
                 })
                 inFlight[service] = running
@@ -184,13 +186,14 @@ actor Provider$Claude: UsageProvider {
             if inFlight[service]?.id == running.id { inFlight[service] = nil }
             guard removalGenerations[service] == generation else { return nil }
             // Drain the removed generation before resolving the replacement login.
-            if running.generation == generation { return token }
+            if running.generation == generation && (pendingOnly || !running.pendingOnly) { return token }
         }
         return nil
     }
 
-    private func resolveToken(for service: String, generation: UUID?) async -> CachedToken? {
+    private func resolveToken(for service: String, generation: UUID?, pendingOnly: Bool) async -> CachedToken? {
         guard removalGenerations[service] == generation else { return nil }
+        if pendingOnly && unsaved[service] == nil { return nil }
         issues[service] = nil
         if terminating && unsaved[service] == nil {
             issues[service] = L.t("error.keychainWrite")
@@ -198,7 +201,7 @@ actor Provider$Claude: UsageProvider {
         }
         // Authorize interactive reads before taking a lease. A Keychain dialog
         // must not suspend the critical section beyond the CLI's lease timeout.
-        let observed = await read(service)
+        let observed = await read(service, interactive: !pendingOnly)
         guard removalGenerations[service] == generation else { return nil }
         if let observed {
             if unsaved[service] == nil, let cached = adopt(observed, service: service) { return cached }
@@ -241,6 +244,7 @@ actor Provider$Claude: UsageProvider {
                 return nil
             }
         }
+        if pendingOnly { return nil }
         let current = await read(service, interactive: false, verifyingOwner: true)
         guard removalGenerations[service] == generation else { return nil }
         guard let credentials = current else {
@@ -355,8 +359,24 @@ actor Provider$Claude: UsageProvider {
 
     /// Only a successful explicit removal may discard an unsaved grant.
     /// Invalidate late refresh responses without blocking a later login to the same profile.
-    func accountRemoved(_ account: DiscoveredAccount) {
+    func accountRemoved(_ account: DiscoveredAccount, removal: AccountRemoval.ClaudeRemoval? = nil) {
         guard case .claudeKeychain(let service, _) = account.source else { return }
+        if removal?.service == service, let retained = removal?.retainedFile,
+           let pendingDirectory = unsaved[service]?.owner?.fileDirectory
+            ?? unsaved[service]?.credentials.directory ?? renewingFileOwners[service]?.fileDirectory,
+           retained.isSameDirectory(as: pendingDirectory) {
+            // The removed Keychain namespace did not own this retained file.
+            // Its column stops polling, so drain the accepted grant independently.
+            let generation = removalGenerations[service]
+            Task {
+                repeat {
+                    _ = await token(for: service, pendingOnly: true)
+                    guard removalGenerations[service] == generation, unsaved[service] != nil else { return }
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                } while removalGenerations[service] == generation
+            }
+            return
+        }
         if let pendingDirectory = unsaved[service]?.owner?.fileDirectory
             ?? unsaved[service]?.credentials.directory ?? renewingFileOwners[service]?.fileDirectory,
            let removedDirectory = account.claudeConfigOwner
@@ -420,7 +440,7 @@ actor Provider$Claude: UsageProvider {
         terminating = true
         let deadline = Date().addingTimeInterval(timeout)
         let recovery = unsaved.keys.filter { inFlight[$0] == nil }
-        for service in recovery { Task { _ = await token(for: service) } }
+        for service in recovery { Task { _ = await token(for: service, pendingOnly: true) } }
         while !renewing.isEmpty || !unsaved.isEmpty {
             guard Date() < deadline else { terminating = false; return false }
             try? await Task.sleep(nanoseconds: 100_000_000)

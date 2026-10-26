@@ -138,7 +138,7 @@ actor Renewal$Codex {
     func renew(columnID: String, home: URL, force: Bool,
                expected: AuthSwap$Codex.AuthSnapshot? = nil) async -> Result {
         if let saved = pending[columnID] {
-            if let result = persist(saved, columnID: columnID) { return result }
+            if let result = persist(saved, columnID: columnID, home: home) { return result }
         }
         guard !terminating else { return .skipped }
         let renewal: AuthSwap$Codex.Renewal
@@ -177,7 +177,7 @@ actor Renewal$Codex {
         case .success(let tokens):
             let saved = Pending(renewal: renewal, usedRefreshToken: refreshToken, tokens: tokens)
             pending[columnID] = saved
-            return persist(saved, columnID: columnID) ?? .renewed
+            return persist(saved, columnID: columnID, home: home) ?? .skipped
         case .rejected:
             return currentResult(Attempt(result: .rejected, data: renewal.record.data), renewal: renewal, home: home)
         case .unavailable:
@@ -220,17 +220,20 @@ actor Renewal$Codex {
     func cancelTermination() { terminating = false }
 
     /// A changed login or retired generation discards only its own pending response.
-    private func persist(_ saved: Pending, columnID: String) -> Result? {
+    private func persist(_ saved: Pending, columnID: String, home: URL? = nil) -> Result? {
         do {
             let stored = try AuthSwap$Codex.storeRenewed(saved.renewal,
                                                        usedRefreshToken: saved.usedRefreshToken,
                                                        tokens: saved.tokens)
             if pending[columnID]?.renewal.id == saved.renewal.id { pending[columnID] = nil }
             AuthSwap$Codex.finishRenewal(saved.renewal)
-            if stored {
+            if let stored {
                 attempts[saved.usedRefreshToken] = saved.tokens.refreshToken.map {
                     $0 != saved.usedRefreshToken ? Attempt(result: .uncertain, data: saved.renewal.record.data) : nil
                 } ?? nil
+                // Durability for a previous owner does not renew the current
+                // login after the same logical column has been redirected.
+                if let home, try !AuthSwap$Codex.isCurrent(stored, columnID: columnID, home: home) { return nil }
                 return .renewed
             }
             // Потраченный токен не используем, даже если его копия осталась в другом профиле.

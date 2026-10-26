@@ -5,6 +5,11 @@ import Darwin
 /// Remove credentials and managed profile directories; preserve the main CLI config.
 enum AccountRemoval {
 
+    struct ClaudeRemoval {
+        let service: String
+        let retainedFile: DirectoryIdentity?
+    }
+
     enum Failure: LocalizedError {
         case keychain(OSStatus), busy
 
@@ -31,9 +36,10 @@ enum AccountRemoval {
     /// Serialize Codex removal with Desktop switching, including its exit barrier.
     @MainActor
     static func remove(_ account: DiscoveredAccount, requireIncomplete: Bool = false,
+                       claudeRemoval: ((ClaudeRemoval) -> Void)? = nil,
                        completion: @escaping (Result<Void, Error>) -> Void) {
         guard account.provider == .codex else {
-            completion(Result { try remove(account, requireIncomplete: requireIncomplete) })
+            completion(Result { try remove(account, requireIncomplete: requireIncomplete, claudeRemoval: claudeRemoval) })
             return
         }
         guard !AppSwitchState.inProgress.contains(.codex) else {
@@ -87,7 +93,8 @@ enum AccountRemoval {
         }
     }
 
-    static func remove(_ account: DiscoveredAccount, requireIncomplete: Bool = false) throws {
+    static func remove(_ account: DiscoveredAccount, requireIncomplete: Bool = false,
+                       claudeRemoval: ((ClaudeRemoval) -> Void)? = nil) throws {
         switch account.source {
         case .claudeKeychain(let service, let configDir):
             let directory = configDir ?? AuthStorage$Claude.configDirectory(for: service)
@@ -111,8 +118,13 @@ enum AccountRemoval {
                     // A file-only login cannot claim the common fallback after
                     // another Keychain owner has appeared, including native main.
                     guard !shared || owners.contains(service) else { throw Failure.busy }
+                    var retainedFile: DirectoryIdentity?
                     if shared {
                         // Other owners retain their shared configuration and fallback.
+                        if FileManager.default.fileExists(atPath: owner.appendingPathComponent(".credentials.json").path) {
+                            guard let identity = DirectoryIdentity.capture(owner) else { throw Failure.busy }
+                            retainedFile = identity
+                        }
                         try deleteKeychainEntry(service: service)
                         if service == AuthStorage$Claude.baseService {
                             AuthStorage$Claude.recordSharedPrimaryRemoval()
@@ -123,6 +135,7 @@ enum AccountRemoval {
                         }
                     }
                     AppSwitcher$Claude.accountRemoved(columnID: account.id)
+                    claudeRemoval?(ClaudeRemoval(service: service, retainedFile: retainedFile))
                 }
             } catch is StorageLock$Claude.Failure {
                 throw Failure.busy
@@ -157,8 +170,17 @@ enum AccountRemoval {
                         // be removed independently without moving that owner.
                         throw Failure.busy
                     }
-                    try withProfileDirectory(url, root: ProfileDirectories.codexRoot) { directory in
-                        try storage.delete(fileHome: directory)
+                    let keyring = try storage.beginRemoval()
+                    do {
+                        try withProfileDirectory(url, root: ProfileDirectories.codexRoot) { directory in
+                            try storage.delete(fileHome: directory, keyring: keyring?.storage)
+                        }
+                        keyring?.finish()
+                    } catch {
+                        if let keyring, !keyring.restore() {
+                            AuthSwap$Codex.retainRemovalRecovery(keyring)
+                        }
+                        throw error
                     }
                 }
             }
