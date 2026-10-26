@@ -17,43 +17,79 @@ struct Provider$Codex: UsageProvider {
     }
 
     func fetch(_ account: DiscoveredAccount) async -> FetchOutcome {
+        let result = await fetchValidated(account)
+        return result.outcome
+    }
+
+    func fetchValidated(_ account: DiscoveredAccount) async -> UsageFetchResult {
+        await fetchResult(account)
+    }
+
+    private func fetchResult(_ account: DiscoveredAccount) async -> UsageFetchResult {
         guard case .codexHome(let home) = account.source else {
-            return .failure(L.t("error.unknownSource"))
+            return UsageFetchResult(outcome: .failure(L.t("error.unknownSource")))
         }
 
+        let owner = AuthSwap$Codex.loginOwner(columnID: account.id, home: home)
         // Спящий вход продлеваем заранее, пока приложение на другом аккаунте.
         let renewal = await Renewal$Codex.shared.renew(columnID: account.id, home: home, force: false)
         if renewal == .rejected || renewal == .uncertain {
-            return .reauth(L.t("column.reauth"))
+            return result(.reauth(L.t("column.reauth")), owner: owner, columnID: account.id, home: home)
         }
 
         let snapshot: AuthSwap$Codex.AuthSnapshot?
         do { snapshot = try AuthSwap$Codex.authSnapshot(columnID: account.id, home: home) }
-        catch { return .failure(error.localizedDescription) }
-        let outcome = await request(snapshot, columnID: account.id, home: home)
-        guard case .reauth = outcome else { return outcome }
-        if renewal == .unavailable { return .failure(L.t("error.network")) }
+        catch { return result(.failure(error.localizedDescription), owner: owner, columnID: account.id, home: home) }
+        let response = await request(snapshot, owner: owner, columnID: account.id, home: home)
+        guard case .reauth = response.outcome else { return response }
+        if renewal == .unavailable {
+            return UsageFetchResult(outcome: .failure(L.t("error.network")), isCurrent: response.isCurrent)
+        }
         // Не продлеваем второй раз в одном опросе после успешной ротации.
-        guard renewal == .skipped, let snapshot else { return outcome }
+        guard renewal == .skipped, let snapshot else { return response }
         // Сервер отверг ещё живой по сроку токен — пробуем продлить и повторить.
         guard await Renewal$Codex.shared.renew(columnID: account.id, home: home, force: true,
                                              expected: snapshot) == .renewed else {
             // A forced refresh yields while CLI can replace the usage session.
             do {
-                guard try AuthSwap$Codex.isCurrent(snapshot, columnID: account.id, home: home) else { return .superseded }
-            } catch { return .failure(error.localizedDescription) }
-            return outcome
+                guard try AuthSwap$Codex.isCurrent(snapshot, columnID: account.id, home: home) else {
+                    return result(.superseded, snapshot: snapshot, columnID: account.id, home: home)
+                }
+            } catch { return result(.failure(error.localizedDescription), snapshot: snapshot, columnID: account.id, home: home) }
+            return response
         }
-        do { return await request(try AuthSwap$Codex.authSnapshot(columnID: account.id, home: home), columnID: account.id, home: home) }
-        catch { return .failure(error.localizedDescription) }
+        let renewedOwner = AuthSwap$Codex.loginOwner(columnID: account.id, home: home)
+        do {
+            return await request(try AuthSwap$Codex.authSnapshot(columnID: account.id, home: home),
+                                 owner: renewedOwner, columnID: account.id, home: home)
+        } catch { return result(.failure(error.localizedDescription), owner: renewedOwner, columnID: account.id, home: home) }
     }
 
-    private func request(_ snapshot: AuthSwap$Codex.AuthSnapshot?, columnID: String, home: URL) async -> FetchOutcome {
-        guard let snapshot, let auth = Self.parseAuth(snapshot.data) else {
-            return .reauth(L.t("column.reauth"))
+    private func result(_ outcome: FetchOutcome, snapshot: AuthSwap$Codex.AuthSnapshot,
+                        columnID: String, home: URL) -> UsageFetchResult {
+        UsageFetchResult(outcome: outcome, isCurrent: {
+            try AuthSwap$Codex.isCurrent(snapshot, columnID: columnID, home: home)
+        })
+    }
+
+    private func result(_ outcome: FetchOutcome, owner: AuthSwap$Codex.LoginOwner,
+                        columnID: String, home: URL) -> UsageFetchResult {
+        UsageFetchResult(outcome: outcome, isCurrent: {
+            try AuthSwap$Codex.isCurrent(owner, columnID: columnID, home: home)
+        })
+    }
+
+    private func request(_ snapshot: AuthSwap$Codex.AuthSnapshot?, owner: AuthSwap$Codex.LoginOwner,
+                         columnID: String, home: URL) async -> UsageFetchResult {
+        guard let snapshot else {
+            return result(.reauth(L.t("column.reauth")), owner: owner, columnID: columnID, home: home)
         }
+        func checked(_ outcome: FetchOutcome) -> UsageFetchResult {
+            result(outcome, snapshot: snapshot, columnID: columnID, home: home)
+        }
+        guard let auth = Self.parseAuth(snapshot.data) else { return checked(.reauth(L.t("column.reauth"))) }
         if let expiresAt = auth.expiresAt, expiresAt.timeIntervalSinceNow < 60 {
-            return .reauth(L.t("column.reauth"))
+            return checked(.reauth(L.t("column.reauth")))
         }
 
         let headers = [
@@ -65,31 +101,31 @@ struct Provider$Codex: UsageProvider {
 
         let response = await HTTPClient.shared.get(endpoint, headers: headers)
         do {
-            guard try AuthSwap$Codex.isCurrent(snapshot, columnID: columnID, home: home) else { return .superseded }
-        } catch { return .failure(error.localizedDescription) }
+            guard try AuthSwap$Codex.isCurrent(snapshot, columnID: columnID, home: home) else { return checked(.superseded) }
+        } catch { return checked(.failure(error.localizedDescription)) }
         switch response {
         case .failure(let error):
-            if case .transport(let message) = error { return .failure(message) }
-            return .failure(L.t("error.network"))
+            if case .transport(let message) = error { return checked(.failure(message)) }
+            return checked(.failure(L.t("error.network")))
 
         case .success(let response):
             switch response.status {
             case 200:
                 guard let windows = Self.parse(response.data) else {
-                    return .failure(L.t("error.parse"))
+                    return checked(.failure(L.t("error.parse")))
                 }
                 let email = Self.email(from: response.data) ?? auth.email
-                return .success(UsageSnapshot(subtitle: Self.subtitle(from: response.data, email: email),
+                return checked(.success(UsageSnapshot(subtitle: Self.subtitle(from: response.data, email: email),
                                               windows: windows,
-                                              stats: Self.stats(from: response.data)))
+                                              stats: Self.stats(from: response.data))))
             case 401:
-                return .reauth(L.t("column.reauth"))
+                return checked(.reauth(L.t("column.reauth")))
             case 403:
-                return .failure(L.t("error.http", response.status))
+                return checked(.failure(L.t("error.http", response.status)))
             case 429:
-                return .rateLimited(retryAfter: response.retryAfter)
+                return checked(.rateLimited(retryAfter: response.retryAfter))
             default:
-                return .failure(L.t("error.http", response.status))
+                return checked(.failure(L.t("error.http", response.status)))
             }
         }
     }

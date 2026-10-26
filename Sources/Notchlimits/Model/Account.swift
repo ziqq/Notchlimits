@@ -51,6 +51,13 @@ struct DirectoryIdentity: Equatable {
     }
 }
 
+/// The primary file fallback and the preferred Keychain service have different owners.
+enum ClaudePrimaryOwner: Equatable {
+    case keychain
+    case file(DirectoryIdentity)
+    case unavailable
+}
+
 struct DiscoveredAccount: Identifiable, Equatable {
     let id: String
     let provider: Provider
@@ -58,6 +65,8 @@ struct DiscoveredAccount: Identifiable, Equatable {
     let source: AccountSource
     /// Keep the discovered physical owner when a managed root is a symlink.
     let claudeConfigOwner: DirectoryIdentity?
+    /// Discovery verifies the primary backend without reading its secret.
+    let claudePrimaryOwner: ClaudePrimaryOwner?
     /// Removal must still address the directory captured by discovery.
     let codexHomeOwner: DirectoryIdentity?
     /// Primary credentials can remain in the backup while the native home is absent.
@@ -69,15 +78,28 @@ struct DiscoveredAccount: Identifiable, Equatable {
     var isActive: Bool = false
 
     init(id: String, provider: Provider, profileName: String, source: AccountSource,
-         email: String? = nil, isActive: Bool = false) {
+         email: String? = nil, isActive: Bool = false,
+         claudePrimaryOwner: ClaudePrimaryOwner? = nil) {
         self.id = id
         self.provider = provider
         self.profileName = profileName
         self.source = source
         self.email = email
         self.isActive = isActive
+        self.claudePrimaryOwner = claudePrimaryOwner
         if case .claudeKeychain(_, let directory) = source {
-            claudeConfigOwner = directory.flatMap(DirectoryIdentity.capture)
+            if let directory {
+                claudeConfigOwner = DirectoryIdentity.capture(directory)
+            } else if case .file(let owner)? = claudePrimaryOwner {
+                claudeConfigOwner = owner
+            } else if claudePrimaryOwner == nil {
+                // Direct callers still capture the file boundary; discovery also
+                // records whether the preferred Keychain namespace owns this login.
+                claudeConfigOwner = DirectoryIdentity.capture(
+                    FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude"))
+            } else {
+                claudeConfigOwner = nil
+            }
         } else {
             claudeConfigOwner = nil
         }
@@ -112,4 +134,22 @@ enum FetchOutcome {
 
 protocol UsageProvider {
     func fetch(_ account: DiscoveredAccount) async -> FetchOutcome
+    func fetchValidated(_ account: DiscoveredAccount) async -> UsageFetchResult
+}
+
+/// Keep the observed login proof until the result reaches the UI actor.
+struct UsageFetchResult {
+    let outcome: FetchOutcome
+    let isCurrent: (() throws -> Bool)?
+
+    init(outcome: FetchOutcome, isCurrent: (() throws -> Bool)? = nil) {
+        self.outcome = outcome
+        self.isCurrent = isCurrent
+    }
+}
+
+extension UsageProvider {
+    func fetchValidated(_ account: DiscoveredAccount) async -> UsageFetchResult {
+        UsageFetchResult(outcome: await fetch(account), isCurrent: nil)
+    }
 }

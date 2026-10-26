@@ -110,6 +110,11 @@ enum AuthSwap$Codex {
         let directory: DirectoryIdentity?
     }
 
+    struct LoginOwner: Equatable {
+        let location: UsageOwner
+        let authIdentity: String?
+    }
+
     /// Polling follows the routed credentials; removal owns the profile itself.
     /// Capture routing and physical identity together, including backup recovery.
     static func usageOwner(columnID: String, home: URL) -> UsageOwner {
@@ -117,6 +122,29 @@ enum AuthSwap$Codex {
         defer { lock.unlock() }
         let path = homeKey(liveHome(columnID: columnID, home: home))
         return UsageOwner(path: path, directory: DirectoryIdentity.capture(URL(fileURLWithPath: path)))
+    }
+
+    /// Provider outcomes retain a login proof without making discovery read secrets.
+    static func loginOwner(columnID: String, home: URL) -> LoginOwner {
+        lock.lock()
+        defer { lock.unlock() }
+        let live = liveHome(columnID: columnID, home: home)
+        let path = homeKey(live)
+        let record = try? storage(at: live).load()
+        let location = UsageOwner(path: path, directory: DirectoryIdentity.capture(URL(fileURLWithPath: path)))
+        return LoginOwner(location: location, authIdentity: record.flatMap { authIdentity($0.data) })
+    }
+
+    static func isCurrent(_ owner: LoginOwner, columnID: String, home: URL) throws -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let live = liveHome(columnID: columnID, home: home)
+        let path = homeKey(live)
+        let source = try storage(at: live)
+        let record = try source.load(verifyingOwner: true)
+        guard path == source.home.path, homeKey(live) == path else { throw Failure.busy }
+        let location = UsageOwner(path: path, directory: DirectoryIdentity.capture(source.home))
+        return owner == LoginOwner(location: location, authIdentity: record.flatMap { authIdentity($0.data) })
     }
 
     static func isBaseHome(_ url: URL) -> Bool {
@@ -355,7 +383,8 @@ enum AuthSwap$Codex {
         let key = homeKey(home)
         if let expected, expected.key != key || expected.generation != generations[key]
             || expected.columnGeneration != columnGenerations[columnID] { return nil }
-        guard renewals[key] == nil else { throw Failure.busy }
+        guard renewals[key] == nil,
+              !renewals.values.contains(where: { $0.columnID == columnID }) else { throw Failure.busy }
         let live = liveHome(columnID: columnID, home: home)
         guard !isBaseHome(live) else { return nil }
         let source = try storage(at: live)

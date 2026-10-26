@@ -25,10 +25,15 @@ actor Provider$Claude: UsageProvider {
     private var renewing: Set<String> = []
     private var renewingFileOwners: [String: RefreshLock$Claude] = [:]
     private var removalGenerations: [String: UUID] = [:]
+    private struct ResolvedToken {
+        let token: CachedToken?
+        let origin: AuthStorage$Claude.Credentials?
+        let issue: String?
+    }
     private struct Resolution {
         let id = UUID()
         let generation: UUID?
-        let task: Task<CachedToken?, Never>
+        let task: Task<ResolvedToken, Never>
     }
     private var inFlight: [String: Resolution] = [:]
     /// Токены, отвергнутые сервером: брать их из Keychain повторно бессмысленно.
@@ -48,28 +53,55 @@ actor Provider$Claude: UsageProvider {
     private var unsaved: [String: Pending] = [:]
     /// A copied grant remains spent even after its original file owner is restored.
     private var rotatedGrants: Set<String> = []
+    /// Different profile services can contain copies of the same rotating grant.
+    private var renewingGrants: Set<String> = []
     /// Почему токена нет, если дело не во входе (сеть, запись в Keychain).
     private var issues: [String: String] = [:]
     private let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
 
     func fetch(_ account: DiscoveredAccount) async -> FetchOutcome {
+        let result = await fetchValidated(account)
+        return result.outcome
+    }
+
+    func fetchValidated(_ account: DiscoveredAccount) async -> UsageFetchResult {
         guard case .claudeKeychain(let service, let configDir) = account.source else {
-            return .failure(L.t("error.unknownSource"))
+            return UsageFetchResult(outcome: .failure(L.t("error.unknownSource")))
         }
 
         let generation = removalGenerations[service]
         let resolved = await token(for: service)
-        guard removalGenerations[service] == generation else { return .reauth(L.t("column.reauth")) }
-        guard let token = resolved else {
-            if let issue = issues[service] { return .failure(issue) }
-            let noLogin = await Task.detached(priority: .utility) {
-                AuthStorage$Claude.hasNoLogin(service: service, verifyingOwner: true)
+        guard removalGenerations[service] == generation else {
+            return UsageFetchResult(outcome: .reauth(L.t("column.reauth")), isCurrent: { false })
+        }
+        guard let token = resolved?.token else {
+            if let issue = resolved?.issue, let origin = resolved?.origin {
+                return UsageFetchResult(outcome: .failure(issue), isCurrent: {
+                    try AuthStorage$Claude.isCurrent(origin, service: service)
+                })
+            }
+            let state = await Task.detached(priority: .utility) {
+                AuthStorage$Claude.unresolvedUsage(service: service)
             }.value
-            guard removalGenerations[service] == generation else { return .reauth(L.t("column.reauth")) }
-            return noLogin ? .notAnAccount : .reauth(L.t("column.reauth"))
+            guard removalGenerations[service] == generation else {
+                return UsageFetchResult(outcome: .reauth(L.t("column.reauth")), isCurrent: { false })
+            }
+            if let current = state.credentials {
+                guard let origin = resolved?.origin, current.hasSameTokens(as: origin) else {
+                    return UsageFetchResult(outcome: .superseded)
+                }
+            }
+            let outcome = (resolved?.issue).map(FetchOutcome.failure)
+                ?? (state.noLogin ? .notAnAccount : .reauth(L.t("column.reauth")))
+            return UsageFetchResult(outcome: outcome, isCurrent: state.isCurrent)
         }
 
         let origin = token.origin
+        func checked(_ outcome: FetchOutcome) -> UsageFetchResult {
+            UsageFetchResult(outcome: outcome, isCurrent: {
+                try AuthStorage$Claude.isCurrent(origin, service: service)
+            })
+        }
         // Почту API не отдаёт. Обычно берём из discovery (конфиг/снимок), иначе
         // читаем сами из конфига CLI. Так библиотечные колонки без папки конфига
         // тоже показывают верную почту.
@@ -81,7 +113,7 @@ actor Provider$Claude: UsageProvider {
                                         generation: generation, origin: origin)
         }
         guard isCurrent(service, generation: generation, origin: origin) else {
-            return .reauth(L.t("column.reauth"))
+            return checked(.reauth(L.t("column.reauth")))
         }
         let subtitle = Self.subtitle(plan: token.plan, email: resolvedEmail)
 
@@ -97,45 +129,45 @@ actor Provider$Claude: UsageProvider {
         // A late usage response belongs to the exact login that sent it. The
         // replacement may reuse its access token with a different refresh token.
         guard isCurrent(service, generation: generation, origin: origin) else {
-            return .superseded
+            return checked(.superseded)
         }
         let current = await read(service, interactive: false, verifyingOwner: true)
-        guard isCurrent(service, generation: generation, origin: origin) else { return .superseded }
-        guard let current else { return .failure(L.t("error.keychainWrite")) }
+        guard isCurrent(service, generation: generation, origin: origin) else { return checked(.superseded) }
+        guard let current else { return checked(.failure(L.t("error.keychainWrite"))) }
         guard current.hasSameTokens(as: origin) else {
-            return .superseded
+            return checked(.superseded)
         }
         switch response {
         case .failure(let error):
-            if case .transport(let message) = error { return .failure(message) }
-            return .failure(L.t("error.network"))
+            if case .transport(let message) = error { return checked(.failure(message)) }
+            return checked(.failure(L.t("error.network")))
 
         case .success(let response):
             switch response.status {
             case 200:
                 guard let windows = Self.parse(response.data), !windows.isEmpty else {
-                    return .failure(L.t("error.parse"))
+                    return checked(.failure(L.t("error.parse")))
                 }
-                return .success(UsageSnapshot(subtitle: subtitle,
+                return checked(.success(UsageSnapshot(subtitle: subtitle,
                                               windows: windows,
-                                              stats: Self.stats(response.data)))
+                                              stats: Self.stats(response.data))))
             case 401:
                 rejected[service] = token.value
                 if tokens[service]?.value == token.value { tokens[service] = nil }
-                return .reauth(L.t("column.reauth"))
+                return checked(.reauth(L.t("column.reauth")))
             case 403:
-                return .failure(L.t("error.http", response.status))
+                return checked(.failure(L.t("error.http", response.status)))
             case 429:
-                return .rateLimited(retryAfter: response.retryAfter)
+                return checked(.rateLimited(retryAfter: response.retryAfter))
             default:
-                return .failure(L.t("error.http", response.status))
+                return checked(.failure(L.t("error.http", response.status)))
             }
         }
     }
 
     // MARK: - Токен
 
-    private func token(for service: String) async -> CachedToken? {
+    private func token(for service: String) async -> ResolvedToken? {
         let generation = removalGenerations[service]
         while removalGenerations[service] == generation {
             let running: Resolution
@@ -143,7 +175,8 @@ actor Provider$Claude: UsageProvider {
                 running = current
             } else {
                 running = Resolution(generation: generation, task: Task {
-                    await resolveToken(for: service, generation: generation)
+                    let token = await resolveToken(for: service, generation: generation)
+                    return ResolvedToken(token: token, origin: token?.origin ?? origins[service], issue: issues[service])
                 })
                 inFlight[service] = running
             }
@@ -222,6 +255,11 @@ actor Provider$Claude: UsageProvider {
         }
         guard credentials.isRefreshable, let refreshToken = credentials.refreshToken else { return nil }
         guard !rotatedGrants.contains(refreshToken) else { return nil }
+        guard renewingGrants.insert(refreshToken).inserted else {
+            issues[service] = L.t("error.keychainWrite")
+            return nil
+        }
+        defer { renewingGrants.remove(refreshToken) }
 
         let writable = await Task.detached(priority: .utility) {
             AuthStorage$Claude.canWrite(service: service, renewalLock: lease, expected: credentials)

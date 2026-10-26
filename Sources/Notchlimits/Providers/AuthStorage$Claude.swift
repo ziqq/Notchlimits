@@ -160,6 +160,35 @@ enum AuthStorage$Claude {
         return result as? [[String: Any]]
     }
 
+    /// A verified preferred Keychain entry owns the primary namespace even if
+    /// its unused fallback directory changes. Metadata failures prove neither owner.
+    static func primaryOwner() -> ClaudePrimaryOwner {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: baseService,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecReturnAttributes as String: true
+        ]
+        let status = SecItemCopyMatching(query as CFDictionary, nil)
+        if status == errSecSuccess { return .keychain }
+        guard status == errSecItemNotFound else { return .unavailable }
+        let directory = ProfileDirectories.home.appendingPathComponent(".claude")
+        guard let owner = DirectoryIdentity.capture(directory),
+              FileManager.default.fileExists(atPath: directory.appendingPathComponent(".credentials.json").path),
+              owner.matches(directory) else { return .unavailable }
+        return .file(owner)
+    }
+
+    static func matchesPrimaryOwner(_ account: DiscoveredAccount) -> Bool {
+        let current = primaryOwner()
+        guard current != .unavailable else { return false }
+        if let expected = account.claudePrimaryOwner { return expected == current }
+        // Direct callers capture the file directory in the model but do not
+        // perform Keychain discovery. Revalidate the effective backend here.
+        if case .file(let owner) = current { return account.claudeConfigOwner == owner }
+        return current == .keychain
+    }
+
     /// Запись есть, но входа в ней нет. Голый `claude` пишет в базовую запись
     /// служебное (`trustedDeviceToken`) даже без логина — это не аккаунт.
     static func hasNoLogin(service: String, interactive: Bool = true, verifyingOwner: Bool = false) -> Bool {
@@ -205,6 +234,55 @@ enum AuthStorage$Claude {
         credentials.backend = item.backend
         credentials.directory = item.directory
         return credentials
+    }
+
+    /// Recheck the exact usage login at publication without adopting a fallback
+    /// when the preferred Keychain owner cannot be verified.
+    static func isCurrent(_ expected: Credentials, service: String) throws -> Bool {
+        let item = readItem(service: service, interactive: false, verifyingOwner: true)
+        guard let json = item.json else {
+            if item.status == errSecItemNotFound { return false }
+            throw UnavailableCredentials()
+        }
+        guard var current = parse(json) else { return false }
+        current.backend = item.backend
+        current.directory = item.directory
+        return current.hasSameTokens(as: expected)
+    }
+
+    /// Capture the existing no-login check together with its publication proof.
+    static func unresolvedUsage(service: String) -> (credentials: Credentials?, noLogin: Bool,
+                                                     isCurrent: () throws -> Bool) {
+        let observed = readItem(service: service, interactive: false, verifyingOwner: true)
+        var credentials = observed.json.flatMap(parse)
+        credentials?.backend = observed.backend
+        credentials?.directory = observed.directory
+        return (credentials, observed.json.map(isNoLogin) ?? false, {
+            let current = readItem(service: service, interactive: false, verifyingOwner: true)
+            if observed.json == nil, observed.status != errSecItemNotFound,
+               current.json == nil, current.status == observed.status,
+               current.backend == observed.backend, current.directory == observed.directory {
+                // An unchanged unresolved owner keeps its existing status and polling interval.
+                return true
+            }
+            guard current.json != nil || current.status == errSecItemNotFound else {
+                throw UnavailableCredentials()
+            }
+            guard observed.json != nil || observed.status == errSecItemNotFound else {
+                return false
+            }
+            guard let old = observed.json, let new = current.json else {
+                return observed.json == nil && current.json == nil
+            }
+            let oldOAuth = old["claudeAiOauth"] as? NSObject
+            let newOAuth = new["claudeAiOauth"] as? NSObject
+            return observed.backend == current.backend && observed.directory == current.directory
+                && (oldOAuth == nil ? newOAuth == nil : oldOAuth?.isEqual(newOAuth) == true)
+        })
+    }
+
+    private struct UnavailableCredentials: LocalizedError {
+        var errorDescription: String? { L.t("error.keychainWrite") }
     }
 
     /// Код ответа Keychain на чтение секрета — для диагностики (NOTCHLIMITS_PROBE).
@@ -504,6 +582,14 @@ enum AuthStorage$Claude {
         guard let path = profileLocation(for: service)?.path,
               service == baseService + "-" + String(sha256Hex(path).prefix(8)) else { return nil }
         return path
+    }
+
+    /// Include native and legacy namespaces before an unfinished directory moves.
+    static func profileServices(in directory: URL) -> [String] {
+        Array(Set(pathVariants(directory).flatMap { path in
+            let hash = sha256Hex(path)
+            return [baseService + "-" + String(hash.prefix(8)), baseService + "-" + hash]
+        }))
     }
 
     private static func profileLocation(for service: String) -> (directory: URL, path: String)? {

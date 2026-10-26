@@ -26,7 +26,9 @@ struct Discovery$Real: AccountDiscovery {
                     // не переключались — тот, что берёт голая `claude` (базовая
                     // запись Keychain без суффикса-хэша).
                     isActive: AppSwitcher$Claude().isOpenInApp(columnID: "claude:\(service)")
-                        ?? (service == AuthStorage$Claude.baseService)
+                        ?? (service == AuthStorage$Claude.baseService),
+                    claudePrimaryOwner: service == AuthStorage$Claude.baseService
+                        ? AuthStorage$Claude.primaryOwner() : nil
                 )
             }
     }
