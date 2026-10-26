@@ -650,10 +650,10 @@ struct HTTPClient {
               retry: Bool = true) async -> Result<Response, Failure> {
         // Freeze this response before announcing the request to concurrent tests.
         let response = Fixture.response
-        Fixture.didRefresh()
         Fixture.allowHTTPRetry = retry
         Fixture.refreshInput = json["refresh_token"] as? String ?? ""
         if Fixture.rejectSpentRefresh && Fixture.refreshInput == "synthetic-already-spent" {
+            Fixture.didRefresh()
             return .success(Response(status: 400, data: Data(#"{"error":"refresh_token_reused"}"#.utf8), retryAfter: nil))
         }
         Fixture.oauthHeldDuringPOST = Fixture.holdsOAuthLocks
@@ -663,6 +663,9 @@ struct HTTPClient {
             _ = mkdir(path, 0o700)
         }
         if Fixture.pendingCLILogin { Fixture.tryCLILogin() }
+        // Observers may retarget paths as soon as this request is visible.
+        // Finish the arrival faults before publishing that synchronization point.
+        Fixture.didRefresh()
         switch response {
         case .lost:
             return .failure(.transport("synthetic lost response"))
