@@ -72,8 +72,14 @@ enum AccountRemoval {
                 guard services.allSatisfy({ AuthStorage$Claude.hasNoLogin(service: $0, interactive: false) }) else {
                     throw Failure.busy
                 }
+                // Logout removes Keychain metadata but leaves the profile and
+                // its Desktop session. Retire every supported path spelling.
+                let desktopServices = Set(services + AuthStorage$Claude.profileServices(in: directory))
                 try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot, move: move) { _ in
                     for service in services { try deleteKeychainEntry(service: service) }
+                }
+                for service in desktopServices {
+                    AppSwitcher$Claude.accountRemoved(columnID: "claude:" + service)
                 }
             }
         } catch is StorageLock$Claude.Failure {
@@ -96,8 +102,9 @@ enum AccountRemoval {
                         : AuthStorage$Claude.configDirectory(for: service)
                     guard let owner, let current,
                           current.resolvingSymlinksInPath().path == owner.resolvingSymlinksInPath().path,
-                          service == AuthStorage$Claude.baseService && configDir == nil
-                            || account.claudeConfigOwner?.matches(owner) == true,
+                          (service == AuthStorage$Claude.baseService && configDir == nil
+                            ? AuthStorage$Claude.matchesPrimaryOwner(account)
+                            : account.claudeConfigOwner?.matches(owner) == true),
                           let owners = AuthStorage$Claude.keychainServices(in: owner) else { throw Failure.busy }
                     let shared = owners.contains { $0 != service }
                         || service != AuthStorage$Claude.baseService && ProfileDirectories.isClaudeBase(owner)

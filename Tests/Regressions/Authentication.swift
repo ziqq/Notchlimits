@@ -648,6 +648,8 @@ struct HTTPClient {
 
     func post(_ url: URL, headers: [String: String], json: [String: Any],
               retry: Bool = true) async -> Result<Response, Failure> {
+        // Freeze this response before announcing the request to concurrent tests.
+        let response = Fixture.response
         Fixture.didRefresh()
         Fixture.allowHTTPRetry = retry
         Fixture.refreshInput = json["refresh_token"] as? String ?? ""
@@ -661,7 +663,7 @@ struct HTTPClient {
             _ = mkdir(path, 0o700)
         }
         if Fixture.pendingCLILogin { Fixture.tryCLILogin() }
-        switch Fixture.response {
+        switch response {
         case .lost:
             return .failure(.transport("synthetic lost response"))
         case .delayedLost:
@@ -669,7 +671,7 @@ struct HTTPClient {
             return .failure(.transport("synthetic lost response"))
         case .heldTemporary, .heldLost, .heldRejected:
             while Fixture.refreshIsPaused() { try? await Task.sleep(nanoseconds: 10_000_000) }
-            switch Fixture.response {
+            switch response {
             case .heldTemporary: return .success(Response(status: 429, data: Data(), retryAfter: 120))
             case .heldLost: return .failure(.transport("synthetic lost response"))
             default: return .success(Response(status: 400, data: Data(#"{"error":"refresh_token_reused"}"#.utf8), retryAfter: nil))
@@ -773,6 +775,15 @@ private actor ClaudePollingProbe: UsageProvider {
         return result
     }
 
+    #if VALIDATED_USAGE
+    func fetchValidated(_ account: DiscoveredAccount) async -> UsageFetchResult {
+        started += 1
+        let result = await provider.fetchValidated(account)
+        completed += 1
+        return result
+    }
+    #endif
+
     func counts() -> (started: Int, completed: Int) { (started, completed) }
 }
 
@@ -786,6 +797,14 @@ private actor UsageCompletionProbe: UsageProvider {
         completed += 1
         return result
     }
+
+    #if VALIDATED_USAGE
+    func fetchValidated(_ account: DiscoveredAccount) async -> UsageFetchResult {
+        let result = await provider.fetchValidated(account)
+        completed += 1
+        return result
+    }
+    #endif
 }
 
 private final class UsageOwnerDiscovery: AccountDiscovery {
@@ -802,10 +821,18 @@ private final class UsageOwnerDiscovery: AccountDiscovery {
         Discovery$Real().discover().map { account in
             guard changed, account.id == accountID else { return account }
             if change == "metadata" {
+                #if CLAUDE_PRIMARY_OWNER
+                return DiscoveredAccount(id: account.id, provider: account.provider,
+                                         profileName: account.profileName + "-metadata",
+                                         source: account.source,
+                                         email: "metadata@example.invalid", isActive: account.isActive,
+                                         claudePrimaryOwner: account.claudePrimaryOwner)
+                #else
                 return DiscoveredAccount(id: account.id, provider: account.provider,
                                          profileName: account.profileName + "-metadata",
                                          source: account.source,
                                          email: "metadata@example.invalid", isActive: account.isActive)
+                #endif
             }
             if change == "active" {
                 var updated = account
@@ -839,6 +866,48 @@ private actor RoutedUsageCompletionProbe: UsageProvider {
         completed += 1
         return result
     }
+
+    #if VALIDATED_USAGE
+    func fetchValidated(_ account: DiscoveredAccount) async -> UsageFetchResult {
+        let result = await provider.fetchValidated(account)
+        if completed == 0, case .success(let snapshot) = result.outcome {
+            firstSuccess = snapshot.windows.first?.utilization
+        }
+        completed += 1
+        return result
+    }
+    #endif
+}
+
+// Gate the real provider before resolution, then observe its completed outcome.
+private actor UnresolvedCompletionProbe: UsageProvider {
+    private let provider = Provider$Claude()
+    private var released = false
+    private(set) var started = 0
+    private(set) var completed = 0
+
+    func release() { released = true }
+
+    private func enter() async {
+        started += 1
+        while !released { try? await Task.sleep(nanoseconds: 5_000_000) }
+    }
+
+    func fetch(_ account: DiscoveredAccount) async -> FetchOutcome {
+        await enter()
+        let result = await provider.fetch(account)
+        completed += 1
+        return result
+    }
+
+    #if VALIDATED_USAGE
+    func fetchValidated(_ account: DiscoveredAccount) async -> UsageFetchResult {
+        await enter()
+        let result = await provider.fetchValidated(account)
+        completed += 1
+        return result
+    }
+    #endif
 }
 
 @main
@@ -846,6 +915,55 @@ enum Authentication {
     static func main() async {
         do {
             switch CommandLine.arguments[1] {
+            case "claude-publication-file-200-login": try await claudeQueuedPublication(keychain: false, status: 200, change: "login")
+            case "claude-publication-file-401-session": try await claudeQueuedPublication(keychain: false, status: 401, change: "session")
+            case "claude-publication-file-429-login": try await claudeQueuedPublication(keychain: false, status: 429, change: "login")
+            case "claude-publication-file-200-metadata": try await claudeQueuedPublication(keychain: false, status: 200, change: "metadata")
+            case "claude-publication-keychain-200-login": try await claudeQueuedPublication(keychain: true, status: 200, change: "login")
+            case "claude-publication-keychain-401-session": try await claudeQueuedPublication(keychain: true, status: 401, change: "session")
+            case "claude-publication-keychain-429-login": try await claudeQueuedPublication(keychain: true, status: 429, change: "login")
+            case "claude-publication-keychain-200-metadata": try await claudeQueuedPublication(keychain: true, status: 200, change: "metadata")
+            case "claude-publication-keychain-unreadable": try await claudeQueuedPublication(keychain: true, change: "unreadable")
+            case "claude-unresolved-publication-replaced": try await claudeUnresolvedPublication()
+            case "claude-unresolved-publication-unavailable-control": try await claudeUnresolvedPublication(failedBackend: true)
+            case "codex-own-refresh-rediscovery-file": try await codexOwnRefreshRediscovery(mode: "file")
+            case "codex-own-refresh-rediscovery-keyring": try await codexOwnRefreshRediscovery(mode: "keyring")
+            case "codex-own-refresh-rediscovery-auto": try await codexOwnRefreshRediscovery(mode: "auto")
+            case "usage-disappear-readd": try await auditUsageDisappearReadd()
+            case "audit-codex-queued-login-primary-file": try await auditCodexQueuedLogin(primary: true, mode: "file")
+            case "audit-codex-queued-login-primary-keyring": try await auditCodexQueuedLogin(primary: true, mode: "keyring")
+            case "audit-codex-queued-login-primary-auto": try await auditCodexQueuedLogin(primary: true, mode: "auto")
+            case "audit-codex-queued-login-selected-file": try await auditCodexQueuedLogin(primary: false, mode: "file")
+            case "audit-codex-queued-login-selected-keyring": try await auditCodexQueuedLogin(primary: false, mode: "keyring")
+            case "audit-codex-queued-login-selected-auto": try await auditCodexQueuedLogin(primary: false, mode: "auto")
+            case "audit-codex-queued-login-primary-metadata-control": try await auditCodexQueuedLogin(primary: true, mode: "file", replacing: false)
+            case "audit-codex-queued-login-selected-metadata-control": try await auditCodexQueuedLogin(primary: false, mode: "file", replacing: false)
+            case "codex-retarget-renewal-serialized-file": try await codexRetargetRenewalSerialized(mode: "file")
+            case "codex-retarget-renewal-serialized-keyring": try await codexRetargetRenewalSerialized(mode: "keyring")
+            case "codex-retarget-renewal-serialized-auto": try await codexRetargetRenewalSerialized(mode: "auto")
+            case "codex-retarget-renewal-durable-control": try await codexRetargetRenewalSerialized(mode: "keyring", denyReplacement: false)
+            case "codex-renewal-distinct-columns-control": try await codexRenewalDistinctColumns()
+            case "codex-queued-same-account-reauth-file": try await codexQueuedSameAccountReauth(mode: "file")
+            case "codex-queued-same-account-reauth-keyring": try await codexQueuedSameAccountReauth(mode: "keyring")
+            case "codex-queued-same-account-reauth-auto": try await codexQueuedSameAccountReauth(mode: "auto")
+            case "codex-queued-reauth-metadata-control": try await codexQueuedSameAccountReauth(mode: "file", replacing: false)
+            case "codex-completion-proof-same-account-success": try await codexCompletionProof(status: 200)
+            case "codex-completion-proof-same-account-reauth": try await codexCompletionProof(status: 401)
+            case "codex-completion-proof-same-account-backoff": try await codexCompletionProof(status: 429)
+            case "codex-completion-proof-metadata-backoff-control": try await codexCompletionProof(status: 429, replacing: false)
+            case "claude-copied-grant-concurrent-audit": try await claudeCopiedGrantConcurrent()
+            case "claude-distinct-grants-concurrent-control-audit": try await claudeCopiedGrantConcurrent(distinct: true)
+            case "audit-claude-orphan-desktop-on": try auditClaudeOrphanDesktopReadd(enabled: true)
+            case "audit-claude-orphan-desktop-off": try auditClaudeOrphanDesktopReadd(enabled: false)
+            case "claude-primary-usage-owner-replacement-audit": try await claudePrimaryUsageOwnerAudit()
+            case "claude-primary-usage-owner-stable-control-audit": try await claudePrimaryUsageOwnerAudit(replace: false)
+            case "claude-primary-usage-owner-keychain-control-audit": try await claudePrimaryUsageOwnerAudit(keychain: true)
+            case "claude-primary-removal-owner-replacement-audit": try claudePrimaryRemovalOwnerAudit()
+            case "claude-primary-removal-owner-stable-control-audit": try claudePrimaryRemovalOwnerAudit(replace: false)
+            case "claude-orphan-desktop-canonical": try claudeOrphanDesktopVariant(pathKind: "canonical")
+            case "claude-orphan-desktop-trailing": try claudeOrphanDesktopVariant(pathKind: "trailing")
+            case "claude-orphan-desktop-stub-refusal": try claudeOrphanDesktopVariant(pathKind: "canonical", refusal: "stub")
+            case "claude-orphan-desktop-completed-refusal": try claudeOrphanDesktopVariant(pathKind: "trailing", refusal: "completed")
             case "codex-routed-usage-queued-primary-replacement-file": try await codexRoutedUsageOwner(primary: true, mode: "file", queued: true, change: "replacement")
             case "codex-routed-usage-queued-primary-replacement-keyring": try await codexRoutedUsageOwner(primary: true, mode: "keyring", queued: true, change: "replacement")
             case "codex-routed-usage-queued-primary-replacement-auto": try await codexRoutedUsageOwner(primary: true, mode: "auto", queued: true, change: "replacement")
@@ -2168,6 +2286,882 @@ enum Authentication {
         try expectUsageOwnerPreferences(restarted, id: account.id)
         try expect(await probe.completed == 1 && Fixture.usageCalls == 1 && Fixture.refreshCalls == 0,
                    "Startup cache hydration unexpectedly requested usage or refreshed credentials")
+    }
+
+    @MainActor
+    private static func auditUsageDisappearReadd() async throws {
+        Fixture.keychainExists = false
+        Fixture.manualPollingTimer = true
+        Fixture.holdFirstUsage = true
+        Fixture.releaseFirstUsage = true
+        let manager = Foundation.FileManager.default
+        try manager.createDirectory(at: ProfileDirectories.claudeRoot, withIntermediateDirectories: true)
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("audit-readded")
+        let id = AuthSwap$Codex.profileColumnID("audit-readded")
+        try Fixture.codexLogin(home, account: "original", mode: "file", expired: false)
+        guard let originalOwner = DirectoryIdentity.capture(home) else { throw Failure(description: "Missing original owner") }
+        let probe = RoutedUsageCompletionProbe()
+        let store = UsageStore(providers: [.codex: probe], discovery: RoutedUsageDiscovery(accountID: id))
+        store.start()
+        for _ in 0..<400 {
+            if store.columns.first(where: { $0.id == id })?.updatedAt != nil { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(store.columns.first(where: { $0.id == id })?.windows.first?.utilization == 12,
+                   "Setup did not publish initial real-provider usage")
+        try manager.removeItem(at: home)
+        store.rediscover(force: true)
+        try expect(store.account(for: id) == nil && store.columns.isEmpty, "Missing profile was not removed by discovery")
+        try Fixture.codexLogin(home, account: "replacement", mode: "file", expired: false)
+        store.rediscover(force: true)
+        guard let column = store.columns.first(where: { $0.id == id }) else { throw Failure(description: "Replacement was not rediscovered") }
+        try expect(!originalOwner.matches(home) && Provider$Codex.readAuth(codexHome: home)?.accountID == "replacement",
+                   "Setup did not replace both physical owner and login")
+        try expect(column.windows.isEmpty && column.subtitle == nil && column.updatedAt == nil && !column.fromCache
+                   && UsageCache().load(id: id) == nil,
+                   "A rediscovered replacement inherited cached usage from the disappeared login")
+    }
+
+    @MainActor
+    private static func auditCodexQueuedLogin(primary: Bool, mode: String, replacing: Bool = true) async throws {
+        let (account, live, originalSnapshot) = try routedUsageSetup(primary: primary, mode: mode)
+        guard case .codexHome(let home) = account.source,
+              let owner = DirectoryIdentity.capture(live) else {
+            throw Failure(description: "Missing original routed directory owner")
+        }
+        let originalLogin = primary ? "original-primary" : "original-selected"
+        Fixture.holdFirstUsage = true
+        Fixture.manualPollingTimer = true
+        let probe = RoutedUsageCompletionProbe()
+        let store = UsageStore(providers: [.codex: probe], discovery: RoutedUsageDiscovery(accountID: account.id))
+        store.start()
+        for _ in 0..<400 {
+            if Fixture.usageCalls == 1 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(Fixture.usageCalls == 1, "Original usage did not enter its held HTTP boundary")
+        var oldPublished = false
+        let observation = store.$columns.sink { columns in
+            if columns.first(where: { $0.id == account.id })?.windows.first?.utilization == 12 { oldPublished = true }
+        }
+        defer { observation.cancel() }
+        Fixture.lock.lock()
+        Fixture.pauseProfileSnapshot = true
+        Fixture.profileSnapshotPaused = false
+        Fixture.resumeProfileSnapshot = false
+        Fixture.lock.unlock()
+        let mutation = Task.detached {
+            defer {
+                Fixture.lock.lock()
+                Fixture.releaseFirstUsage = true
+                Fixture.resumeProfileSnapshot = true
+                Fixture.lock.unlock()
+            }
+            var paused = false
+            for _ in 0..<400 {
+                Fixture.lock.lock()
+                paused = Fixture.profileSnapshotPaused
+                Fixture.lock.unlock()
+                if paused { break }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            try expect(paused, "Discovery did not pause at its existing enumeration boundary")
+            Fixture.lock.lock()
+            Fixture.releaseFirstUsage = true
+            Fixture.lock.unlock()
+            for _ in 0..<400 {
+                if await probe.completed == 1 { break }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            let completed = await probe.completed
+            let first = await probe.firstSuccess
+            try expect(completed == 1 && first == 12,
+                       "Real provider had not completed its current-owner check before CLI login")
+            if replacing {
+                try Fixture.codexLogin(live, account: "cli-replacement", mode: mode, expired: false)
+            } else {
+                try mutateRoutedUsageSource(live, mode: mode, change: "metadata", login: originalLogin)
+            }
+            try expect(owner.matches(live), "CLI login replaced the directory instead of keeping its inode")
+        }
+        store.rediscover(force: true)
+        try await mutation.value
+        guard let current = store.account(for: account.id),
+              let snapshot = try AuthSwap$Codex.authSnapshot(columnID: account.id, home: home) else {
+            throw Failure(description: "Same-directory login disappeared from real discovery")
+        }
+        let currentLogin = Provider$Codex.parseAuth(snapshot.data)?.accountID
+        let originalStillCurrent = try AuthSwap$Codex.isCurrent(originalSnapshot, columnID: account.id, home: home)
+        try expect(current == account && owner.matches(live)
+                   && currentLogin == (replacing ? "cli-replacement" : originalLogin)
+                   && originalStillCurrent == !replacing,
+                   "Setup did not isolate a changed login inside an unchanged discovered directory")
+        guard let tick = Fixture.pollingTick else { throw Failure(description: "Missing polling boundary") }
+        for _ in 0..<80 { tick(); try await Task.sleep(nanoseconds: 5_000_000) }
+        let displayed = store.columns.first(where: { $0.id == account.id })?.windows.first?.utilization
+        let cached = UsageCache().load(id: account.id)?.windows.first?.utilization
+        print("SAME_INODE primary=\(primary) mode=\(mode) replacing=\(replacing) identityPreserved=\(owner.matches(live)) login=\(currentLogin ?? "nil") oldPublished=\(oldPublished) displayed=\(String(describing: displayed)) cached=\(String(describing: cached)) refreshCalls=\(Fixture.refreshCalls)")
+        try expect(oldPublished == !replacing && displayed == (replacing ? 84 : 12)
+                   && cached == displayed && Fixture.refreshCalls == 0,
+                   "Queued usage from the previous login populated the new login in the same directory")
+    }
+
+    @MainActor
+    private static func codexRetargetRenewalSerialized(mode: String, denyReplacement: Bool = true) async throws {
+        Fixture.keychainExists = false
+        Fixture.distinctRefreshGrants = true
+        Fixture.manualPollingTimer = true
+        let manager = Foundation.FileManager.default
+        let first = Fixture.root.appendingPathComponent("overlap-physical-a")
+        let second = Fixture.root.appendingPathComponent("overlap-physical-b")
+        for directory in [first, second] { try manager.createDirectory(at: directory, withIntermediateDirectories: true) }
+        try manager.createSymbolicLink(at: ProfileDirectories.codexRoot, withDestinationURL: first)
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("overlap-owner")
+        let originalHome = first.appendingPathComponent("overlap-owner")
+        let replacementHome = second.appendingPathComponent("overlap-owner")
+        let id = AuthSwap$Codex.profileColumnID("overlap-owner")
+        try Fixture.codexLogin(home, account: "original-overlap", mode: mode, expired: true)
+        let probe = UsageCompletionProbe(Provider$Codex())
+        let store = UsageStore(providers: [.codex: probe], discovery: RoutedUsageDiscovery(accountID: id))
+        Fixture.response = .heldRenewed
+        store.start()
+        guard let originalAccount = store.account(for: id), case .codexHome(let originalLogical) = originalAccount.source else {
+            throw Failure(description: "Production discovery did not return the original owner")
+        }
+        try await waitForRefresh(1)
+        try expect(await probe.completed == 0, "Original refresh was not held before retargeting")
+
+        try manager.removeItem(at: ProfileDirectories.codexRoot)
+        try manager.createSymbolicLink(at: ProfileDirectories.codexRoot, withDestinationURL: second)
+        try Fixture.codexLogin(home, account: "replacement-overlap", mode: mode, expired: true)
+        store.rediscover(force: true)
+        guard let replacementAccount = store.account(for: id),
+              case .codexHome(let replacementLogical) = replacementAccount.source,
+              let originalOwner = DirectoryIdentity.capture(originalHome),
+              let replacementOwner = DirectoryIdentity.capture(replacementHome) else {
+            throw Failure(description: "Production rediscovery did not detect the replacement owner")
+        }
+        try expect(replacementAccount.id == id && originalAccount.id == id
+                   && replacementLogical.path == originalLogical.path && replacementLogical.path == home.path
+                   && !originalOwner.isSameDirectory(as: replacementOwner)
+                   && originalOwner.matches(originalHome) && replacementOwner.matches(replacementHome),
+                   "Setup did not retain one logical ID across different surviving physical owners")
+        Fixture.response = .renewed
+        if denyReplacement {
+            if mode == "file" { Fixture.denyCredentialChmodHome = AuthStorage$Codex.canonicalPath(replacementHome) }
+            else { Fixture.denyCodexWriteAccount = Fixture.codexKey(replacementHome) }
+        }
+        store.refreshAll(force: true)
+        for _ in 0..<400 {
+            if await probe.completed == 1 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(await probe.completed == 1 && Fixture.refreshIsPaused(),
+                   "Replacement poll did not finish while the original response remained held")
+        try expect(Fixture.refreshCalls == 1,
+                   "A retargeted column submitted a second refresh before its original rotation was durable")
+        try expect(Renewal$Codex.refreshToken(replacementHome.appendingPathComponent("auth.json"))
+                   == "synthetic-refresh-replacement-overlap", "A blocked replacement spent its refresh grant")
+
+        // Finishing A releases the logical column, allowing B to submit once.
+        Fixture.releaseRefresh()
+        for _ in 0..<400 {
+            if await probe.completed == 2 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(await probe.completed == 2, "Original accepted response did not complete")
+        try expect(Renewal$Codex.refreshToken(originalHome.appendingPathComponent("auth.json"))
+                   == "synthetic-rotated-synthetic-refresh-original-overlap", "Original rotation was not made durable")
+        store.refreshAll(force: true)
+        try await waitForRefresh(2)
+        for _ in 0..<400 {
+            if await probe.completed == 3 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(await probe.completed == 3, "Replacement refresh did not complete after serialization")
+        let firstDrain = await Renewal$Codex.shared.prepareForTermination(timeout: 0.1)
+        try expect(firstDrain == !denyReplacement, "Termination discarded a replacement rotation whose write was refused")
+        Fixture.denyCredentialChmodHome = nil
+        Fixture.denyCodexWriteAccount = nil
+        let drained = await Renewal$Codex.shared.prepareForTermination(timeout: 0.5)
+        let original = Renewal$Codex.refreshToken(originalHome.appendingPathComponent("auth.json"))
+        let replacement = Renewal$Codex.refreshToken(replacementHome.appendingPathComponent("auth.json"))
+        var blocked = false
+        do {
+            if let renewal = try AuthSwap$Codex.beginRenewal(columnID: id, home: home) {
+                AuthSwap$Codex.finishRenewal(renewal)
+            }
+        } catch { blocked = true }
+        try expect(drained && !blocked && original == "synthetic-rotated-synthetic-refresh-original-overlap"
+                   && replacement == "synthetic-rotated-synthetic-refresh-replacement-overlap"
+                   && Fixture.refreshCalls == 2,
+                   "Serialized rotations lost a pending grant or left their column reserved")
+    }
+
+    @MainActor
+    private static func codexRenewalDistinctColumns() async throws {
+        Fixture.keychainExists = false
+        Fixture.distinctRefreshGrants = true
+        let first = ProfileDirectories.codexRoot.appendingPathComponent("parallel-a")
+        let second = ProfileDirectories.codexRoot.appendingPathComponent("parallel-b")
+        try Fixture.codexLogin(first, account: "parallel-a", mode: "keyring", expired: true)
+        try Fixture.codexLogin(second, account: "parallel-b", mode: "keyring", expired: true)
+        let firstAccount = DiscoveredAccount(id: "codex:parallel-a", provider: .codex,
+                                            profileName: "parallel-a", source: .codexHome(first))
+        let secondAccount = DiscoveredAccount(id: "codex:parallel-b", provider: .codex,
+                                             profileName: "parallel-b", source: .codexHome(second))
+        Fixture.response = .heldRenewed
+        let firstTask = Task { await Provider$Codex().fetch(firstAccount) }
+        try await waitForRefresh(1)
+        Fixture.response = .renewed
+        let secondResult = await Provider$Codex().fetch(secondAccount)
+        try expect(Fixture.refreshCalls == 2 && Fixture.refreshIsPaused(),
+                   "An unrelated column waited for the first column's refresh")
+        if case .success = secondResult {} else {
+            throw Failure(description: "Independent column did not refresh successfully")
+        }
+        Fixture.releaseRefresh()
+        let firstResult = await firstTask.value
+        if case .success = firstResult {} else {
+            throw Failure(description: "Original independent column did not refresh successfully")
+        }
+        try expect(Renewal$Codex.refreshToken(first.appendingPathComponent("auth.json"))
+                   == "synthetic-rotated-synthetic-refresh-parallel-a"
+                   && Renewal$Codex.refreshToken(second.appendingPathComponent("auth.json"))
+                   == "synthetic-rotated-synthetic-refresh-parallel-b",
+                   "Concurrent independent columns lost a rotated grant")
+    }
+
+    @MainActor
+    private static func codexQueuedSameAccountReauth(mode: String, replacing: Bool = true) async throws {
+        let (account, live, originalSnapshot) = try routedUsageSetup(primary: false, mode: mode)
+        guard case .codexHome(let home) = account.source,
+              let owner = DirectoryIdentity.capture(live) else {
+            throw Failure(description: "Missing selected native directory owner")
+        }
+        Fixture.holdFirstUsage = true
+        Fixture.firstUsageStatus = 401
+        Fixture.manualPollingTimer = true
+        let probe = RoutedUsageCompletionProbe()
+        let store = UsageStore(providers: [.codex: probe], discovery: RoutedUsageDiscovery(accountID: account.id))
+        store.start()
+        for _ in 0..<400 {
+            if Fixture.usageCalls == 1 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(Fixture.usageCalls == 1, "Original usage did not enter its held HTTP boundary")
+        var reauthPublished = false
+        let observation = store.$columns.sink { columns in
+            if let column = columns.first(where: { $0.id == account.id }), case .reauth = column.status {
+                reauthPublished = true
+            }
+        }
+        defer { observation.cancel() }
+        Fixture.lock.lock()
+        Fixture.pauseProfileSnapshot = true
+        Fixture.profileSnapshotPaused = false
+        Fixture.resumeProfileSnapshot = false
+        Fixture.lock.unlock()
+        let mutation = Task.detached {
+            defer {
+                Fixture.lock.lock()
+                Fixture.releaseFirstUsage = true
+                Fixture.resumeProfileSnapshot = true
+                Fixture.lock.unlock()
+            }
+            var paused = false
+            for _ in 0..<400 {
+                Fixture.lock.lock()
+                paused = Fixture.profileSnapshotPaused
+                Fixture.lock.unlock()
+                if paused { break }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            try expect(paused, "Discovery did not pause at its existing enumeration boundary")
+            Fixture.lock.lock()
+            Fixture.releaseFirstUsage = true
+            Fixture.lock.unlock()
+            for _ in 0..<400 {
+                if await probe.completed == 1 { break }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            try expect(await probe.completed == 1 && Fixture.refreshCalls == 0,
+                       "Selected native usage did not finish its denied response before re-login")
+            if replacing {
+                var root = try JSONSerialization.jsonObject(with: originalSnapshot.data) as! [String: Any]
+                var tokens = root["tokens"] as! [String: Any]
+                tokens["access_token"] = Fixture.accessToken(expiresAt: Date().addingTimeInterval(900_000).timeIntervalSince1970)
+                tokens["refresh_token"] = "synthetic-new-session-same-account"
+                root["tokens"] = tokens
+                let data = try JSONSerialization.data(withJSONObject: root)
+                if mode == "file" { try data.write(to: live.appendingPathComponent("auth.json")) }
+                else { Fixture.codexKeychain[Fixture.codexKey(live)] = data }
+            } else {
+                try mutateRoutedUsageSource(live, mode: mode, change: "metadata", login: "original-selected")
+            }
+            try expect(owner.matches(live), "Re-login replaced the native directory instead of its credentials")
+        }
+        store.rediscover(force: true)
+        try await mutation.value
+        guard let current = store.account(for: account.id),
+              let snapshot = try AuthSwap$Codex.authSnapshot(columnID: account.id, home: home) else {
+            throw Failure(description: "Same-account re-login disappeared from real discovery")
+        }
+        let originalStillCurrent = try AuthSwap$Codex.isCurrent(originalSnapshot, columnID: account.id, home: home)
+        try expect(current == account && owner.matches(live)
+                   && Provider$Codex.parseAuth(snapshot.data)?.accountID == "original-selected"
+                   && originalStillCurrent == !replacing,
+                   "Setup did not isolate a new session of the same account in the same directory")
+        guard let tick = Fixture.pollingTick else { throw Failure(description: "Missing polling boundary") }
+        for _ in 0..<80 { tick(); try await Task.sleep(nanoseconds: 5_000_000) }
+        let displayed = store.columns.first(where: { $0.id == account.id })?.windows.first?.utilization
+        let cached = UsageCache().load(id: account.id)?.windows.first?.utilization
+        try expect(reauthPublished == !replacing && displayed == (replacing ? 84 : nil)
+                   && cached == displayed && Fixture.usageCalls == (replacing ? 2 : 1)
+                   && Fixture.refreshCalls == 0,
+                   "Queued reauth from an old session was published after same-account CLI re-login")
+    }
+
+    @MainActor
+    private static func codexCompletionProof(status: Int, replacing: Bool = true) async throws {
+        let (account, live, originalSnapshot) = try routedUsageSetup(primary: false, mode: "file")
+        guard case .codexHome(let home) = account.source,
+              let owner = DirectoryIdentity.capture(live) else {
+            throw Failure(description: "Missing selected native directory owner")
+        }
+        Fixture.holdFirstUsage = true
+        Fixture.firstUsageStatus = status
+        Fixture.manualPollingTimer = true
+        let probe = RoutedUsageCompletionProbe()
+        let store = UsageStore(providers: [.codex: probe], discovery: RoutedUsageDiscovery(accountID: account.id))
+        store.start()
+        for _ in 0..<400 {
+            if Fixture.usageCalls == 1 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(Fixture.usageCalls == 1, "Original usage did not enter its held HTTP boundary")
+        var oldOutcomePublished = false
+        let observation = store.$columns.sink { columns in
+            guard let column = columns.first(where: { $0.id == account.id }) else { return }
+            if status == 200 && column.windows.first?.utilization == 12 { oldOutcomePublished = true }
+            if status == 401, case .reauth = column.status { oldOutcomePublished = true }
+            if status == 429, case .waiting = column.status { oldOutcomePublished = true }
+        }
+        defer { observation.cancel() }
+        let completion = DispatchSemaphore(value: 0)
+        let mutation = Task.detached {
+            defer { completion.signal() }
+            Fixture.lock.lock()
+            Fixture.releaseFirstUsage = true
+            Fixture.lock.unlock()
+            for _ in 0..<400 {
+                if await probe.completed == 1 { break }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            try expect(await probe.completed == 1 && Fixture.refreshCalls == 0,
+                       "Real provider did not return the native session outcome before re-login")
+            if status == 200 {
+                try expect(await probe.firstSuccess == 12, "First provider response did not contain the original usage")
+            }
+            if replacing {
+                var root = try JSONSerialization.jsonObject(with: originalSnapshot.data) as! [String: Any]
+                var tokens = root["tokens"] as! [String: Any]
+                tokens["access_token"] = Fixture.accessToken(expiresAt: Date().addingTimeInterval(900_000).timeIntervalSince1970)
+                tokens["refresh_token"] = "synthetic-new-session-same-account"
+                root["tokens"] = tokens
+                try JSONSerialization.data(withJSONObject: root).write(to: live.appendingPathComponent("auth.json"))
+            } else {
+                try mutateRoutedUsageSource(live, mode: "file", change: "metadata", login: "original-selected")
+            }
+            guard let current = try AuthSwap$Codex.authSnapshot(columnID: account.id, home: home) else {
+                throw Failure(description: "Native login disappeared during token-only mutation")
+            }
+            let originalStillCurrent = try AuthSwap$Codex.isCurrent(originalSnapshot, columnID: account.id, home: home)
+            try expect(owner.matches(live) && Provider$Codex.parseAuth(current.data)?.accountID == "original-selected"
+                       && originalStillCurrent == !replacing,
+                       "Setup did not preserve the directory and account while changing only its session")
+        }
+        // Keep the provider outcome queued on MainActor. No discovery occurs
+        // between its final provider check, CLI login, and publication.
+        let resumed = completion.wait(timeout: .now() + 3) == .success
+        try await mutation.value
+        try expect(resumed, "Provider completion barrier timed out")
+        guard let tick = Fixture.pollingTick else { throw Failure(description: "Missing polling boundary") }
+        for _ in 0..<80 { tick(); try await Task.sleep(nanoseconds: 5_000_000) }
+        let displayed = store.columns.first(where: { $0.id == account.id })?.windows.first?.utilization
+        let cached = UsageCache().load(id: account.id)?.windows.first?.utilization
+        try expect(oldOutcomePublished == !replacing && displayed == (replacing ? 84 : nil)
+                   && cached == displayed && Fixture.usageCalls == (replacing ? 2 : 1)
+                   && Fixture.refreshCalls == 0,
+                   "Queued outcome crossed a same-account CLI login before any rediscovery")
+    }
+    @MainActor
+    private static func claudeCopiedGrantConcurrent(distinct: Bool = false) async throws {
+        let manager = Foundation.FileManager.default
+        let first = ProfileDirectories.claudeRoot.appendingPathComponent("copied-a")
+        let second = ProfileDirectories.claudeRoot.appendingPathComponent("copied-b")
+        try manager.createDirectory(at: first, withIntermediateDirectories: true)
+        try manager.createDirectory(at: second, withIntermediateDirectories: true)
+        Fixture.claudeEntries = [:]
+        let firstJSON = Fixture.claudeLogin("copied-original", expired: true)
+        let secondJSON = distinct ? Fixture.claudeLogin("separate-original", expired: true) : firstJSON
+        try JSONSerialization.data(withJSONObject: firstJSON).write(to: first.appendingPathComponent(".credentials.json"))
+        try JSONSerialization.data(withJSONObject: secondJSON).write(to: second.appendingPathComponent(".credentials.json"))
+        func account(_ directory: URL) -> DiscoveredAccount {
+            let suffix = SHA256.hash(data: Data(directory.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
+            let service = Fixture.service + "-" + suffix
+            return DiscoveredAccount(id: "claude:" + service, provider: .claude,
+                                     profileName: directory.lastPathComponent,
+                                     source: .claudeKeychain(service: service, configDir: directory))
+        }
+        let provider = Provider$Claude()
+        Fixture.response = .heldRenewed
+        Fixture.expectedOAuthDirectory = first
+        defer { Fixture.releaseRefresh() }
+        let firstFetch = Task { await provider.fetch(account(first)) }
+        try await waitForRefresh(1)
+        let secondFetch = Task { await provider.fetch(account(second)) }
+        for _ in 0..<100 {
+            Fixture.lock.lock()
+            let postedBoth = Fixture.refreshCalls >= 2
+            Fixture.lock.unlock()
+            if postedBoth { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        Fixture.lock.lock()
+        let whileHeld = Fixture.refreshCalls
+        Fixture.lock.unlock()
+        Fixture.releaseRefresh()
+        _ = await firstFetch.value
+        _ = await secondFetch.value
+        print("distinct=\(distinct), simultaneous POSTs=\(whileHeld), total POSTs=\(Fixture.refreshCalls)")
+        try expect(whileHeld == (distinct ? 2 : 1) && Fixture.refreshCalls == (distinct ? 2 : 1),
+                   "Different Claude profile services submitted the same rotating grant concurrently")
+    }
+
+    @MainActor
+    private static func auditClaudeOrphanDesktopReadd(enabled: Bool) throws {
+        let (account, authFile) = try claudeFileAccount(primary: false, expired: false)
+        let profile = authFile.deletingLastPathComponent()
+        CLISelection$Claude.isEnabled = enabled
+        let first = try switchSuccessfully(account)
+        let oldDirectory = try desktopDirectory(first.arguments)
+        let markerName = "synthetic-desktop-session"
+        try Data("account-a".utf8).write(to: oldDirectory.appendingPathComponent(markerName))
+        let store = UsageStore(providers: [.claude: Provider$Claude()], discovery: Discovery$Real())
+        store.rediscover(force: true)
+        try expect(store.account(for: account.id) != nil, "Fixture did not discover the original completed profile")
+        try Foundation.FileManager.default.removeItem(at: authFile)
+        Fixture.keychainExists = false
+        Fixture.claudeEntries = [:]
+        store.rediscover(force: true)
+        try expect(store.account(for: account.id) == nil, "Logged-out profile remained a discovered account")
+        let menu = RegressionProfileMenu(store: store)
+        try expect(menu.profiles().contains { $0.url.path == profile.path }, "Logged-out profile was not offered as unfinished")
+        menu.remove(path: profile.path)
+        if let failure = menu.failure { throw failure }
+        try expect(!Foundation.FileManager.default.fileExists(atPath: profile.path), "Orphan removal did not remove the CLI profile")
+        // Reuse the same profile name for a different login after the removal.
+        try Foundation.FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("account-b", expired: false)).write(to: authFile)
+        store.rediscover(force: true)
+        guard let replacement = store.account(for: account.id) else { throw Failure(description: "Same-name replacement was not discovered") }
+        let second = try switchSuccessfully(replacement)
+        let newDirectory = try desktopDirectory(second.arguments)
+        try expect(newDirectory != oldDirectory && !Foundation.FileManager.default.fileExists(atPath: newDirectory.appendingPathComponent(markerName).path),
+                   "Removing an unfinished profile retained the old Desktop login for its same-name replacement")
+    }
+
+    @MainActor
+    private static func claudePrimaryUsageOwnerAudit(replace: Bool = true, keychain: Bool = false) async throws {
+        let (account, file) = try claudeFileAccount(primary: true, expired: false)
+        if keychain {
+            Fixture.keychainExists = true
+            Fixture.keychain = Fixture.claudeLogin("unchanged-primary-keychain", expired: false)
+        }
+        let directory = file.deletingLastPathComponent()
+        guard let owner = DirectoryIdentity.capture(directory) else { throw Failure(description: "Missing original primary owner") }
+        Fixture.holdFirstUsage = true
+        Fixture.releaseFirstUsage = true
+        Fixture.manualPollingTimer = true
+        let probe = UsageCompletionProbe(Provider$Claude())
+        let store = UsageStore(providers: [.claude: probe], discovery: Discovery$Real())
+        store.start()
+        store.setCustomName("Personal label", for: account.id)
+        store.setHidden(account.id, hidden: true)
+        for _ in 0..<400 {
+            if store.columns.first(where: { $0.id == account.id })?.updatedAt != nil { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        guard let before = store.columns.first(where: { $0.id == account.id }), let updatedAt = before.updatedAt else {
+            throw Failure(description: "Initial real primary usage was not displayed")
+        }
+        try expect(before.windows.first?.utilization == 12 && UsageCache().load(id: account.id)?.windows.first?.utilization == 12,
+                   "Initial primary usage did not reach display/cache")
+        if replace { try replaceUsageOwner(directory, codex: false) }
+        store.rediscover(force: true)
+        guard let current = store.account(for: account.id), let after = store.columns.first(where: { $0.id == account.id }) else {
+            throw Failure(description: "Primary account disappeared after rediscovery")
+        }
+        try expect(current.source == account.source && owner.matches(directory) == !replace,
+                   "Fixture did not preserve the logical primary source with the requested physical change")
+        print("Primary replaced=\(replace), keychain=\(keychain), discovered owner nil=\(current.claudeConfigOwner == nil), displayed=\(after.windows.first?.utilization ?? -1)")
+        if replace && !keychain {
+            try expect(after.windows.isEmpty && after.stats.isEmpty && after.subtitle == nil && after.updatedAt == nil
+                       && after.status == .loading && UsageCache().load(id: account.id) == nil,
+                       "Replacement primary file owner inherited retired primary usage and persistent cache")
+        } else {
+            try expect(after.windows == before.windows && after.updatedAt == updatedAt
+                       && UsageCache().load(id: account.id)?.updatedAt == updatedAt,
+                       "Stable primary file owner lost valid usage/cache")
+        }
+        try expectUsageOwnerPreferences(store, id: account.id)
+        try expect(await probe.completed == 1 && Fixture.refreshCalls == 0, "Primary ownership check triggered extra usage or renewal")
+    }
+
+    @MainActor
+    private static func claudePrimaryRemovalOwnerAudit(replace: Bool = true) throws {
+        let manager = Foundation.FileManager.default
+        let (fixtureAccount, file) = try claudeFileAccount(primary: true, expired: false)
+        let directory = file.deletingLastPathComponent()
+        guard let account = Discovery$Real().discover().first(where: { $0.id == fixtureAccount.id }),
+              let owner = DirectoryIdentity.capture(directory) else {
+            throw Failure(description: "Original primary file owner was not discovered")
+        }
+        let desktopKey = AppSwitcher$Claude.key(for: account.id)
+        if replace { try replaceUsageOwner(directory, codex: false) }
+        try Data("preserve-primary-settings".utf8).write(to: directory.appendingPathComponent("settings-sentinel"))
+        let expectedData = try Data(contentsOf: file)
+        let expectedJSON = try JSONSerialization.jsonObject(with: expectedData) as! [String: Any]
+        try expect(owner.matches(directory) == !replace
+                   && AuthStorage$Claude.parse(expectedJSON)?.accessToken == (replace ? "synthetic-replacement-usage-owner" : "synthetic-file-owner"),
+                   "Primary fixture did not establish the required directory and credential replacement")
+        var refused = false
+        do { try AccountRemoval.remove(account) } catch { refused = true }
+        let retained = (try? Data(contentsOf: file)) == expectedData
+        print("Primary removal replaced=\(replace), discovered owner nil=\(account.claudeConfigOwner == nil), refused=\(refused), credentials retained=\(retained)")
+        if replace {
+            try expect(refused && retained,
+                       "Stale primary discovery deleted the replacement physical file login")
+            try expect(AppSwitcher$Claude.key(for: account.id) == desktopKey,
+                       "Refused stale primary removal retired the replacement Desktop session")
+        } else {
+            try expect(!refused && !manager.fileExists(atPath: file.path),
+                       "Stable primary file login could not be removed")
+            try expect(AppSwitcher$Claude.key(for: account.id) != desktopKey,
+                       "Successful primary removal retained the retired Desktop session")
+        }
+        try expect(try String(contentsOf: directory.appendingPathComponent("settings-sentinel")) == "preserve-primary-settings",
+                   "Primary removal changed unrelated native settings")
+        try expect(Fixture.refreshCalls == 0, "Primary removal issued an OAuth request")
+    }
+
+    @MainActor
+    private static func claudeOrphanDesktopVariant(pathKind: String, refusal: String? = nil) throws {
+        let manager = Foundation.FileManager.default
+        let logicalRoot = ProfileDirectories.claudeRoot
+        let physicalRoot = Fixture.root.appendingPathComponent("orphan-physical-root")
+        try manager.createDirectory(at: physicalRoot, withIntermediateDirectories: true)
+        try manager.createSymbolicLink(at: logicalRoot, withDestinationURL: physicalRoot)
+        let profile = logicalRoot.appendingPathComponent("orphan-owner")
+        try manager.createDirectory(at: profile, withIntermediateDirectories: true)
+        var path = pathKind == "canonical" ? profile.resolvingSymlinksInPath().path : profile.path
+        if pathKind == "trailing" { path += "/" }
+        let digest = SHA256.hash(data: Data(path.utf8)).map { String(format: "%02x", $0) }.joined()
+        let service = Fixture.service + "-" + String(digest.prefix(8))
+        let id = "claude:" + service
+        Fixture.keychainExists = false
+        Fixture.claudeEntries = [service: Fixture.claudeLogin("original-orphan-owner", expired: false)]
+        Fixture.expectedOAuthDirectory = profile
+        let store = UsageStore(providers: [.claude: Provider$Claude()], discovery: Discovery$Real())
+        store.rediscover(force: true)
+        guard let account = store.account(for: id) else { throw Failure(description: "Variant login was not discovered") }
+        let first = try switchSuccessfully(account)
+        let oldDirectory = try desktopDirectory(first.arguments)
+        let marker = oldDirectory.appendingPathComponent("synthetic-old-desktop-session")
+        try Data("original-session".utf8).write(to: marker)
+        let oldKey = AppSwitcher$Claude.key(for: id)
+        Fixture.claudeEntries = [:]
+        store.rediscover(force: true)
+        let menu = RegressionProfileMenu(store: store)
+        try expect(menu.profiles().contains { $0.url.path == profile.path }, "Logged-out variant was not offered as an orphan")
+        if refusal == "stub" {
+            Fixture.claudeEntries = [service: ["trustedDeviceToken": "synthetic-stub"]]
+            Fixture.denyKeychainDelete = true
+        } else if refusal == "completed" {
+            Fixture.claudeEntries = [service: Fixture.claudeLogin("new-login-before-confirmation", expired: false)]
+        }
+        menu.remove(path: profile.path)
+        if refusal != nil {
+            try expect(menu.failure != nil && manager.fileExists(atPath: profile.path), "Refused orphan removal deleted the profile")
+            try expect(AppSwitcher$Claude.key(for: id) == oldKey && (try String(contentsOf: marker)) == "original-session",
+                       "Refused orphan removal retired a live Desktop generation")
+            return
+        }
+        if let failure = menu.failure { throw failure }
+        try expect(!manager.fileExists(atPath: profile.path), "Orphan cleanup retained its directory")
+        // A previously running Desktop can recreate its old path after retirement.
+        try manager.createDirectory(at: oldDirectory, withIntermediateDirectories: true)
+        try Data("late-original-session".utf8).write(to: marker)
+        try manager.createDirectory(at: profile, withIntermediateDirectories: true)
+        Fixture.claudeEntries = [service: Fixture.claudeLogin("replacement-orphan-owner", expired: false)]
+        store.rediscover(force: true)
+        guard let replacement = store.account(for: id) else { throw Failure(description: "Variant replacement was not discovered") }
+        let second = try switchSuccessfully(replacement)
+        let current = try desktopDirectory(second.arguments)
+        try expect(current != oldDirectory && !manager.fileExists(atPath: current.appendingPathComponent(marker.lastPathComponent).path),
+                   "An orphan path variant reused a retired Desktop login after same-name re-addition")
+    }
+
+    @MainActor
+    private static func claudeQueuedPublication(keychain: Bool, status: Int = 200,
+                                                change: String = "login") async throws {
+        let manager = Foundation.FileManager.default
+        let (fixtureAccount, file) = try claudeFileAccount(primary: true, expired: false)
+        try manager.createDirectory(at: ProfileDirectories.claudeRoot, withIntermediateDirectories: true)
+        let initial = Fixture.claudeLogin("file-owner", expired: false)
+        if keychain { Fixture.keychainExists = true; Fixture.keychain = initial }
+        let directory = file.deletingLastPathComponent()
+        guard let owner = DirectoryIdentity.capture(directory) else { throw Failure(description: "Missing initial primary owner") }
+        Fixture.holdFirstUsage = true
+        Fixture.firstUsageStatus = status
+        Fixture.manualPollingTimer = true
+        let probe = UsageCompletionProbe(Provider$Claude())
+        let store = UsageStore(providers: [.claude: probe], discovery: Discovery$Real())
+        store.start()
+        guard let account = store.account(for: fixtureAccount.id) else { throw Failure(description: "Missing real Claude discovery") }
+        for _ in 0..<400 {
+            if Fixture.usageCalls == 1 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(Fixture.usageCalls == 1, "Initial Claude usage did not reach HTTP")
+        var oldPublished = false
+        var staleStatus = false
+        let observation = store.$columns.sink { columns in
+            guard let column = columns.first(where: { $0.id == account.id }) else { return }
+            if column.windows.first?.utilization == 12 { oldPublished = true }
+            if case .reauth = column.status { staleStatus = true }
+            if case .waiting = column.status { staleStatus = true }
+        }
+        defer { observation.cancel(); Fixture.denyClaudeRead = false }
+        Fixture.lock.lock()
+        Fixture.pauseProfileSnapshot = true
+        Fixture.profileSnapshotPaused = false
+        Fixture.resumeProfileSnapshot = false
+        Fixture.lock.unlock()
+        let mutation = Task.detached {
+            defer {
+                Fixture.lock.lock()
+                Fixture.releaseFirstUsage = true
+                Fixture.resumeProfileSnapshot = true
+                Fixture.lock.unlock()
+            }
+            var paused = false
+            for _ in 0..<400 {
+                Fixture.lock.lock(); paused = Fixture.profileSnapshotPaused; Fixture.lock.unlock()
+                if paused { break }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            try expect(paused, "Discovery did not block the UI publication boundary")
+            Fixture.lock.lock(); Fixture.releaseFirstUsage = true; Fixture.lock.unlock()
+            for _ in 0..<400 {
+                if await probe.completed == 1 { break }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            try expect(await probe.completed == 1, "Claude provider did not finish before changing the login")
+            var replacement = initial
+            if change == "login" {
+                replacement = Fixture.claudeLogin("replacement-publication", expired: false)
+            } else if change == "session" {
+                var oauth = replacement["claudeAiOauth"] as! [String: Any]
+                oauth["refreshToken"] = "synthetic-replacement-session"
+                replacement["claudeAiOauth"] = oauth
+            } else if change == "metadata" {
+                replacement["unrelatedMetadata"] = "changed"
+            }
+            if change == "unreadable" { Fixture.denyClaudeRead = true }
+            else if keychain { Fixture.keychain = replacement }
+            else { try JSONSerialization.data(withJSONObject: replacement).write(to: file, options: .atomic) }
+            try expect(owner.matches(directory), "Publication scenario unexpectedly replaced its directory")
+        }
+        store.rediscover(force: true)
+        try await mutation.value
+        try expect(store.account(for: account.id) == account, "Publication scenario changed the discovered owner")
+        guard let tick = Fixture.pollingTick else { throw Failure(description: "Missing controlled scheduler") }
+        if change == "unreadable" {
+            for _ in 0..<160 {
+                if case .failed = store.columns.first(where: { $0.id == account.id })?.status { break }
+                tick(); try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            guard case .failed = store.columns.first(where: { $0.id == account.id })?.status else {
+                throw Failure(description: "Unavailable current credentials published queued Claude usage")
+            }
+            try expect(!oldPublished && Fixture.usageCalls == 1 && UsageCache().load(id: account.id) == nil,
+                       "Unavailable owner caused stale publication or immediate repeated polling")
+        } else {
+            let stable = change == "metadata"
+            let expected: Double = stable ? 12 : 84
+            for _ in 0..<400 {
+                if store.columns.first(where: { $0.id == account.id })?.windows.first?.utilization == expected { break }
+                tick(); try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            let displayed = store.columns.first(where: { $0.id == account.id })?.windows.first?.utilization
+            print("Claude publication keychain=\(keychain), HTTP=\(status), change=\(change), old=\(oldPublished), staleStatus=\(staleStatus), displayed=\(String(describing: displayed))")
+            try expect(oldPublished == stable && !staleStatus && displayed == expected
+                       && UsageCache().load(id: account.id)?.windows.first?.utilization == expected,
+                       "A queued Claude result crossed a changed login or valid metadata-only usage was lost")
+            try expect(await probe.completed == (stable ? 1 : 2), "Publication fencing did not preserve normal polling")
+        }
+        try expect(Fixture.refreshCalls == 0, "Publication fencing spent a fresh login's refresh grant")
+    }
+
+    @MainActor
+    private static func claudeUnresolvedPublication(failedBackend: Bool = false) async throws {
+        let manager = Foundation.FileManager.default
+        let (fixtureAccount, file) = try claudeFileAccount(primary: true, expired: true)
+        try manager.createDirectory(at: ProfileDirectories.claudeRoot, withIntermediateDirectories: true)
+        var initial = Fixture.claudeLogin("nonrefreshable-publication", expired: true)
+        var oauth = initial["claudeAiOauth"] as! [String: Any]
+        oauth["refreshTokenExpiresAt"] = 1
+        initial["claudeAiOauth"] = oauth
+        try JSONSerialization.data(withJSONObject: initial).write(to: file)
+        if failedBackend {
+            Fixture.keychainExists = true
+            Fixture.discoveredClaudeService = Fixture.service
+            Fixture.keychain = initial
+            Fixture.denyClaudeRead = true
+            try manager.removeItem(at: file)
+        }
+        Fixture.manualPollingTimer = true
+        let probe = UnresolvedCompletionProbe()
+        let store = UsageStore(providers: [.claude: probe], discovery: Discovery$Real())
+        store.start()
+        guard let account = store.account(for: fixtureAccount.id) else { throw Failure(description: "Unresolved primary login was not discovered") }
+        var staleReauth = false
+        let observation = store.$columns.sink { columns in
+            if case .reauth = columns.first(where: { $0.id == account.id })?.status { staleReauth = true }
+        }
+        defer { observation.cancel(); Fixture.denyClaudeRead = false }
+        for _ in 0..<400 {
+            if await probe.started == 1 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        let started = await probe.started
+        let completedBeforeRelease = await probe.completed
+        try expect(started == 1 && completedBeforeRelease == 0,
+                   "Initial unresolved provider did not reach its entry barrier")
+        let completion = DispatchSemaphore(value: 0)
+        let mutation = Task.detached {
+            defer { completion.signal() }
+            await probe.release()
+            for _ in 0..<400 {
+                if await probe.completed == 1 { break }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            try expect(await probe.completed == 1 && Fixture.usageCalls == 0 && Fixture.refreshCalls == 0,
+                       "Unresolved result unexpectedly used HTTP or did not finish before login")
+            if !failedBackend {
+                try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("fresh-publication", expired: false))
+                    .write(to: file, options: .atomic)
+            }
+        }
+        // No discovery or publication can run between resolution and the login.
+        let resumed = completion.wait(timeout: .now() + 3) == .success
+        try await mutation.value
+        try expect(resumed, "Unresolved provider completion barrier timed out")
+        try expect(store.account(for: account.id) == account, "Unresolved scenario changed its discovered owner")
+        guard let tick = Fixture.pollingTick else { throw Failure(description: "Missing scheduler boundary") }
+        for _ in 0..<120 { tick(); try await Task.sleep(nanoseconds: 5_000_000) }
+        if failedBackend {
+            guard let current = store.columns.first(where: { $0.id == account.id }) else { throw Failure(description: "Unavailable preferred owner disappeared") }
+            if case .loading = current.status { throw Failure(description: "Unavailable backend never completed its first attempt") }
+            try expect(await probe.completed == 1 && Fixture.usageCalls == 0 && current.windows.isEmpty,
+                       "Unchanged unavailable credentials entered an immediate superseded retry loop")
+        } else {
+            let completed = await probe.completed
+            try expect(!staleReauth && completed == 2 && Fixture.usageCalls == 1
+                       && store.columns.first(where: { $0.id == account.id })?.windows.first?.utilization == 12,
+                       "Queued nonrefreshable result requested login for the fresh replacement session")
+        }
+        try expect(Fixture.refreshCalls == 0, "Unresolved-result fencing issued an OAuth request")
+    }
+
+    @MainActor
+    private static func codexOwnRefreshRediscovery(mode: String) async throws {
+        Fixture.keychainExists = false
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("own-refresh")
+        let id = AuthSwap$Codex.profileColumnID(home.lastPathComponent)
+        try Fixture.codexLogin(home, account: "same-account", mode: mode, expired: true)
+        guard let original = try AuthSwap$Codex.authData(home: home),
+              let directory = DirectoryIdentity.capture(home) else {
+            throw Failure(description: "Expired login owner was not established")
+        }
+        // Seed a previous successful poll, then let the production provider renew
+        // this already-expired login. No client rewrites credentials during the run.
+        var cached = AccountColumn(id: id, provider: .codex, profileName: home.lastPathComponent)
+        cached.windows = [LimitWindow(key: "main.primary_window", title: "Five hours", utilization: 7, resetsAt: nil)]
+        cached.subtitle = "Existing account usage"
+        cached.updatedAt = Date().addingTimeInterval(-300)
+        cached.status = .ok
+        UsageCache().save(cached)
+        Fixture.response = .renewed
+        Fixture.holdFirstUsage = true
+        Fixture.manualPollingTimer = true
+        let probe = RoutedUsageCompletionProbe()
+        let store = UsageStore(providers: [.codex: probe], discovery: RoutedUsageDiscovery(accountID: id))
+        store.start()
+        guard let initial = store.columns.first(where: { $0.id == id }) else {
+            throw Failure(description: "The expired account did not hydrate its prior usage")
+        }
+        try expect(initial.fromCache && initial.windows == cached.windows,
+                   "Fixture did not establish a cached column before renewal")
+        for _ in 0..<400 {
+            if Fixture.usageCalls == 1 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        defer {
+            Fixture.lock.lock()
+            Fixture.releaseFirstUsage = true
+            Fixture.lock.unlock()
+        }
+        guard let rotated = try AuthSwap$Codex.authData(home: home) else {
+            throw Failure(description: "The internal rotation lost its credentials")
+        }
+        let tokens = (try JSONSerialization.jsonObject(with: rotated) as? [String: Any])?["tokens"] as? [String: Any]
+        let completedBeforeRediscovery = await probe.completed
+        try expect(Fixture.refreshCalls == 1 && Fixture.usageCalls == 1 && completedBeforeRediscovery == 0,
+                   "Production renewal did not finish before the held usage request")
+        try expect(rotated != original && tokens?["refresh_token"] as? String == "synthetic-rotated"
+                   && Provider$Codex.parseAuth(rotated)?.accountID == "same-account" && directory.matches(home),
+                   "The control replaced a login owner instead of rotating its grant internally")
+        store.rediscover(force: true)
+        guard let rediscovered = store.columns.first(where: { $0.id == id }) else {
+            throw Failure(description: "Rediscovery removed the renewed account")
+        }
+        try expect(rediscovered.windows == initial.windows && rediscovered.subtitle == initial.subtitle
+                   && rediscovered.updatedAt == initial.updatedAt && rediscovered.fromCache == initial.fromCache
+                   && UsageCache().load(id: id)?.windows == cached.windows,
+                   "Internal token rotation retired the account's existing usage/cache during rediscovery")
+        guard let tick = Fixture.pollingTick else { throw Failure(description: "Missing scheduler tick") }
+        for _ in 0..<8 { tick(); try await Task.sleep(nanoseconds: 5_000_000) }
+        let completedWhileHeld = await probe.completed
+        try expect(Fixture.usageCalls == 1 && completedWhileHeld == 0,
+                   "Rediscovery replaced the generation of the held own-refresh request")
+        Fixture.lock.lock()
+        Fixture.releaseFirstUsage = true
+        Fixture.lock.unlock()
+        for _ in 0..<400 {
+            if store.columns.first(where: { $0.id == id })?.windows.first?.utilization == 12 { break }
+            tick()
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(store.columns.first(where: { $0.id == id })?.windows.first?.utilization == 12
+                   && UsageCache().load(id: id)?.windows.first?.utilization == 12
+                   && store.columns.first(where: { $0.id == id })?.fromCache == false,
+                   "Rediscovery discarded the valid usage returned after its own rotation")
+        let completedAfterRelease = await probe.completed
+        try expect(Fixture.refreshCalls == 1 && Fixture.usageCalls == 1 && completedAfterRelease == 1,
+                   "Own rotation caused an unnecessary refresh or repeated usage poll")
     }
 
     @MainActor

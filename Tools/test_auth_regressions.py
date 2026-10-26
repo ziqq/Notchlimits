@@ -17,6 +17,11 @@ class AuthenticationRegressions(unittest.TestCase):
         # The assertion is identical for both revisions; only the old save API differs.
         keychain = (SOURCES / "Providers/AuthStorage$Claude.swift").read_text()
         flags = () if "expected: Credentials" in keychain else ("-DLEGACY_CLAUDE_SAVE",)
+        account_model = (SOURCES / "Model/Account.swift").read_text()
+        if "func fetchValidated(" in account_model:
+            flags += ("-DVALIDATED_USAGE",)
+        if "let claudePrimaryOwner:" in account_model:
+            flags += ("-DCLAUDE_PRIMARY_OWNER",)
         provider = (SOURCES / "Providers/Provider$Claude.swift").read_text()
         if "func prepareForTermination(" in provider:
             flags += ("-DCLAUDE_TERMINATION_DRAIN",)
@@ -104,6 +109,153 @@ final class NSMenuItem { var representedObject: Any? }
         with tempfile.TemporaryDirectory(prefix="notchlimits-auth-fixture-", dir="/private/tmp") as directory:
             result = run_fixture(self.executable, scenario, pathlib.Path(directory))
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_claude_publication_file_200_login(self):
+        self.check_scenario("claude-publication-file-200-login")
+
+    def test_claude_publication_file_401_session(self):
+        self.check_scenario("claude-publication-file-401-session")
+
+    def test_claude_publication_file_429_login(self):
+        self.check_scenario("claude-publication-file-429-login")
+
+    def test_claude_publication_file_200_metadata(self):
+        self.check_scenario("claude-publication-file-200-metadata")
+
+    def test_claude_publication_keychain_200_login(self):
+        self.check_scenario("claude-publication-keychain-200-login")
+
+    def test_claude_publication_keychain_401_session(self):
+        self.check_scenario("claude-publication-keychain-401-session")
+
+    def test_claude_publication_keychain_429_login(self):
+        self.check_scenario("claude-publication-keychain-429-login")
+
+    def test_claude_publication_keychain_200_metadata(self):
+        self.check_scenario("claude-publication-keychain-200-metadata")
+
+    def test_claude_publication_keychain_unreadable(self):
+        self.check_scenario("claude-publication-keychain-unreadable")
+
+    def test_claude_unresolved_publication_replaced(self):
+        self.check_scenario("claude-unresolved-publication-replaced")
+
+    def test_claude_unresolved_publication_unavailable_control(self):
+        self.check_scenario("claude-unresolved-publication-unavailable-control")
+
+    def test_codex_own_refresh_rediscovery_file(self):
+        self.check_scenario("codex-own-refresh-rediscovery-file")
+
+    def test_codex_own_refresh_rediscovery_keyring(self):
+        self.check_scenario("codex-own-refresh-rediscovery-keyring")
+
+    def test_codex_own_refresh_rediscovery_auto(self):
+        self.check_scenario("codex-own-refresh-rediscovery-auto")
+
+    def test_usage_disappear_readd(self):
+        self.check_scenario("usage-disappear-readd")
+
+    def test_audit_codex_queued_login_primary_file(self):
+        self.check_scenario("audit-codex-queued-login-primary-file")
+
+    def test_audit_codex_queued_login_primary_keyring(self):
+        self.check_scenario("audit-codex-queued-login-primary-keyring")
+
+    def test_audit_codex_queued_login_primary_auto(self):
+        self.check_scenario("audit-codex-queued-login-primary-auto")
+
+    def test_audit_codex_queued_login_selected_file(self):
+        self.check_scenario("audit-codex-queued-login-selected-file")
+
+    def test_audit_codex_queued_login_selected_keyring(self):
+        self.check_scenario("audit-codex-queued-login-selected-keyring")
+
+    def test_audit_codex_queued_login_selected_auto(self):
+        self.check_scenario("audit-codex-queued-login-selected-auto")
+
+    def test_audit_codex_queued_login_primary_metadata_control(self):
+        self.check_scenario("audit-codex-queued-login-primary-metadata-control")
+
+    def test_audit_codex_queued_login_selected_metadata_control(self):
+        self.check_scenario("audit-codex-queued-login-selected-metadata-control")
+
+    def test_codex_retarget_renewal_serialized_file(self):
+        self.check_scenario("codex-retarget-renewal-serialized-file")
+
+    def test_codex_retarget_renewal_serialized_keyring(self):
+        self.check_scenario("codex-retarget-renewal-serialized-keyring")
+
+    def test_codex_retarget_renewal_serialized_auto(self):
+        self.check_scenario("codex-retarget-renewal-serialized-auto")
+
+    def test_codex_retarget_renewal_durable_control(self):
+        self.check_scenario("codex-retarget-renewal-durable-control")
+
+    def test_codex_renewal_distinct_columns_control(self):
+        self.check_scenario("codex-renewal-distinct-columns-control")
+
+    def test_codex_queued_same_account_reauth_file(self):
+        self.check_scenario("codex-queued-same-account-reauth-file")
+
+    def test_codex_queued_same_account_reauth_keyring(self):
+        self.check_scenario("codex-queued-same-account-reauth-keyring")
+
+    def test_codex_queued_same_account_reauth_auto(self):
+        self.check_scenario("codex-queued-same-account-reauth-auto")
+
+    def test_codex_queued_reauth_metadata_control(self):
+        self.check_scenario("codex-queued-reauth-metadata-control")
+
+    def test_codex_completion_proof_same_account_success(self):
+        self.check_scenario("codex-completion-proof-same-account-success")
+
+    def test_codex_completion_proof_same_account_reauth(self):
+        self.check_scenario("codex-completion-proof-same-account-reauth")
+
+    def test_codex_completion_proof_same_account_backoff(self):
+        self.check_scenario("codex-completion-proof-same-account-backoff")
+
+    def test_codex_completion_proof_metadata_backoff_control(self):
+        self.check_scenario("codex-completion-proof-metadata-backoff-control")
+
+    def test_claude_copied_grant_concurrent_audit(self):
+        self.check_scenario("claude-copied-grant-concurrent-audit")
+
+    def test_claude_distinct_grants_concurrent_control_audit(self):
+        self.check_scenario("claude-distinct-grants-concurrent-control-audit")
+
+    def test_audit_claude_orphan_desktop_on(self):
+        self.check_scenario("audit-claude-orphan-desktop-on")
+
+    def test_audit_claude_orphan_desktop_off(self):
+        self.check_scenario("audit-claude-orphan-desktop-off")
+
+    def test_claude_primary_usage_owner_replacement_audit(self):
+        self.check_scenario("claude-primary-usage-owner-replacement-audit")
+
+    def test_claude_primary_usage_owner_stable_control_audit(self):
+        self.check_scenario("claude-primary-usage-owner-stable-control-audit")
+
+    def test_claude_primary_usage_owner_keychain_control_audit(self):
+        self.check_scenario("claude-primary-usage-owner-keychain-control-audit")
+
+    def test_claude_primary_removal_owner_replacement_audit(self):
+        self.check_scenario("claude-primary-removal-owner-replacement-audit")
+
+    def test_claude_primary_removal_owner_stable_control_audit(self):
+        self.check_scenario("claude-primary-removal-owner-stable-control-audit")
+
+    def test_claude_orphan_desktop_canonical(self):
+        self.check_scenario("claude-orphan-desktop-canonical")
+
+    def test_claude_orphan_desktop_trailing(self):
+        self.check_scenario("claude-orphan-desktop-trailing")
+
+    def test_claude_orphan_desktop_stub_refusal(self):
+        self.check_scenario("claude-orphan-desktop-stub-refusal")
+
+    def test_claude_orphan_desktop_completed_refusal(self):
+        self.check_scenario("claude-orphan-desktop-completed-refusal")
 
     def test_codex_routed_usage_queued_primary_replacement_file(self):
         self.check_scenario("codex-routed-usage-queued-primary-replacement-file")

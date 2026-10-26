@@ -83,6 +83,13 @@ final class UsageStore: ObservableObject {
             runtime[$0.id]?.codexUsageOwner != usageOwners[$0.id]
         }) else { return }
         let previousAccounts = accounts
+        let foundIDs = Set(found.map(\.id))
+        for account in previousAccounts where !foundIDs.contains(account.id) {
+            // A later same-name login must not hydrate the retired owner's state.
+            cache.remove(id: account.id)
+            history.purge(columnID: account.id)
+            notifier.purge(columnID: account.id)
+        }
         accounts = found
 
         var next: [AccountColumn] = []
@@ -91,6 +98,7 @@ final class UsageStore: ObservableObject {
             let replaced = previous.map {
                 $0.source != account.source
                     || $0.claudeConfigOwner != account.claudeConfigOwner
+                    || $0.claudePrimaryOwner != account.claudePrimaryOwner
                     || $0.codexHomeOwner != account.codexHomeOwner
                     || $0.codexHomeMissingPath != account.codexHomeMissingPath
                     || runtime[account.id]?.codexUsageOwner != usageOwners[account.id]
@@ -258,8 +266,21 @@ final class UsageStore: ObservableObject {
             finish(account.id, generation: generation, outcome: .failure(L.t("error.noProvider")))
             return
         }
-        let outcome = await provider.fetch(account)
-        finish(account.id, generation: generation, outcome: outcome)
+        let result = await provider.fetchValidated(account)
+        guard runtime[account.id]?.generation == generation else { return }
+        if let isCurrent = result.isCurrent {
+            do {
+                guard try isCurrent() else {
+                    rediscover(force: true)
+                    finish(account.id, generation: generation, outcome: .superseded)
+                    return
+                }
+            } catch {
+                finish(account.id, generation: generation, outcome: .failure(error.localizedDescription))
+                return
+            }
+        }
+        finish(account.id, generation: generation, outcome: result.outcome)
     }
 
     private func finish(_ id: String, generation: UUID, outcome: FetchOutcome) {
