@@ -99,6 +99,7 @@ final class NSMenuItem { var representedObject: Any? }
             "Core/AccountSwitcher.swift", "Core/AppAccountSwitcher.swift",
             *(["Core/CLISelection$Claude.swift"] if (SOURCES / "Core/CLISelection$Claude.swift").exists() else []),
             "Core/DefaultsMigration.swift", "Core/UsageStore.swift", "Core/UsageCache.swift",
+            "Core/UsageHistory.swift", "Core/ThresholdNotifier.swift",
             "Providers/AuthStorage$Claude.swift", "Providers/OAuth$Claude.swift",
             "Providers/Provider$Claude.swift", "Providers/OAuth$Codex.swift",
             "Providers/Provider$Codex.swift", "Providers/Discovery$Real.swift",
@@ -109,6 +110,129 @@ final class NSMenuItem { var representedObject: Any? }
         with tempfile.TemporaryDirectory(prefix="notchlimits-auth-fixture-", dir="/private/tmp") as directory:
             result = run_fixture(self.executable, scenario, pathlib.Path(directory))
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_audit_claude_late_cache_file(self):
+        self.check_scenario("audit-claude-late-cache-file")
+
+    def test_audit_claude_late_cache_keychain(self):
+        self.check_scenario("audit-claude-late-cache-keychain")
+
+    def test_audit_claude_late_cache_file_metadata(self):
+        self.check_scenario("audit-claude-late-cache-file-metadata")
+
+    def test_audit_claude_late_cache_keychain_metadata(self):
+        self.check_scenario("audit-claude-late-cache-keychain-metadata")
+
+    def test_audit_codex_readd_during_removal_keyring(self):
+        self.check_scenario("audit-codex-readd-during-removal-keyring")
+
+    def test_audit_codex_readd_during_removal_auto(self):
+        self.check_scenario("audit-codex-readd-during-removal-auto")
+
+    def test_audit_codex_readd_during_removal_file_control(self):
+        self.check_scenario("audit-codex-readd-during-removal-file-control")
+
+    def test_primary_cli_owner_replacement(self):
+        self.check_scenario("primary-cli-owner-replacement")
+
+    def test_primary_cli_owner_replacement_before(self):
+        self.check_scenario("primary-cli-owner-replacement-before")
+
+    def test_primary_cli_owner_stable_control(self):
+        self.check_scenario("primary-cli-owner-stable-control")
+
+    def test_primary_cli_keychain_fallback_control(self):
+        self.check_scenario("primary-cli-keychain-fallback-control")
+
+    def test_primary_cli_keychain_fallback_before_control(self):
+        self.check_scenario("primary-cli-keychain-fallback-before-control")
+
+    def test_primary_cli_owner_off_control(self):
+        self.check_scenario("primary-cli-owner-off-control")
+
+    def test_primary_cli_owner_off_before_control(self):
+        self.check_scenario("primary-cli-owner-off-before-control")
+
+    def test_primary_cli_owner_toggle_on(self):
+        self.check_scenario("primary-cli-owner-toggle-on")
+
+    def test_primary_cli_owner_toggle_off_control(self):
+        self.check_scenario("primary-cli-owner-toggle-off-control")
+
+    def test_primary_cli_file_to_keychain(self):
+        self.check_scenario("primary-cli-file-to-keychain")
+
+    def test_primary_cli_keychain_to_file(self):
+        self.check_scenario("primary-cli-keychain-to-file")
+
+    def test_claude_shared_primary_pending(self):
+        self.check_scenario("claude-shared-primary-pending")
+
+    def test_claude_shared_primary_pending_busy(self):
+        self.check_scenario("claude-shared-primary-pending-busy")
+
+    def test_claude_shared_primary_pending_inflight(self):
+        self.check_scenario("claude-shared-primary-pending-inflight")
+
+    def test_claude_shared_primary_pending_refused(self):
+        self.check_scenario("claude-shared-primary-pending-refused")
+
+    def test_claude_lone_primary_pending_control(self):
+        self.check_scenario("claude-lone-primary-pending-control")
+
+    def test_claude_lone_primary_pending_readd_control(self):
+        self.check_scenario("claude-lone-primary-pending-readd-control")
+
+    def test_claude_shared_primary_pending_async(self):
+        self.check_scenario("claude-shared-primary-pending-async")
+
+    def test_codex_pending_drain_current_owner_file(self):
+        self.check_scenario("codex-pending-drain-current-owner-file")
+
+    def test_codex_pending_drain_current_owner_keyring(self):
+        self.check_scenario("codex-pending-drain-current-owner-keyring")
+
+    def test_codex_pending_drain_current_owner_auto(self):
+        self.check_scenario("codex-pending-drain-current-owner-auto")
+
+    def test_codex_pending_drain_same_owner_control(self):
+        self.check_scenario("codex-pending-drain-same-owner-control")
+
+    def test_codex_rejected_login_receipt_retains_cache(self):
+        self.check_scenario("codex-rejected-login-receipt-retains-cache")
+
+    def test_codex_metadata_receipt_cache_control(self):
+        self.check_scenario("codex-metadata-receipt-cache-control")
+
+    def test_claude_own_renewal_usage_state_file(self):
+        self.check_scenario("claude-own-renewal-usage-state-file")
+
+    def test_claude_own_renewal_usage_state_keychain(self):
+        self.check_scenario("claude-own-renewal-usage-state-keychain")
+
+    def test_codex_own_renewal_usage_state_file(self):
+        self.check_scenario("codex-own-renewal-usage-state-file")
+
+    def test_codex_own_renewal_usage_state_keyring(self):
+        self.check_scenario("codex-own-renewal-usage-state-keyring")
+
+    def test_codex_own_renewal_usage_state_auto(self):
+        self.check_scenario("codex-own-renewal-usage-state-auto")
+
+    def test_codex_removal_recovery_keyring(self):
+        self.check_scenario("codex-removal-recovery-keyring")
+
+    def test_codex_removal_recovery_auto(self):
+        self.check_scenario("codex-removal-recovery-auto")
+
+    def test_codex_removal_recovery_file(self):
+        self.check_scenario("codex-removal-recovery-file")
+
+    def test_codex_removal_recovery_delete_refusal_control(self):
+        self.check_scenario("codex-removal-recovery-delete-refusal-control")
+
+    def test_codex_removal_recovery_move_refusal_control(self):
+        self.check_scenario("codex-removal-recovery-move-refusal-control")
 
     def test_claude_publication_file_200_login(self):
         self.check_scenario("claude-publication-file-200-login")

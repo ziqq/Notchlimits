@@ -456,11 +456,31 @@ enum AuthStorage$Claude {
                   let directory,
                   directory.matches(URL(fileURLWithPath: directory.path, isDirectory: true)) else { return false }
             let file = URL(fileURLWithPath: directory.path, isDirectory: true).appendingPathComponent(".credentials.json")
+            let retired = UserDefaults.standard.dictionary(forKey: removedPrimaryFallbackKey) as? [String: String]
+            let advancesRetirement = renewalLock?.isHeld == true
+                && retired != nil && fallbackIdentity(file) == retired
+            let previousData = advancesRetirement ? try? Data(contentsOf: file) : nil
+            func advanceRetirement(unchanged: Bool) {
+                guard advancesRetirement, storageLock.isHeld, renewalLock?.isHeld == true,
+                      let retired, let current = fallbackIdentity(file),
+                      UserDefaults.standard.dictionary(forKey: removedPrimaryFallbackKey) as? [String: String] == retired else { return }
+                if unchanged {
+                    guard current["device"] == retired["device"], current["inode"] == retired["inode"],
+                          let previousData, (try? Data(contentsOf: file)) == previousData else { return }
+                }
+                // Our verified write is not a native re-login. A failed write
+                // may change only permissions; keep that exact old file retired too.
+                UserDefaults.standard.set(current, forKey: removedPrimaryFallbackKey)
+            }
             do {
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
                 try data.write(to: file, options: .atomic)
+                advanceRetirement(unchanged: false)
                 return true
-            } catch { return false }
+            } catch {
+                advanceRetirement(unchanged: true)
+                return false
+            }
         }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

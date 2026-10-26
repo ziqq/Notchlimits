@@ -80,15 +80,13 @@ final class UsageStore: ObservableObject {
         // Пересобираем при любой смене состава ИЛИ активного (после свича id
         // могут совпасть, а флаг isActive — нет).
         guard found != accounts || found.contains(where: {
-            runtime[$0.id]?.codexUsageOwner != usageOwners[$0.id]
+            runtime[$0.id] == nil || runtime[$0.id]?.codexUsageOwner != usageOwners[$0.id]
         }) else { return }
         let previousAccounts = accounts
         let foundIDs = Set(found.map(\.id))
         for account in previousAccounts where !foundIDs.contains(account.id) {
             // A later same-name login must not hydrate the retired owner's state.
-            cache.remove(id: account.id)
-            history.purge(columnID: account.id)
-            notifier.purge(columnID: account.id)
+            retireUsage(account.id)
         }
         accounts = found
 
@@ -96,7 +94,7 @@ final class UsageStore: ObservableObject {
         for (index, account) in found.enumerated() {
             let previous = previousAccounts.first { $0.id == account.id }
             let replaced = previous.map {
-                $0.source != account.source
+                runtime[account.id] == nil || $0.source != account.source
                     || $0.claudeConfigOwner != account.claudeConfigOwner
                     || $0.claudePrimaryOwner != account.claudePrimaryOwner
                     || $0.codexHomeOwner != account.codexHomeOwner
@@ -106,9 +104,7 @@ final class UsageStore: ObservableObject {
             if replaced {
                 // A queued result must not populate a newly discovered owner.
                 // Keep user preferences, but retire usage and its generation.
-                cache.remove(id: account.id)
-                history.purge(columnID: account.id)
-                notifier.purge(columnID: account.id)
+                retireUsage(account.id)
             }
             if !replaced, var existing = columns.first(where: { $0.id == account.id }) {
                 // Уже известная колонка — данные сохраняем, обновляем активность.
@@ -219,28 +215,29 @@ final class UsageStore: ObservableObject {
     /// уведомлений. После удаления колонка исчезает и сама не возвращается.
     func removeAccount(id: String) throws {
         guard let account = accounts.first(where: { $0.id == id }) else { return }
-        try AccountRemoval.remove(account)
-        finishRemoval(account)
+        var removal: AccountRemoval.ClaudeRemoval?
+        try AccountRemoval.remove(account, claudeRemoval: { removal = $0 })
+        finishRemoval(account, claudeRemoval: removal)
     }
 
     func removeAccount(id: String, completion: @escaping (Result<Void, Error>) -> Void) {
         guard let account = accounts.first(where: { $0.id == id }) else { completion(.success(())); return }
-        AccountRemoval.remove(account) { result in
-            if case .success = result { self.finishRemoval(account) }
+        var removal: AccountRemoval.ClaudeRemoval?
+        AccountRemoval.remove(account, claudeRemoval: { removal = $0 }) { result in
+            if case .success = result { self.finishRemoval(account, claudeRemoval: removal) }
             completion(result)
         }
     }
 
-    private func finishRemoval(_ account: DiscoveredAccount) {
+    private func finishRemoval(_ account: DiscoveredAccount,
+                               claudeRemoval: AccountRemoval.ClaudeRemoval?) {
         let id = account.id
         if let claude = providers[.claude] as? Provider$Claude,
            case .claudeKeychain = account.source {
-            Task { await claude.accountRemoved(account) }
+            Task { await claude.accountRemoved(account, removal: claudeRemoval) }
         }
 
-        cache.remove(id: id)
-        history.purge(columnID: id)
-        notifier.purge(columnID: id)
+        retireUsage(id)
         runtime[id] = nil
         if customNames[id] != nil {
             customNames[id] = nil
@@ -260,6 +257,13 @@ final class UsageStore: ObservableObject {
 
     // MARK: - Опрос
 
+    /// Usage, history and notification state belong to one verified login epoch.
+    private func retireUsage(_ id: String) {
+        cache.remove(id: id)
+        history.purge(columnID: id)
+        notifier.purge(columnID: id)
+    }
+
     private func fetch(_ account: DiscoveredAccount, generation: UUID) async {
         guard runtime[account.id]?.generation == generation else { return }
         guard let provider = providers[account.provider] else {
@@ -271,7 +275,6 @@ final class UsageStore: ObservableObject {
         if let isCurrent = result.isCurrent {
             do {
                 guard try isCurrent() else {
-                    rediscover(force: true)
                     finish(account.id, generation: generation, outcome: .superseded)
                     return
                 }
@@ -293,8 +296,11 @@ final class UsageStore: ObservableObject {
 
         switch outcome {
         case .superseded:
-            // Keep newer state and retry on the next scheduler tick.
-            state.nextDue = Date()
+            // Retire all state of the superseded login, including outcomes that
+            // detect replacement before a publication proof can be captured.
+            runtime[id] = nil
+            rediscover(force: true)
+            return
 
         case .success(let snapshot):
             state.backoffStep = 0

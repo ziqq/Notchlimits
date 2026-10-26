@@ -9,6 +9,33 @@ struct AuthStorage$Codex {
     enum Mode: String { case file, keyring, auto, ephemeral }
     enum Backend { case file, keyring }
     struct Record { let data: Data; let backend: Backend }
+    struct RemovalKeyring {
+        let original: AuthStorage$Codex
+        let originalFile: Data?
+        let storage: AuthStorage$Codex
+        let owner: DirectoryIdentity
+
+        func finish() {
+            if owner.matches(storage.home) { try? FileManager.default.removeItem(at: storage.home) }
+        }
+
+        /// Moving an item back must not overwrite a login created during removal.
+        /// A refused restoration remains a normal, discoverable Keychain profile.
+        func restore() -> Bool {
+            guard owner.matches(storage.home) else { return false }
+            var info = stat()
+            if lstat(original.file.path, &info) == 0 {
+                guard let current = try? Data(contentsOf: original.file), current == originalFile else { return false }
+            } else if errno != ENOENT { return false }
+            let status = AuthStorage$Claude.access(interactive: false) {
+                SecItemUpdate(storage.query as CFDictionary,
+                              [kSecAttrAccount as String: original.account] as CFDictionary)
+            }
+            guard status == errSecSuccess || status == errSecItemNotFound else { return false }
+            finish()
+            return true
+        }
+    }
     enum Failure: LocalizedError {
         case settings, ephemeral, keychain(OSStatus)
         var errorDescription: String? {
@@ -110,7 +137,34 @@ struct AuthStorage$Codex {
         try save(record.data, backend: backend)
     }
 
-    func delete(fileHome: URL? = nil) throws {
+    /// Reserve the old Keychain item before its profile name becomes available.
+    /// Later deletion addresses only this unique namespace, never a re-added login.
+    func beginRemoval() throws -> RemovalKeyring? {
+        if mode == .file { return nil }
+        guard mode != .ephemeral else { throw Failure.ephemeral }
+        let originalFile = FileManager.default.fileExists(atPath: file.path) ? try Data(contentsOf: file) : nil
+        let recovery = ProfileDirectories.codexRoot
+            .appendingPathComponent("recovered-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        do {
+            try "cli_auth_credentials_store = \"keyring\"\n"
+                .write(to: recovery.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+            let storage = try AuthStorage$Codex(home: recovery, mode: .keyring)
+            guard let owner = DirectoryIdentity.capture(storage.home) else { throw Failure.settings }
+            let status = AuthStorage$Claude.access(interactive: false) {
+                SecItemUpdate(query as CFDictionary,
+                              [kSecAttrAccount as String: storage.account] as CFDictionary)
+            }
+            guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.keychain(status) }
+            return RemovalKeyring(original: self, originalFile: originalFile, storage: storage, owner: owner)
+        } catch {
+            try? FileManager.default.removeItem(at: recovery)
+            throw error
+        }
+    }
+
+    func delete(fileHome: URL? = nil, keyring: AuthStorage$Codex? = nil) throws {
         guard mode != .ephemeral else { throw Failure.ephemeral }
         let file = (fileHome ?? home).appendingPathComponent("auth.json")
         if mode == .file { try removeFile(at: file); return }
@@ -118,7 +172,9 @@ struct AuthStorage$Codex {
         let backup = !shared && FileManager.default.fileExists(atPath: file.path) ? try Data(contentsOf: file) : nil
         if !shared { try removeFile(at: file) }
         do {
-            let status = AuthStorage$Claude.access(interactive: false) { SecItemDelete(query as CFDictionary) }
+            let status = AuthStorage$Claude.access(interactive: false) {
+                SecItemDelete((keyring?.query ?? query) as CFDictionary)
+            }
             guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.keychain(status) }
         } catch {
             if let backup { try restoreFile(backup, at: file) }
