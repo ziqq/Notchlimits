@@ -110,11 +110,11 @@ enum AuthStorage$Claude {
                 // Suppress only the unchanged fallback retained by explicit
                 // primary removal. A new native file login is a primary owner.
                 if !found.keys.contains(baseService),
-                   let shared = found.keys.first(where: {
-                       configDirectory(for: $0).map(ProfileDirectories.isClaudeBase) == true
-                   }),
                    let retired = UserDefaults.standard.dictionary(forKey: removedPrimaryFallbackKey) as? [String: String],
                    let current = fallbackIdentity(file), retired == current {
+                    guard let shared = found.keys.first(where: {
+                        configDirectory(for: $0).map(ProfileDirectories.isClaudeBase) == true
+                    }) else { continue }
                     service = shared
                 } else {
                     service = baseService

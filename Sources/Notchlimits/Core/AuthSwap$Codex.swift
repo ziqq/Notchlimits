@@ -31,10 +31,18 @@ enum AuthSwap$Codex {
     private static let stashStoreKey = "codexAppStashStore"
     private static let stashHomeKey = "codexAppStashHome"
     private static let sourceAuthKey = "codexAppSourceAuth"
+    private static let primarySessionKey = "codexAppPrimarySession"
 
     /// Перестановка входов и запись продлённых токенов не должны пересечься:
     /// иначе в `~/.codex` уедет уже потраченный refresh-токен.
     private static let lock = NSLock()
+    struct SessionCopy {
+        let storage: AuthStorage$Codex
+        let record: AuthStorage$Codex.Record
+        let owner: DirectoryIdentity
+        let sourceKey: String
+        let generation: UUID?
+    }
     struct Renewal {
         let id = UUID()
         let columnID: String
@@ -45,6 +53,7 @@ enum AuthSwap$Codex {
         let sourceGeneration: UUID?
         let storage: AuthStorage$Codex
         let record: AuthStorage$Codex.Record
+        let copies: [SessionCopy]
     }
     struct AuthSnapshot {
         let data: Data
@@ -62,6 +71,12 @@ enum AuthSwap$Codex {
     private static var columnGenerations: [String: UUID] = [:]
     private static var renewals: [String: Renewal] = [:]
     private static var renewalRecoveries: [UUID: RenewalRecovery] = [:]
+    /// Forward only an observed credential identity, never another login that
+    /// happens to use the same profile name. No credentials are stored in defaults.
+    private static var rotations: [String: Data] = [:]
+    private static var knownCopies: [String: SessionCopy] = [:]
+    private static var copyDebt: [String: SessionCopy] = [:]
+    private static var primarySession: (data: Data, owner: DirectoryIdentity, generation: UUID?)?
 
     /// Базовый CODEX_HOME: его берут голая `codex` и приложение.
     static var baseHome: URL {
@@ -325,15 +340,22 @@ enum AuthSwap$Codex {
         guard base.mode != .ephemeral else { throw AuthStorage$Codex.Failure.ephemeral }
         guard columnID == defaultColumnID || !isBaseHome(home) else { throw Failure.busy }
         guard columnID != activeColumnID else { return nil }
-        guard renewals[homeKey(home)] == nil,
-              !renewals.values.contains(where: { $0.columnID == columnID || $0.columnID == activeColumnID }) else {
+        guard !renewals.values.contains(where: {
+            renewalRecoveries[$0.id] == nil
+                && ($0.key == homeKey(home) || $0.columnID == columnID || $0.columnID == activeColumnID)
+        }) else {
             throw Failure.busy
         }
         let incoming = columnID == defaultColumnID ? stashHome : home
         let source = try storage(at: incoming)
         try requireIdle(base)
         try requireIdle(source)
-        let incomingRecord = try source.load(verifyingOwner: true)
+        var incomingRecord = try source.load(verifyingOwner: true)
+        if let record = incomingRecord {
+            try requireIdleGrant(record.data)
+            incomingRecord = try reconcile(source, record: record)
+        }
+        if columnID != defaultColumnID, let record = incomingRecord { trackCopies(of: record.data) }
         var payload = incomingRecord?.data
         guard homeKey(incoming) == source.home.path else { throw Failure.busy }
         // An alias of the selected owner must not publish its old profile copy
@@ -350,7 +372,13 @@ enum AuthSwap$Codex {
         let previous = try giveBackCurrent()
         // Copyback can advance a primary backup that shared the selected grant.
         // Publish that updated record instead of its pre-copyback token snapshot.
-        if columnID == defaultColumnID { payload = try source.load(verifyingOwner: true)?.data }
+        incomingRecord = try source.load(verifyingOwner: true)
+        if let record = incomingRecord {
+            try requireIdleGrant(record.data)
+            incomingRecord = try reconcile(source, record: record)
+        }
+        guard homeKey(incoming) == source.home.path else { throw Failure.busy }
+        payload = incomingRecord?.data
         if let payload { try base.save(payload) } else { try base.delete() }
         if columnID == defaultColumnID {
             // Do not forget a refused backup cleanup or report a completed switch.
@@ -366,6 +394,10 @@ enum AuthSwap$Codex {
             if !keepBackup { UserDefaults.standard.removeObject(forKey: sourceAuthKey) }
             if !keepBackup { UserDefaults.standard.removeObject(forKey: stashStoreKey) }
             if !keepBackup { UserDefaults.standard.removeObject(forKey: stashHomeKey) }
+            if let payload, let owner = DirectoryIdentity.capture(base.home) {
+                primarySession = (payload, owner, generations[base.home.path])
+                rememberPrimarySession(payload)
+            } else { clearPrimarySession() }
         } else {
             UserDefaults.standard.set(columnID, forKey: activeIDKey)
             UserDefaults.standard.set(home.path, forKey: activeHomeKey)
@@ -396,7 +428,13 @@ enum AuthSwap$Codex {
         try requireIdle(source)
         // Usage may read a native auto fallback, but a refresh must not spend
         // its stale grant while the preferred Keychain owner is unavailable.
-        guard let record = try source.load(verifyingOwner: true) else { return nil }
+        guard var observed = try source.load(verifyingOwner: true) else { return nil }
+        if try advancePrimaryCopies(matching: observed.data) {
+            guard let current = try source.load(verifyingOwner: true) else { return nil }
+            observed = current
+        }
+        try requireIdleGrant(observed.data)
+        let record = try reconcile(source, record: observed)
         guard homeKey(home) == key, homeKey(live) == source.home.path else { throw Failure.busy }
         let nativeStorage = try storage(at: baseHome)
         guard !(try sameOwner(source, nativeStorage)),
@@ -422,10 +460,12 @@ enum AuthSwap$Codex {
                let identity = authIdentity(selected.data), proof?.ownsSelected(identity) == true,
                refreshToken(selected.data) == token { return nil }
         }
+        trackCopies(of: record.data)
         let renewal = Renewal(columnID: columnID, key: key, generation: generations[key],
                               columnGeneration: columnGenerations[columnID],
                               sourceKey: sourceKey, sourceGeneration: generations[sourceKey],
-                              storage: source, record: record)
+                              storage: source, record: record,
+                              copies: sessionCopies(of: record.data, excluding: sourceKey))
         renewals[key] = renewal
         return renewal
     }
@@ -489,10 +529,29 @@ enum AuthSwap$Codex {
                   generations[renewal.sourceKey] == renewal.sourceGeneration else { return nil }
         }
         guard sourceKey(destination, backend: renewal.record.backend) == destinationKey else { return nil }
-        guard let record = try destination.load(backend: renewal.record.backend) else { return nil }
-        guard let updated = renewedAuth(record.data, usedRefreshToken: usedRefreshToken,
-                                       tokens: tokens, now: Date()) else { return nil }
-        try destination.save(updated, backend: record.backend)
+        guard let projected = renewedAuth(renewal.record.data, usedRefreshToken: usedRefreshToken,
+                                         tokens: tokens, now: Date()) else { return nil }
+        rememberRotation(from: renewal.record.data, to: projected)
+        var failure: Error?
+        for copy in renewal.copies {
+            do { try persist(copy, tokens: tokens, usedRefreshToken: usedRefreshToken) }
+            catch { failure = error }
+        }
+        var updated: Data?
+        do {
+            if let record = try destination.load(backend: renewal.record.backend) {
+                if authIdentity(record.data) == authIdentity(projected) {
+                    updated = record.data
+                } else if authIdentity(record.data) == authIdentity(renewal.record.data),
+                          let data = renewedAuth(record.data, usedRefreshToken: usedRefreshToken,
+                                                 tokens: tokens, now: Date()) {
+                    try destination.save(data, backend: record.backend)
+                    updated = data
+                }
+            }
+        } catch { failure = error }
+        if let failure { throw failure }
+        guard let updated else { return nil }
         if recovery != nil {
             return AuthSnapshot(data: updated, key: destinationKey, generation: generations[destinationKey],
                                 columnGeneration: columnGenerations[profileColumnID(destination.home.lastPathComponent)],
@@ -535,6 +594,8 @@ enum AuthSwap$Codex {
         let record = try live.load(verifyingOwner: true)
         let payload = record?.data
         if !isSwapped {
+            try advancePrimaryCopies()
+            if let payload { trackCopies(of: payload) }
             try FileManager.default.createDirectory(at: stashHome, withIntermediateDirectories: true)
             let stash = try AuthStorage$Codex(home: stashHome, mode: live.mode)
             try requireIdle(stash)
@@ -580,6 +641,8 @@ enum AuthSwap$Codex {
             }
             try profile.save(payload)
             UserDefaults.standard.set(authIdentity(payload), forKey: sourceAuthKey)
+            rememberRotation(from: previous, to: payload)
+            try synchronizeCopies(from: previous, to: payload)
         } else {
             guard proof?.isPending != true else { throw Failure.busy }
             // Retain an unexpected native login without exporting a Keychain login to plaintext.
@@ -664,6 +727,14 @@ enum AuthSwap$Codex {
         // Complete account removal must not preserve an unknown fallback and
         // then report success after deleting only its preferred Keychain entry.
         try requireRemovalOwners(target, removingProfileLink: removingProfileLink)
+        for renewal in renewals.values {
+            let destination = renewalRecoveries[renewal.id]?.removal.storage ?? renewal.storage
+            if destination.home.path == target.home.path,
+               try hasUnwrittenCopies(renewal) { throw Failure.busy }
+        }
+        if !rotations.isEmpty, let record = try? target.load(verifyingOwner: true) {
+            try synchronizeCopies(to: record.data)
+        }
         let fileOwner = fileOwnerKey(target.home)
         // Unlinking an independent Keychain alias preserves the shared file.
         // Its remaining owner's in-flight refresh must still become durable.
@@ -701,6 +772,7 @@ enum AuthSwap$Codex {
             UserDefaults.standard.removeObject(forKey: stashStoreKey)
             UserDefaults.standard.removeObject(forKey: stashHomeKey)
             UserDefaults.standard.removeObject(forKey: sourceAuthKey)
+            if columnID == defaultColumnID { clearPrimarySession() }
         } else {
             try operation(target)
         }
@@ -750,6 +822,249 @@ enum AuthSwap$Codex {
             // survive that cleanup; independent Keychain records remain separate.
             if try renewal.record.backend == .file || usesFile(storage) { throw Failure.busy }
         }
+    }
+
+    /// The native home must never receive a grant whose rotation is in flight,
+    /// including a separate directory containing the same session.
+    private static func requireIdleGrant(_ data: Data) throws {
+        let grants = Set([refreshToken(data), refreshToken(forwarded(data))].compactMap { $0 })
+        for renewal in renewals.values {
+            let pending = authIdentity(renewal.record.data).flatMap { rotations[$0] }
+            if [refreshToken(renewal.record.data), pending.flatMap(refreshToken)].compactMap({ $0 })
+                .contains(where: grants.contains) { throw Failure.busy }
+        }
+    }
+
+    /// Read only supported, available managed owners. Unknown profiles are not
+    /// permission to write; a known copy retains its snapshot across read failures.
+    private static func copyInventory() -> [SessionCopy] {
+        var seen: Set<String> = []
+        return ([stashHome] + ProfileDirectories.codexProfiles()).compactMap { home in
+            guard let source = try? storage(at: home), source.home.path != homeKey(baseHome),
+                  let owner = DirectoryIdentity.capture(source.home),
+                  let record = try? source.load(verifyingOwner: true),
+                  owner.matches(source.home) else { return nil }
+            if record.backend == .file, fileOwnerKey(source.home) == fileOwnerKey(baseHome) { return nil }
+            let key = sourceKey(source, backend: record.backend)
+            guard seen.insert(key).inserted else { return nil }
+            return SessionCopy(storage: source, record: record, owner: owner,
+                               sourceKey: key, generation: generations[key])
+        }
+    }
+
+    private static func sessionCopies(of data: Data, excluding key: String) -> [SessionCopy] {
+        guard let grant = refreshToken(data) else { return [] }
+        return copyInventory().filter { $0.sourceKey != key && refreshToken($0.record.data) == grant }
+    }
+
+    private static func trackCopies(of data: Data) {
+        guard let grant = refreshToken(data) else { return }
+        for copy in copyInventory() where refreshToken(copy.record.data) == grant {
+            knownCopies[copy.sourceKey] = copy
+        }
+    }
+
+    /// Preserve each copy's account routing and metadata while advancing only
+    /// the shared OAuth credentials. Never create another backend or a new file.
+    private static func sessionUpdate(from fresh: Data, in original: Data) -> Data? {
+        guard var root = (try? JSONSerialization.jsonObject(with: original)) as? [String: Any],
+              var tokens = root["tokens"] as? [String: Any],
+              let update = (try? JSONSerialization.jsonObject(with: fresh)) as? [String: Any],
+              let next = update["tokens"] as? [String: Any] else { return nil }
+        for key in ["access_token", "refresh_token", "id_token"] { tokens[key] = next[key] }
+        root["tokens"] = tokens
+        root["last_refresh"] = update["last_refresh"]
+        return try? JSONSerialization.data(withJSONObject: root)
+    }
+
+    private static func rememberRotation(from old: Data, to fresh: Data) {
+        guard Provider$Codex.parseAuth(old) != nil, Provider$Codex.parseAuth(fresh) != nil,
+              let identity = authIdentity(old), let grant = refreshToken(old),
+              let updated = sessionUpdate(from: fresh, in: old), authIdentity(updated) != identity else { return }
+        for (key, value) in rotations where refreshToken(value) == grant {
+            if let next = sessionUpdate(from: fresh, in: value) { rotations[key] = next }
+        }
+        rotations[identity] = updated
+    }
+
+    private static func forwarded(_ data: Data) -> Data {
+        var current = data
+        var visited: Set<String> = []
+        while let key = authIdentity(current), visited.insert(key).inserted,
+              let next = rotations[key], let updated = sessionUpdate(from: next, in: current),
+              authIdentity(updated) != key { current = updated }
+        return current
+    }
+
+    private static func ownsCopy(_ copy: SessionCopy) throws -> Bool {
+        guard generations[copy.sourceKey] == copy.generation else { return false }
+        if let current = DirectoryIdentity.capture(copy.storage.home) { return current == copy.owner }
+        if DirectoryIdentity.missingPath(copy.storage.home) != nil { return false }
+        // An unreadable directory is not evidence of removal or replacement.
+        throw Failure.busy
+    }
+
+    private static func persist(_ copy: SessionCopy, data: Data) throws {
+        guard try ownsCopy(copy) else { return }
+        guard let current = try copy.storage.load(backend: copy.record.backend) else { return }
+        var stored = current.data
+        if authIdentity(current.data) == authIdentity(copy.record.data) {
+            guard let merged = sessionUpdate(from: data, in: current.data) else { throw Failure.busy }
+            try copy.storage.save(merged, backend: current.backend)
+            stored = merged
+        } else if authIdentity(current.data) != authIdentity(data) { return }
+        knownCopies[copy.sourceKey] = SessionCopy(storage: copy.storage,
+            record: AuthStorage$Codex.Record(data: stored, backend: current.backend), owner: copy.owner,
+            sourceKey: copy.sourceKey, generation: copy.generation)
+    }
+
+    private static func persist(_ copy: SessionCopy, tokens: OAuth$Codex.Tokens,
+                                usedRefreshToken: String) throws {
+        guard let data = renewedAuth(copy.record.data, usedRefreshToken: usedRefreshToken,
+                                     tokens: tokens, now: Date()) else { return }
+        rememberRotation(from: copy.record.data, to: data)
+        do {
+            try persist(copy, data: data)
+            copyDebt[copy.sourceKey] = nil
+        } catch {
+            copyDebt[copy.sourceKey] = copy
+            throw error
+        }
+    }
+
+    private static func reconcile(_ source: AuthStorage$Codex,
+                                  record: AuthStorage$Codex.Record) throws -> AuthStorage$Codex.Record {
+        let data = forwarded(record.data)
+        guard authIdentity(data) != authIdentity(record.data),
+              let owner = DirectoryIdentity.capture(source.home) else { return record }
+        let key = sourceKey(source, backend: record.backend)
+        // An identical login in a replacement directory does not authorize an
+        // earlier request to write there. Never republish its known spent grant.
+        guard let known = knownCopies[key], known.owner == owner,
+              known.generation == generations[key] else { throw Failure.busy }
+        let copy = SessionCopy(storage: source, record: record, owner: owner,
+                               sourceKey: key, generation: generations[key])
+        do {
+            try persist(copy, data: data)
+            copyDebt[key] = nil
+        } catch {
+            copyDebt[key] = copy
+            throw error
+        }
+        // A newer login observed at the write boundary owns the subsequent read.
+        return try source.load(verifyingOwner: true) ?? record
+    }
+
+    private static func synchronizeCopies(from old: Data? = nil, to fresh: Data) throws {
+        var failure: Error?
+        for copy in Array(knownCopies.values) {
+            if let old, let grant = refreshToken(old), refreshToken(copy.record.data) == grant {
+                rememberRotation(from: copy.record.data, to: fresh)
+            }
+            let data = forwarded(copy.record.data)
+            guard authIdentity(data) != authIdentity(copy.record.data),
+                  refreshToken(data) == refreshToken(fresh),
+                  Provider$Codex.parseAuth(data)?.accessToken == Provider$Codex.parseAuth(fresh)?.accessToken else { continue }
+            do {
+                try persist(copy, data: data)
+                copyDebt[copy.sourceKey] = nil
+            } catch {
+                copyDebt[copy.sourceKey] = copy
+                failure = error
+            }
+        }
+        if let failure { throw failure }
+    }
+
+    private static func hasUnwrittenCopies(_ renewal: Renewal) throws -> Bool {
+        let accepted = authIdentity(renewal.record.data).flatMap { rotations[$0] } != nil
+        for copy in renewal.copies {
+            guard try ownsCopy(copy) else { continue }
+            if let current = try copy.storage.load(backend: copy.record.backend),
+               authIdentity(current.data) == authIdentity(copy.record.data),
+               !accepted || authIdentity(forwarded(current.data)) != authIdentity(current.data) { return true }
+        }
+        return false
+    }
+
+    private static func grantIdentity(_ data: Data) -> String? {
+        refreshToken(data).map { SHA256.hash(data: Data($0.utf8)).map { String(format: "%02x", $0) }.joined() }
+    }
+
+    private static func rememberPrimarySession(_ data: Data) {
+        guard let grant = grantIdentity(data), let account = accountID(data) else {
+            UserDefaults.standard.removeObject(forKey: primarySessionKey)
+            return
+        }
+        // Only a grant digest, account routing and canonical home survive restart.
+        UserDefaults.standard.set(["home": homeKey(baseHome), "account": account, "grant": grant],
+                                  forKey: primarySessionKey)
+    }
+
+    private static func clearPrimarySession() {
+        primarySession = nil
+        UserDefaults.standard.removeObject(forKey: primarySessionKey)
+    }
+
+    /// Returning to primary transfers the shared session back to native clients.
+    /// Keep its observed copies attached to that owner after native rotation too.
+    @discardableResult
+    private static func advancePrimaryCopies(matching data: Data? = nil) throws -> Bool {
+        guard !isSwapped else { return false }
+        if primarySession == nil,
+           let proof = UserDefaults.standard.dictionary(forKey: primarySessionKey) as? [String: String],
+           proof["home"] == homeKey(baseHome),
+           data == nil || data.flatMap(grantIdentity) == proof["grant"],
+           let copy = copyInventory().first(where: { grantIdentity($0.record.data) == proof["grant"] }),
+           let native = try storage(at: baseHome).load(verifyingOwner: true),
+           accountID(native.data) == proof["account"],
+           let baseline = sessionUpdate(from: copy.record.data, in: native.data),
+           let owner = DirectoryIdentity.capture(baseHome) {
+            primarySession = (baseline, owner, generations[homeKey(baseHome)])
+            trackCopies(of: copy.record.data)
+        }
+        guard let primary = primarySession else { return false }
+        let baseline = forwarded(primary.data)
+        if let data, refreshToken(data) != refreshToken(primary.data),
+           refreshToken(data) != refreshToken(baseline) { return false }
+        guard primary.owner.matches(baseHome), generations[homeKey(baseHome)] == primary.generation else {
+            clearPrimarySession()
+            return false
+        }
+        guard knownCopies.values.contains(where: {
+            refreshToken($0.record.data) == refreshToken(baseline)
+                && $0.owner.matches($0.storage.home) && generations[$0.sourceKey] == $0.generation
+        }) else { return false }
+        guard let native = try storage(at: baseHome).load(verifyingOwner: true),
+              accountID(native.data) == accountID(primary.data) else {
+            clearPrimarySession()
+            return false
+        }
+        rememberRotation(from: baseline, to: native.data)
+        try synchronizeCopies(from: baseline, to: native.data)
+        primarySession = (native.data, primary.owner, primary.generation)
+        rememberPrimarySession(native.data)
+        return true
+    }
+
+    /// A known copy cannot be left with a spent grant on normal termination.
+    /// Refresh the selected native lineage before draining deferred copy writes.
+    static func flushCopies() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        try advancePrimaryCopies()
+        if !rotations.isEmpty, isSwapped, let path = activeOwnerPath,
+           let selected = try? storage(at: URL(fileURLWithPath: path)).load(verifyingOwner: true),
+           rotations.values.contains(where: { refreshToken($0) == refreshToken(selected.data) }),
+           let native = try storage(at: baseHome).load(verifyingOwner: true),
+           accountID(native.data) == accountID(selected.data),
+           let identity = authIdentity(selected.data), try sourceProof()?.ownsSelected(identity) == true,
+           authIdentity(native.data) != identity { _ = try giveBackCurrent() }
+        for (key, copy) in Array(copyDebt) {
+            try persist(copy, data: forwarded(copy.record.data))
+            copyDebt[key] = nil
+        }
+        for data in Array(rotations.values) { try synchronizeCopies(to: data) }
     }
 
     private static func storage(at home: URL) throws -> AuthStorage$Codex {

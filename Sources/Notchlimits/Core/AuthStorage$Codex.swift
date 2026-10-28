@@ -21,11 +21,12 @@ struct AuthStorage$Codex {
 
         /// Moving an item back must not overwrite a login created during removal.
         /// A refused restoration remains a normal, discoverable Keychain profile.
-        func restore() -> Bool {
+        func restore(retainsOriginalFile: Bool) -> Bool {
             guard owner.matches(storage.home) else { return false }
             var info = stat()
             if lstat(original.file.path, &info) == 0 {
-                guard let current = try? Data(contentsOf: original.file), current == originalFile else { return false }
+                guard retainsOriginalFile, let current = try? Data(contentsOf: original.file),
+                      current == originalFile else { return false }
             } else if errno != ENOENT { return false }
             let status = AuthStorage$Claude.access(interactive: false) {
                 SecItemUpdate(storage.query as CFDictionary,
@@ -121,7 +122,11 @@ struct AuthStorage$Codex {
                 status = AuthStorage$Claude.access(interactive: false) { SecItemAdd(item as CFDictionary, nil) }
             }
             guard status == errSecSuccess else { throw Failure.keychain(status) }
-            if !AuthSwap$Codex.fileIsShared(home: home, fileHome: home) { try? removeFile() }
+            // A pending write still belongs to its original backend, but the
+            // current configuration may now select a different file login.
+            if let current = try? Self.configuredMode(home: home),
+               current == .keyring || current == .auto,
+               !AuthSwap$Codex.fileIsShared(home: home, fileHome: home) { try? removeFile() }
         } catch {
             guard backend == nil, mode == .auto, keyringStatus() == errSecItemNotFound else { throw error }
             try saveFile(data)
