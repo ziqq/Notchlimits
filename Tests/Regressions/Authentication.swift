@@ -443,6 +443,12 @@ final class UserDefaults {
     func data(forKey key: String) -> Data? { object(forKey: key) as? Data }
     func bool(forKey key: String) -> Bool { object(forKey: key) as? Bool ?? false }
     func persistentDomain(forName name: String) -> [String: Any]? { nil }
+    func dictionaryRepresentation() -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        return values
+    }
+
     func set(_ value: Any?, forKey key: String) {
         lock.lock()
         defer { lock.unlock() }
@@ -979,6 +985,36 @@ enum Authentication {
     static func main() async {
         do {
             switch CommandLine.arguments[1] {
+            case "audit-keyring-to-file-login": try await auditPendingStorageMode(initial: "keyring", change: true)
+            case "audit-auto-to-file-login": try await auditPendingStorageMode(initial: "auto", change: true)
+            case "audit-keyring-stable-control": try await auditPendingStorageMode(initial: "keyring", change: false)
+            case "audit-file-to-keyring-control": try await auditPendingStorageMode(initial: "file", change: true)
+            case "audit-claude-last-peer-removal": try auditClaudeLastSharedPeer(removePeer: true)
+            case "audit-claude-peer-retained-control": try auditClaudeLastSharedPeer(removePeer: false)
+            case "audit-claude-native-relogin-control": try auditClaudeLastSharedPeer(removePeer: false, nativeRelogin: true)
+            case "audit-codex-identical-fallback-rollback": try auditCodexIdenticalFallbackRollback(identical: true)
+            case "audit-codex-different-fallback-rollback-control": try auditCodexIdenticalFallbackRollback(identical: false)
+            case "audit-copied-pending-switch-file": try await auditCopiedPendingSwitch(mode: "file", sameGrant: true)
+            case "audit-copied-pending-switch-keyring": try await auditCopiedPendingSwitch(mode: "keyring", sameGrant: true)
+            case "audit-copied-pending-switch-auto": try await auditCopiedPendingSwitch(mode: "auto", sameGrant: true)
+            case "audit-independent-pending-switch-control": try await auditCopiedPendingSwitch(mode: "file", sameGrant: false)
+            case "audit-copied-lifecycle-remove-source": try await auditCopiedGrantLifecycle("remove-source")
+            case "audit-copied-lifecycle-remove-copy": try await auditCopiedGrantLifecycle("remove-copy")
+            case "audit-copied-lifecycle-retry-copy": try await auditCopiedGrantLifecycle("retry-copy")
+            case "audit-copied-lifecycle-remove-failed-source": try await auditCopiedGrantLifecycle("remove-failed-source")
+            case "audit-copied-lifecycle-native-copyback": try await auditCopiedGrantLifecycle("native-copyback")
+            case "audit-copied-lifecycle-native-retry": try await auditCopiedGrantLifecycle("native-retry")
+            case "audit-copied-lifecycle-metadata-copy": try await auditCopiedGrantLifecycle("metadata-copy")
+            case "audit-copied-lifecycle-unavailable-copy": try await auditCopiedGrantLifecycle("unavailable-copy")
+            case "audit-copied-primary-switch": try await auditCopiedPrimaryCycle(switchCopy: true)
+            case "audit-copied-primary-renew": try await auditCopiedPrimaryCycle(switchCopy: false)
+            case "audit-copied-primary-restart-switch": try await auditCopiedPrimaryCycle(switchCopy: true, restart: true)
+            case "audit-copied-primary-child-switch": try await auditCopiedPrimaryRestart(switchCopy: true)
+            case "audit-copied-primary-restart-renew": try await auditCopiedPrimaryCycle(switchCopy: false, restart: true)
+            case "audit-copied-primary-child-renew": try await auditCopiedPrimaryRestart(switchCopy: false)
+            case "audit-copied-primary-removal-restart": try await auditCopiedPrimaryCycle(switchCopy: false, restart: true, removePrimary: true)
+            case "audit-copied-primary-child-removed": try await auditCopiedPrimaryRestart(switchCopy: false, removedPrimary: true)
+
             case "claude-released-pending-rollback": try await claudeReleasedPendingRollback(collision: true)
             case "claude-released-pending-rollback-control": try await claudeReleasedPendingRollback(collision: false)
 
@@ -9680,6 +9716,357 @@ enum Authentication {
                        && Fixture.refreshCalls == 1,
                        "Removing replacement B discarded the retained recovery A's accepted rotation")
         }
+    }
+
+    @MainActor
+    private static func auditPendingStorageMode(initial: String, change: Bool) async throws {
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("mode-swap")
+        try Fixture.codexLogin(home, account: "mode-source-a", mode: initial, expired: true)
+        let account = DiscoveredAccount(id: "codex:mode-swap", provider: .codex,
+                                        profileName: "mode-swap", source: .codexHome(home))
+        let provider = Provider$Codex()
+        if initial == "file" { Fixture.failCodexFileWrite = true }
+        else { Fixture.denyCodexWrite = true }
+        _ = await provider.fetch(account)
+        try expect(Fixture.refreshCalls == 1, "Setup did not accept exactly one original refresh")
+        let replacementMode = initial == "file" ? "keyring" : "file"
+        var expected: Data?
+        if change {
+            try Fixture.codexLogin(home, account: "mode-replacement-b", mode: replacementMode, expired: false)
+            expected = try AuthStorage$Codex(home: home).load(verifyingOwner: true)?.data
+            try expect(Provider$Codex.readAuth(codexHome: home)?.accountID == "mode-replacement-b", "New native persistent login was not readable")
+        }
+        Fixture.denyCodexWrite = false
+        Fixture.failCodexFileWrite = false
+        let outcome = await provider.fetch(account)
+        let after = try AuthStorage$Codex(home: home).load(verifyingOwner: true)?.data
+        let current = Provider$Codex.readAuth(codexHome: home)?.accountID
+        let fileExists = Foundation.FileManager.default.fileExists(atPath: home.appendingPathComponent("auth.json").path)
+        print("AUDIT mode=\(initial) change=\(change) current=\(current ?? "nil") file=\(fileExists) posts=\(Fixture.refreshCalls)")
+        if change {
+            try expect(after == expected && current == "mode-replacement-b", "Persisting the old pending rotation deleted the current persistent-store login")
+        } else {
+            try expect(current == "mode-source-a" && Renewal$Codex.refreshToken(home.appendingPathComponent("auth.json")) == "synthetic-rotated", "Unchanged source did not retain normal renewal")
+        }
+        guard case .success = outcome else { throw Failure(description: "The current login did not serve usage") }
+        try expect(Fixture.refreshCalls == 1, "Persistence replayed an accepted refresh grant")
+    }
+    @MainActor
+    private static func auditClaudeLastSharedPeer(removePeer: Bool, nativeRelogin: Bool = false) throws {
+        let manager = Foundation.FileManager.default
+        let owner = ProfileDirectories.claudeRoot.appendingPathComponent("last-shared-owner")
+        try manager.createDirectory(at: owner, withIntermediateDirectories: true)
+        try manager.createSymbolicLink(at: Fixture.storageDirectory, withDestinationURL: owner)
+        let hash = SHA256.hash(data: Data(owner.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
+        let peerService = Fixture.service + "-" + hash
+        Fixture.claudeEntries = [Fixture.service: Fixture.claudeLogin("retired-primary", expired: false),
+                                peerService: Fixture.claudeLogin("last-peer", expired: false)]
+        let file = owner.appendingPathComponent(".credentials.json")
+        let retained = try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("retired-primary", expired: false))
+        try retained.write(to: file)
+        let store = UsageStore(providers: [.claude: Provider$Claude()], discovery: Discovery$Real())
+        store.rediscover(force: true)
+        try expect(store.account(for: "claude:" + Fixture.service) != nil
+                   && store.account(for: "claude:" + peerService) != nil, "Shared fixture did not expose both original owners")
+        try store.removeAccount(id: "claude:" + Fixture.service)
+        try expect(!Discovery$Real().discover().contains(where: { $0.id == "claude:" + Fixture.service }),
+                   "Primary was not retired while its peer survived")
+        try expect(try Data(contentsOf: file) == retained, "Shared primary removal changed its retained file")
+        if removePeer { try store.removeAccount(id: "claude:" + peerService) }
+        if nativeRelogin {
+            try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("fresh-native-primary", expired: false))
+                .write(to: file, options: .atomic)
+        }
+        store.rediscover(force: true)
+        let primaryReturned = Discovery$Real().discover().contains(where: { $0.id == "claude:" + Fixture.service })
+        print("AUDIT last-peer remove=\(removePeer) native=\(nativeRelogin) primaryReturned=\(primaryReturned)")
+        try expect(primaryReturned == nativeRelogin,
+                   "Removing the final peer resurrected an explicitly removed primary without a new native login")
+        if !nativeRelogin { try expect(try Data(contentsOf: file) == retained, "Peer removal changed retained credentials") }
+        try expect(Fixture.refreshCalls == 0, "Metadata-only lifecycle unexpectedly refreshed credentials")
+    }
+
+    @MainActor
+    private static func auditCodexIdenticalFallbackRollback(identical: Bool) throws {
+        let manager = Foundation.FileManager.default
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("identical-fallback-rollback")
+        try Fixture.codexLogin(home, account: "preferred-a", mode: "auto", expired: false)
+        let originalKeyring = Fixture.codexKeychain[Fixture.codexKey(home)]
+        try Fixture.writeAuth(home, account: "fallback-c", refresh: "fallback-c-grant", expired: false)
+        let fallback = try Data(contentsOf: home.appendingPathComponent("auth.json"))
+        let account = DiscoveredAccount(id: "codex:identical-fallback-rollback", provider: .codex,
+                                        profileName: "identical-fallback-rollback", source: .codexHome(home))
+        guard let oldOwner = account.codexHomeOwner else { throw Failure(description: "Missing old owner") }
+        var replacement: Data?
+        var boundaryError: Error?
+        Fixture.denyCodexDelete = true
+        Fixture.beforeCredentialDelete = {
+            do {
+                try manager.createDirectory(at: home, withIntermediateDirectories: true)
+                try Fixture.codexMode(home, "auto")
+                if identical { try fallback.write(to: home.appendingPathComponent("auth.json")) }
+                else { try Fixture.writeAuth(home, account: "fresh-c", refresh: "fresh-c-grant", expired: false) }
+                replacement = try Data(contentsOf: home.appendingPathComponent("auth.json"))
+                try expect(!oldOwner.matches(home), "Replacement did not receive a new directory identity")
+                try expect(Provider$Codex.parseAuth(Data(contentsOf: home.appendingPathComponent("auth.json")))?.accountID == (identical ? "fallback-c" : "fresh-c"),
+                           "New auto fallback did not serve the replacement before rollback")
+            } catch { boundaryError = error }
+        }
+        defer { Fixture.denyCodexDelete = false; Fixture.beforeCredentialDelete = nil }
+        var refused = false
+        do { try AccountRemoval.remove(account) } catch { refused = true }
+        if let boundaryError { throw boundaryError }
+        let current = Provider$Codex.readAuth(codexHome: home)?.accountID
+        print("AUDIT fallback-rollback identical=\(identical) refused=\(refused) current=\(current ?? "nil")")
+        try expect(refused, "Removal did not refuse Keychain deletion")
+        try expect(try Data(contentsOf: home.appendingPathComponent("auth.json")) == replacement,
+                   "Rollback changed replacement file bytes")
+        try expect(current == (identical ? "fallback-c" : "fresh-c"),
+                   "Rollback promoted the previous Keychain owner over a new auto file login")
+        let preserved = Discovery$Real().discover().contains { item in
+            guard case .codexHome(let dir) = item.source, dir.lastPathComponent.hasPrefix("recovered-") else { return false }
+            return (try? AuthStorage$Codex(home: dir).load(verifyingOwner: true)?.data) == originalKeyring
+        }
+        try expect(preserved, "Refused rollback did not retain the original Keychain owner separately")
+    }
+    @MainActor
+    private static func auditCopiedPendingSwitch(mode: String, sameGrant: Bool) async throws {
+        let base = AuthSwap$Codex.baseHome
+        let first = ProfileDirectories.codexRoot.appendingPathComponent("pending-original")
+        let copy = ProfileDirectories.codexRoot.appendingPathComponent("pending-copy")
+        try Fixture.codexLogin(base, account: "native-main", mode: "file", expired: false)
+        try Fixture.codexLogin(first, account: "source-a", mode: mode, expired: true)
+        guard let old = try AuthStorage$Codex(home: first).load(verifyingOwner: true)?.data else {
+            throw Failure(description: "Missing original grant")
+        }
+        if sameGrant {
+            try Fixture.codexMode(copy, mode)
+            if mode == "file" { try old.write(to: copy.appendingPathComponent("auth.json")) }
+            else { Fixture.codexKeychain[Fixture.codexKey(copy)] = old }
+        } else {
+            try Fixture.writeAuth(copy, account: "source-a", refresh: "independent-session-grant", expired: false)
+            try Fixture.codexMode(copy, mode)
+        }
+        let account = DiscoveredAccount(id: "codex:pending-original", provider: .codex,
+                                        profileName: "pending-original", source: .codexHome(first))
+        Fixture.response = .heldRenewed
+        let request = Task { await Provider$Codex().fetch(account) }
+        defer { Fixture.releaseRefresh() }
+        for _ in 0..<400 {
+            if Fixture.refreshCalls == 1 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(Fixture.refreshCalls == 1, "Original refresh did not reach its held response")
+        var switched = false
+        do { try AuthSwap$Codex.activate(columnID: "codex:pending-copy", home: copy); switched = true } catch {}
+        let native = Provider$Codex.readAuth(codexHome: base)?.accountID
+        let published = switched && Renewal$Codex.refreshToken(base.appendingPathComponent("auth.json")) == "synthetic-refresh-source-a"
+        Fixture.releaseRefresh()
+        _ = await request.value
+        let originalRotated = Renewal$Codex.refreshToken(first.appendingPathComponent("auth.json")) == "synthetic-rotated"
+        let nativeStillOld = Renewal$Codex.refreshToken(base.appendingPathComponent("auth.json")) == "synthetic-refresh-source-a"
+        try expect(originalRotated, "The original server rotation was not accepted and persisted")
+        print("AUDIT final-source-rotated=\(originalRotated) native-still-old=\(nativeStillOld)")
+        print("AUDIT copied-pending mode=\(mode) sameGrant=\(sameGrant) switched=\(switched) oldGrantPublished=\(published) native=\(native ?? "nil")")
+        try expect(sameGrant ? !published : switched,
+                   "Activation published a copied grant while the original refresh response was still pending")
+        if !sameGrant { try expect(native == "source-a", "Independent incoming login was blocked or changed") }
+        if sameGrant {
+            try expect(Renewal$Codex.refreshToken(copy.appendingPathComponent("auth.json")) == "synthetic-rotated",
+                       "The sleeping copy retained a spent grant after the accepted rotation")
+            try AuthSwap$Codex.activate(columnID: "codex:pending-copy", home: copy)
+            try expect(Renewal$Codex.refreshToken(base.appendingPathComponent("auth.json")) == "synthetic-rotated",
+                       "A later switch published the spent grant after the original request completed")
+        }
+
+    }
+    @MainActor
+    private static func auditCopiedGrantLifecycle(_ action: String) async throws {
+        let base = AuthSwap$Codex.baseHome
+        let source = ProfileDirectories.codexRoot.appendingPathComponent("lifecycle-source")
+        let copy = ProfileDirectories.codexRoot.appendingPathComponent("lifecycle-copy")
+        try Fixture.codexLogin(base, account: "native-main", mode: "file", expired: false)
+        try Fixture.codexLogin(source, account: "source-account", mode: "keyring", expired: true)
+        try Fixture.codexMode(copy, "keyring")
+        var copied = try JSONSerialization.jsonObject(with: Fixture.codexKeychain[Fixture.codexKey(source)]!) as! [String: Any]
+        var tokens = copied["tokens"] as! [String: Any]
+        tokens["account_id"] = "copy-routing"
+        copied["tokens"] = tokens
+        copied["local_metadata"] = "preserved"
+        Fixture.codexKeychain[Fixture.codexKey(copy)] = try JSONSerialization.data(withJSONObject: copied)
+        let account = DiscoveredAccount(id: "codex:lifecycle-source", provider: .codex,
+                                       profileName: "lifecycle-source", source: .codexHome(source))
+        let copiedAccount = DiscoveredAccount(id: "codex:lifecycle-copy", provider: .codex,
+                                             profileName: "lifecycle-copy", source: .codexHome(copy))
+        let provider = Provider$Codex()
+        Fixture.response = .heldRenewed
+        let request = Task { await provider.fetch(account) }
+        defer {
+            Fixture.releaseRefresh(); Fixture.denyCodexWriteAccount = nil
+            if action == "unavailable-copy" { _ = chmod(copy.path, 0o700) }
+        }
+        for _ in 0..<400 {
+            if Fixture.refreshCalls == 1 { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(Fixture.refreshCalls == 1, "Refresh did not reach the held response")
+        if action == "remove-source" {
+            var refused = false
+            do { try AccountRemoval.remove(account) } catch { refused = true }
+            Fixture.releaseRefresh()
+            _ = await request.value
+            try expect(refused, "Removing the in-flight source discarded the only rotation for its surviving copy")
+        } else if action == "remove-copy" {
+            try AccountRemoval.remove(copiedAccount)
+            Fixture.releaseRefresh()
+            _ = await request.value
+            try expect(!Foundation.FileManager.default.fileExists(atPath: copy.path)
+                       && Fixture.codexKeychain[Fixture.codexKey(copy)] == nil,
+                       "A late rotation recreated the removed copy")
+            try expect(Renewal$Codex.refreshToken(source.appendingPathComponent("auth.json")) == "synthetic-rotated",
+                       "Removing a copy discarded the surviving source rotation")
+            return
+        } else {
+            if action == "metadata-copy" {
+                copied["local_metadata"] = "changed-during-request"
+                Fixture.codexKeychain[Fixture.codexKey(copy)] = try JSONSerialization.data(withJSONObject: copied)
+            }
+            if action == "unavailable-copy" {
+                try expect(chmod(copy.path, 0) == 0 && DirectoryIdentity.capture(copy) == nil,
+                           "The OS did not deny capture of the known copied directory")
+            }
+            if action == "retry-copy" { Fixture.denyCodexWriteAccount = Fixture.codexKey(copy) }
+            if action == "remove-failed-source" { Fixture.denyCodexWriteAccount = Fixture.codexKey(source) }
+            Fixture.releaseRefresh()
+            _ = await request.value
+        }
+        if action == "retry-copy" || action == "unavailable-copy" {
+            try expect(Renewal$Codex.refreshToken(source.appendingPathComponent("auth.json")) == "synthetic-rotated",
+                       "A refused copy prevented durability in the available source")
+            var refused = false
+            do { try AuthSwap$Codex.activate(columnID: copiedAccount.id, home: copy) } catch { refused = true }
+            try expect(refused, "A refused copy published its spent grant")
+            let drained = await Renewal$Codex.shared.prepareForTermination(timeout: 0.01)
+            await Renewal$Codex.shared.cancelTermination()
+            try expect(!drained, "Termination discarded an accepted rotation before its known copy was durable")
+            Fixture.denyCodexWriteAccount = nil
+            if action == "unavailable-copy" { try expect(chmod(copy.path, 0o700) == 0, "Could not restore copy access") }
+            _ = await provider.fetch(account)
+        }
+        if action == "remove-failed-source" {
+            try expect(Renewal$Codex.refreshToken(copy.appendingPathComponent("auth.json")) == "synthetic-rotated",
+                       "An accepted rotation was not saved in the available copy")
+            try AccountRemoval.remove(account)
+            Fixture.denyCodexWriteAccount = nil
+        }
+        try expect(Renewal$Codex.refreshToken(copy.appendingPathComponent("auth.json")) == "synthetic-rotated",
+                   "A physically separate copy retained the spent refresh grant")
+        if action.hasPrefix("native-") {
+            try AuthSwap$Codex.activate(columnID: account.id, home: source)
+            try Fixture.writeAuth(base, account: "source-account", refresh: "native-second", expired: false)
+            if action == "native-retry" { Fixture.denyCodexWriteAccount = Fixture.codexKey(copy) }
+            var switched = false
+            do { try AuthSwap$Codex.activate(columnID: copiedAccount.id, home: copy); switched = true } catch {}
+            if action == "native-retry" {
+                try expect(!switched, "Copyback reported success before its copy became durable")
+                try Fixture.writeAuth(base, account: "source-account", refresh: "native-third", expired: false)
+                Fixture.denyCodexWriteAccount = nil
+                let drained = await Renewal$Codex.shared.prepareForTermination(timeout: 0.01)
+                await Renewal$Codex.shared.cancelTermination()
+                try expect(drained, "A recovered copyback could not drain on termination")
+                try AuthSwap$Codex.activate(columnID: copiedAccount.id, home: copy)
+            } else { try expect(switched, "A durable copied session could not be selected") }
+            let expected = action == "native-retry" ? "native-third" : "native-second"
+            try expect(Renewal$Codex.refreshToken(base.appendingPathComponent("auth.json")) == expected,
+                       "Switching published the incoming snapshot taken before native copyback")
+        } else { try AuthSwap$Codex.activate(columnID: copiedAccount.id, home: copy) }
+        guard let data = Fixture.codexKeychain[Fixture.codexKey(copy)],
+              let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw Failure(description: "Missing copied credentials")
+        }
+        try expect(Provider$Codex.parseAuth(data)?.accountID == "copy-routing"
+                   && root["local_metadata"] as? String == (action == "metadata-copy" ? "changed-during-request" : "preserved"),
+                   "Synchronizing a session changed its copy's routing or metadata")
+        try expect(Fixture.refreshCalls == 1, "Durability retry submitted the original grant again")
+    }
+    @MainActor
+    private static func auditCopiedPrimaryCycle(switchCopy: Bool, restart: Bool = false, removePrimary: Bool = false) async throws {
+        let base = AuthSwap$Codex.baseHome
+        let copy = ProfileDirectories.codexRoot.appendingPathComponent("primary-copy")
+        let other = ProfileDirectories.codexRoot.appendingPathComponent("other-session")
+        try Fixture.codexLogin(base, account: "primary", mode: "file", expired: true)
+        let original = try Data(contentsOf: base.appendingPathComponent("auth.json"))
+        try Fixture.codexMode(copy, "keyring")
+        Fixture.codexKeychain[Fixture.codexKey(copy)] = original
+        try Fixture.codexLogin(other, account: "other", mode: "file", expired: false)
+        try AuthSwap$Codex.activate(columnID: "codex:other-session", home: other)
+        let primary = DiscoveredAccount(id: AuthSwap$Codex.defaultColumnID, provider: .codex,
+                                        profileName: "primary", source: .codexHome(base))
+        _ = await Provider$Codex().fetch(primary)
+        try expect(Fixture.refreshCalls == 1, "The sleeping primary was not renewed exactly once")
+        try expect(Renewal$Codex.refreshToken(copy.appendingPathComponent("auth.json")) == "synthetic-rotated",
+                   "The sleeping primary did not advance its known copy")
+        try AuthSwap$Codex.restoreDefault()
+        if restart {
+            if removePrimary { try AccountRemoval.remove(primary) }
+            else {
+                let drained = await Renewal$Codex.shared.prepareForTermination(timeout: 1)
+                try expect(drained, "The primary cycle could not terminate normally")
+            }
+            let state: [String: Any] = ["defaults": UserDefaults.standard.dictionaryRepresentation(),
+                                        "keychain": Fixture.codexKeychain]
+            let data = try PropertyListSerialization.data(fromPropertyList: state, format: .binary, options: 0)
+            try data.write(to: Fixture.root.appendingPathComponent("restart-state.plist"))
+            let process = Foundation.Process()
+            process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+            process.arguments = [removePrimary ? "audit-copied-primary-child-removed" : (switchCopy ? "audit-copied-primary-child-switch" : "audit-copied-primary-child-renew"), Fixture.root.path]
+            let output = Pipe()
+            process.standardOutput = output
+            process.standardError = output
+            try process.run()
+            process.waitUntilExit()
+            let diagnostic = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            try expect(process.terminationStatus == 0, "The restarted application lost primary session ownership: " + diagnostic)
+            return
+        }
+        try Fixture.writeAuth(base, account: "primary", refresh: "native-after-primary", expired: false)
+        if switchCopy {
+            try AuthSwap$Codex.activate(columnID: "codex:primary-copy", home: copy)
+            try expect(Renewal$Codex.refreshToken(base.appendingPathComponent("auth.json")) == "native-after-primary",
+                       "A copied primary republished the grant spent by native refresh after default restoration")
+        } else {
+            _ = await Renewal$Codex.shared.renew(columnID: "codex:primary-copy", home: copy, force: true)
+            try expect(Fixture.refreshCalls == 1, "A copy replayed the active primary's previous grant after native refresh")
+            try expect(Renewal$Codex.refreshToken(copy.appendingPathComponent("auth.json")) == "native-after-primary",
+                       "The copied primary could not use the native owner's current credentials")
+        }
+    }
+
+    @MainActor
+    private static func auditCopiedPrimaryRestart(switchCopy: Bool, removedPrimary: Bool = false) async throws {
+        let checkpoint = try Data(contentsOf: Fixture.root.appendingPathComponent("restart-state.plist"))
+        guard let state = try PropertyListSerialization.propertyList(from: checkpoint, format: nil) as? [String: Any],
+              let defaults = state["defaults"] as? [String: Any],
+              let keychain = state["keychain"] as? [String: Data] else {
+            throw Failure(description: "Invalid restart checkpoint")
+        }
+        for (key, value) in defaults { UserDefaults.standard.set(value, forKey: key) }
+        Fixture.codexKeychain = keychain
+        let base = AuthSwap$Codex.baseHome
+        let copy = ProfileDirectories.codexRoot.appendingPathComponent("primary-copy")
+        try Fixture.writeAuth(base, account: "primary", refresh: "native-after-restart", expired: false)
+        if switchCopy { try AuthSwap$Codex.activate(columnID: "codex:primary-copy", home: copy) }
+        else { _ = await Renewal$Codex.shared.renew(columnID: "codex:primary-copy", home: copy, force: true) }
+        if removedPrimary {
+            try expect(Fixture.refreshCalls == 1, "A removed primary claimed the surviving copy for a replacement native login")
+            try expect(Renewal$Codex.refreshToken(copy.appendingPathComponent("auth.json")) != "native-after-restart",
+                       "A replacement native login overwrote the independent surviving copy")
+            return
+        }
+        try expect(Fixture.refreshCalls == 0, "Restart replayed the grant owned by the native primary session")
+        let result = switchCopy ? base : copy
+        try expect(Renewal$Codex.refreshToken(result.appendingPathComponent("auth.json")) == "native-after-restart",
+                   "Restart republished a spent primary grant or lost its native rotation")
     }
 
 }

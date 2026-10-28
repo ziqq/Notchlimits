@@ -111,6 +111,84 @@ final class NSMenuItem { var representedObject: Any? }
             result = run_fixture(self.executable, scenario, pathlib.Path(directory))
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_audit_keyring_to_file_login(self):
+        self.check_scenario("audit-keyring-to-file-login")
+
+    def test_audit_auto_to_file_login(self):
+        self.check_scenario("audit-auto-to-file-login")
+
+    def test_audit_keyring_stable_control(self):
+        self.check_scenario("audit-keyring-stable-control")
+
+    def test_audit_file_to_keyring_control(self):
+        self.check_scenario("audit-file-to-keyring-control")
+
+    def test_audit_claude_last_peer_removal(self):
+        self.check_scenario("audit-claude-last-peer-removal")
+
+    def test_audit_claude_peer_retained_control(self):
+        self.check_scenario("audit-claude-peer-retained-control")
+
+    def test_audit_claude_native_relogin_control(self):
+        self.check_scenario("audit-claude-native-relogin-control")
+
+    def test_audit_codex_identical_fallback_rollback(self):
+        self.check_scenario("audit-codex-identical-fallback-rollback")
+
+    def test_audit_codex_different_fallback_rollback_control(self):
+        self.check_scenario("audit-codex-different-fallback-rollback-control")
+
+    def test_audit_copied_pending_switch_file(self):
+        self.check_scenario("audit-copied-pending-switch-file")
+
+    def test_audit_copied_pending_switch_keyring(self):
+        self.check_scenario("audit-copied-pending-switch-keyring")
+
+    def test_audit_copied_pending_switch_auto(self):
+        self.check_scenario("audit-copied-pending-switch-auto")
+
+    def test_audit_independent_pending_switch_control(self):
+        self.check_scenario("audit-independent-pending-switch-control")
+
+    def test_audit_copied_lifecycle_remove_source(self):
+        self.check_scenario("audit-copied-lifecycle-remove-source")
+
+    def test_audit_copied_lifecycle_remove_copy(self):
+        self.check_scenario("audit-copied-lifecycle-remove-copy")
+
+    def test_audit_copied_lifecycle_retry_copy(self):
+        self.check_scenario("audit-copied-lifecycle-retry-copy")
+
+    def test_audit_copied_lifecycle_remove_failed_source(self):
+        self.check_scenario("audit-copied-lifecycle-remove-failed-source")
+
+    def test_audit_copied_lifecycle_native_copyback(self):
+        self.check_scenario("audit-copied-lifecycle-native-copyback")
+
+    def test_audit_copied_lifecycle_metadata_copy(self):
+        self.check_scenario("audit-copied-lifecycle-metadata-copy")
+
+    def test_audit_copied_lifecycle_native_retry(self):
+        self.check_scenario("audit-copied-lifecycle-native-retry")
+
+    def test_audit_copied_primary_switch(self):
+        self.check_scenario("audit-copied-primary-switch")
+
+    def test_audit_copied_primary_renew(self):
+        self.check_scenario("audit-copied-primary-renew")
+
+    def test_audit_copied_primary_restart_switch(self):
+        self.check_scenario("audit-copied-primary-restart-switch")
+
+    def test_audit_copied_primary_restart_renew(self):
+        self.check_scenario("audit-copied-primary-restart-renew")
+
+    def test_audit_copied_primary_removal_restart(self):
+        self.check_scenario("audit-copied-primary-removal-restart")
+
+    def test_audit_copied_lifecycle_unavailable_copy(self):
+        self.check_scenario("audit-copied-lifecycle-unavailable-copy")
+
     def test_audit_claude_late_cache_file(self):
         self.check_scenario("audit-claude-late-cache-file")
 

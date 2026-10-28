@@ -171,13 +171,15 @@ enum AccountRemoval {
                         throw Failure.busy
                     }
                     let keyring = try storage.beginRemoval()
+                    var retainsOriginalFile = true
                     do {
-                        try withProfileDirectory(url, root: ProfileDirectories.codexRoot) { directory in
+                        try withProfileDirectory(url, root: ProfileDirectories.codexRoot,
+                                                 rollbackFile: { retainsOriginalFile = $0 }) { directory in
                             try storage.delete(fileHome: directory, keyring: keyring?.storage)
                         }
                         keyring?.finish()
                     } catch {
-                        if let keyring, !keyring.restore() {
+                        if let keyring, !keyring.restore(retainsOriginalFile: retainsOriginalFile) {
                             AuthSwap$Codex.retainRemovalRecovery(keyring)
                         }
                         throw error
@@ -195,6 +197,7 @@ enum AccountRemoval {
     /// Cleanup of a hidden, logged-out directory cannot block same-name re-addition.
     private static func withProfileDirectory(_ directory: URL?, root: URL,
                                              move: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) },
+                                             rollbackFile: ((Bool) -> Void)? = nil,
                                              operation: (URL?) throws -> Void) throws {
         let manager = FileManager.default
         guard let directory, directory.path.hasPrefix(root.path + "/"),
@@ -204,13 +207,18 @@ enum AccountRemoval {
             .appendingPathComponent(".removed-" + UUID().uuidString, isDirectory: true)
         try move(directory, removed)
         do { try operation(removed) } catch {
-            do { try move(removed, directory) } catch let rollback as NSError {
+            rollbackFile?(false)
+            do {
+                try move(removed, directory)
+                rollbackFile?(true)
+            } catch let rollback as NSError {
                 guard rollback.domain == NSCocoaErrorDomain,
                       rollback.code == CocoaError.fileWriteFileExists.rawValue else { throw rollback }
                 // A client may bootstrap the original directory while waiting
                 // for OAuth locks. Restore missing entries atomically, keeping
                 // replacement credentials and all native lock owners untouched.
-                try restoreContents(from: removed, to: directory)
+                try restoreContents(from: removed, to: directory,
+                                    authFileRestored: { rollbackFile?(true) })
             }
             throw error
         }
@@ -218,7 +226,8 @@ enum AccountRemoval {
     }
 
     private static func restoreContents(from source: URL, to destination: URL,
-                                        isProfileRoot: Bool = true) throws {
+                                        isProfileRoot: Bool = true,
+                                        authFileRestored: (() -> Void)? = nil) throws {
         let sourceFD = open(source.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard sourceFD >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         defer { _ = close(sourceFD) }
@@ -246,6 +255,7 @@ enum AccountRemoval {
             // the adjacent legacy OAuth lock continues to fence native writers.
             if name.hasPrefix(".oauth_refresh.lock") || name.hasPrefix(".storage-write.lock") { continue }
             if renameatx_np(sourceFD, name, destinationFD, name, UInt32(RENAME_EXCL)) == 0 {
+                if isProfileRoot && name == "auth.json" { authFileRestored?() }
                 if isProfileRoot && name == ".credentials.json" {
                     AuthStorage$Claude.recordRestoredFileOwner(from: source, to: destination)
                 }

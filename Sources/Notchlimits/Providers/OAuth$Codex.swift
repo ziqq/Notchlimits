@@ -219,6 +219,8 @@ actor Renewal$Codex {
             guard Date() < deadline else { terminating = false; return false }
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
+        do { try AuthSwap$Codex.flushCopies() }
+        catch { terminating = false; return false }
         return true
     }
 
