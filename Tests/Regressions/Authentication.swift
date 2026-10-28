@@ -429,16 +429,26 @@ enum ProcessInfo {
 
 final class UserDefaults {
     static let standard = UserDefaults()
+    private let lock = NSLock()
     private var values: [String: Any] = [:]
-    func object(forKey key: String) -> Any? { values[key] }
-    func string(forKey key: String) -> String? { values[key] as? String }
-    func stringArray(forKey key: String) -> [String]? { values[key] as? [String] }
-    func dictionary(forKey key: String) -> [String: Any]? { values[key] as? [String: Any] }
-    func data(forKey key: String) -> Data? { values[key] as? Data }
-    func bool(forKey key: String) -> Bool { values[key] as? Bool ?? false }
+    // Match Foundation.UserDefaults when actors read and write concurrently.
+    func object(forKey key: String) -> Any? {
+        lock.lock()
+        defer { lock.unlock() }
+        return values[key]
+    }
+    func string(forKey key: String) -> String? { object(forKey: key) as? String }
+    func stringArray(forKey key: String) -> [String]? { object(forKey: key) as? [String] }
+    func dictionary(forKey key: String) -> [String: Any]? { object(forKey: key) as? [String: Any] }
+    func data(forKey key: String) -> Data? { object(forKey: key) as? Data }
+    func bool(forKey key: String) -> Bool { object(forKey: key) as? Bool ?? false }
     func persistentDomain(forName name: String) -> [String: Any]? { nil }
-    func set(_ value: Any?, forKey key: String) { values[key] = value }
-    func removeObject(forKey key: String) { values[key] = nil }
+    func set(_ value: Any?, forKey key: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        values[key] = value
+    }
+    func removeObject(forKey key: String) { set(nil, forKey: key) }
 }
 
 // Only notification delivery is replaced. History and threshold decisions use
@@ -969,6 +979,16 @@ enum Authentication {
     static func main() async {
         do {
             switch CommandLine.arguments[1] {
+            case "claude-released-pending-rollback": try await claudeReleasedPendingRollback(collision: true)
+            case "claude-released-pending-rollback-control": try await claudeReleasedPendingRollback(collision: false)
+
+            case "claude-released-pending-rollback-conflict": try await claudeReleasedPendingRollbackConflict()
+
+            case "codex-recovery-second-removal-keyring": try await codexRecoverySecondRemoval()
+            case "codex-recovery-second-removal-auto": try await codexRecoverySecondRemoval(replacementMode: "auto")
+            case "codex-recovery-second-removal-file": try await codexRecoverySecondRemoval(replacementMode: "file")
+            case "codex-recovery-own-removal-control": try await codexRecoverySecondRemoval(removeRecovery: true)
+
             case "codex-removal-recovery-keyring": try await codexRemovalRecovery(replacementMode: "keyring")
             case "codex-removal-recovery-auto": try await codexRemovalRecovery(replacementMode: "auto")
             case "codex-removal-recovery-file": try await codexRemovalRecovery(replacementMode: "file")
@@ -9478,6 +9498,187 @@ enum Authentication {
                        && Provider$Codex.readAuth(codexHome: home)?.accountID == "recovery-replacement"
                        && replacementOwner?.matches(home) == true,
                        "Draining the recovered owner's pending rotation changed the replacement login")
+        }
+    }
+
+
+    @MainActor
+    private static func claudeReleasedPendingRollback(collision: Bool) async throws {
+        let manager = Foundation.FileManager.default
+        let (account, file) = try claudeFileAccount(primary: false)
+        let directory = file.deletingLastPathComponent()
+        let provider = Provider$Claude()
+        Fixture.replaceOAuthDuringPOST = true
+        _ = await provider.fetch(account)
+        Fixture.replaceOAuthDuringPOST = false
+        try expect(Fixture.refreshCalls == 1, "The original refresh did not reach accepted pending state")
+        let blocked = await provider.prepareForTermination(timeout: 0.05)
+        await provider.cancelTermination()
+        try expect(!blocked, "Accepted rotation was not retained after loss of its original lease")
+        try manager.removeItem(at: directory.appendingPathComponent(".oauth_refresh.lock"))
+        Fixture.denyKeychainDelete = true
+        if collision {
+            Fixture.beforeCredentialDelete = {
+                try! manager.createDirectory(at: directory, withIntermediateDirectories: true)
+                try! Data("bootstrap".utf8).write(to: directory.appendingPathComponent("settings.json"))
+            }
+        }
+        var refused = false
+        do { try AccountRemoval.remove(account) } catch { refused = true }
+        Fixture.denyKeychainDelete = false
+        Fixture.beforeCredentialDelete = nil
+        try expect(refused && manager.fileExists(atPath: file.path), "Refused removal did not restore the original credential file")
+        _ = await provider.fetch(account)
+        let current = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
+        let rotated = AuthStorage$Claude.parse(current)?.refreshToken == "synthetic-rotated"
+        let ready = await provider.prepareForTermination(timeout: 0.15)
+        await provider.cancelTermination()
+        print("released-rollback collision=\(collision) refused=\(refused) rotated=\(rotated) quit=\(ready) posts=\(Fixture.refreshCalls)")
+        try expect(rotated && ready && Fixture.refreshCalls == 1,
+                   "Refused rollback with a released pending lease stranded the accepted rotation")
+    }
+
+
+    @MainActor
+    private static func claudeReleasedPendingRollbackConflict() async throws {
+        let manager = Foundation.FileManager.default
+        let (account, file) = try claudeFileAccount(primary: false)
+        let directory = file.deletingLastPathComponent()
+        let provider = Provider$Claude()
+        Fixture.replaceOAuthDuringPOST = true
+        _ = await provider.fetch(account)
+        Fixture.replaceOAuthDuringPOST = false
+        try expect(Fixture.refreshCalls == 1, "Original refresh did not reach accepted pending state")
+        try manager.removeItem(at: directory.appendingPathComponent(".oauth_refresh.lock"))
+        let replacement = try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("rollback-new-owner", expired: false))
+        Fixture.denyKeychainDelete = true
+        Fixture.beforeCredentialDelete = {
+            try! manager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try! replacement.write(to: file)
+        }
+        var refused = false
+        do { try AccountRemoval.remove(account) } catch { refused = true }
+        Fixture.denyKeychainDelete = false
+        Fixture.beforeCredentialDelete = nil
+        try expect(refused && (try Data(contentsOf: file)) == replacement,
+                   "Refused removal did not preserve the concurrent replacement credentials")
+        _ = await provider.fetch(account)
+        let hidden = try manager.contentsOfDirectory(at: ProfileDirectories.claudeRoot, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix(".removed-") }
+        let rotated = hidden.contains { root in
+            guard let data = try? Data(contentsOf: root.appendingPathComponent(".credentials.json")),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+            return AuthStorage$Claude.parse(json)?.refreshToken == "synthetic-rotated"
+        }
+        let ready = await provider.prepareForTermination(timeout: 0.15)
+        await provider.cancelTermination()
+        print("released-rollback conflict=true refused=\(refused) rotated=\(rotated) quit=\(ready) posts=\(Fixture.refreshCalls)")
+        try expect(rotated && ready && Fixture.refreshCalls == 1,
+                   "Refused rollback with a released pending lease stranded its retained hidden owner")
+        try expect(try Data(contentsOf: file) == replacement,
+                   "The retained pending rotation overwrote the concurrent replacement login")
+    }
+
+    @MainActor
+    private static func codexRecoverySecondRemoval(replacementMode: String = "keyring", removeRecovery: Bool = false) async throws {
+        let manager = Foundation.FileManager.default
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("removal-recovery")
+        let id = AuthSwap$Codex.profileColumnID(home.lastPathComponent)
+        try Fixture.codexLogin(home, account: "recovery-original", mode: "keyring", expired: true)
+        let provider = Provider$Codex()
+        let original = DiscoveredAccount(id: id, provider: .codex, profileName: home.lastPathComponent,
+                                         source: .codexHome(home))
+        guard let originalOwner = original.codexHomeOwner else { throw Failure(description: "Missing original removal owner") }
+        let originalData = Fixture.codexKeychain[Fixture.codexKey(home)]
+        Fixture.denyCodexWrite = true
+        _ = await provider.fetch(original)
+        try expect(Fixture.refreshCalls == 1 && Fixture.codexKeychain[Fixture.codexKey(home)] == originalData,
+                   "Setup did not retain exactly one accepted rotation with a refused durable write")
+        Fixture.denyCodexDelete = true
+        var boundaryReached = false
+        var boundaryError: Error?
+        var replacementData: Data?
+        var replacementOwner: DirectoryIdentity?
+        Fixture.beforeCredentialDelete = {
+            boundaryReached = true
+            do {
+                try expect(!manager.fileExists(atPath: home.path), "The original profile was not staged before deleting its item")
+                try Fixture.codexLogin(home, account: "recovery-replacement", mode: replacementMode)
+                replacementOwner = DirectoryIdentity.capture(home)
+                replacementData = replacementMode == "file"
+                    ? try Data(contentsOf: home.appendingPathComponent("auth.json"))
+                    : Fixture.codexKeychain[Fixture.codexKey(home)]
+                try expect(replacementOwner != nil && !originalOwner.matches(home) && replacementData != nil,
+                           "Replacement login did not own a new physical directory")
+            } catch { boundaryError = error }
+        }
+        defer {
+            Fixture.beforeCredentialDelete = nil
+            Fixture.denyCodexDelete = false
+            Fixture.denyCodexWrite = false
+        }
+        var refused = false
+        do { try AccountRemoval.remove(original) } catch { refused = true }
+        if let boundaryError { throw boundaryError }
+        try expect(refused && boundaryReached, "Removal did not fail at the intended delete boundary")
+        Fixture.denyCodexDelete = false
+        let discovered = Discovery$Real().discover()
+        let recovered = discovered.filter { account in
+            guard case .codexHome(let directory) = account.source,
+                  directory.lastPathComponent.hasPrefix("recovered-") else { return false }
+            return Provider$Codex.readAuth(codexHome: directory)?.accountID == "recovery-original"
+        }
+        try expect(recovered.count == 1 && replacementOwner?.matches(home) == true,
+                   "Refused rollback did not retain the original login as a discoverable recovery profile")
+        guard case .codexHome(let durableHome) = recovered[0].source else {
+            throw Failure(description: "Invalid recovery source")
+        }
+        let storage = try AuthStorage$Codex(home: durableHome)
+        let record = try storage.load(verifyingOwner: true)
+        try expect(storage.mode == .keyring && record?.backend == .keyring && record?.data == originalData
+                   && !manager.fileExists(atPath: durableHome.appendingPathComponent("auth.json").path),
+                   "Recovery lost the original Keychain credentials or exported them into a file")
+        try expect(try AuthStorage$Codex(home: home).load(verifyingOwner: true)?.data == replacementData,
+                   "Rollback overwrote the replacement login")
+        _ = await provider.fetch(recovered[0])
+        try expect(Fixture.refreshCalls == 1, "The recovery profile replayed the pending original grant")
+        guard let replacement = Discovery$Real().discover().first(where: { $0.id == id }),
+              replacement.codexHomeOwner?.matches(home) == true,
+              Provider$Codex.readAuth(codexHome: home)?.accountID == "recovery-replacement" else {
+            throw Failure(description: "Missing freshly discovered replacement removal owner")
+        }
+        let replacementKey = Fixture.codexKey(home)
+        let recoveryKey = Fixture.codexKey(durableHome)
+        let removed = removeRecovery ? recovered[0] : replacement
+        try AccountRemoval.remove(removed)
+        let retained = removeRecovery ? replacement : recovered[0]
+        try expect(Discovery$Real().discover().contains(where: { $0.id == retained.id }),
+                   "Removing one owner also removed the other discovered login")
+        if removeRecovery {
+            try expect(!manager.fileExists(atPath: durableHome.path)
+                       && Fixture.codexKeychain[recoveryKey] == nil,
+                       "Explicit recovery removal retained its credentials")
+            try expect(await Renewal$Codex.shared.prepareForTermination(timeout: 0.2),
+                       "Explicitly removed recovery kept its pending rotation alive")
+            try expect(try AuthStorage$Codex(home: home).load(verifyingOwner: true)?.data == replacementData
+                       && replacementOwner?.matches(home) == true && Fixture.refreshCalls == 1,
+                       "Removing the recovery changed the replacement or replayed a refresh")
+        } else {
+            try expect(!manager.fileExists(atPath: home.path)
+                       && Fixture.codexKeychain[replacementKey] == nil,
+                       "Second removal did not remove the replacement login")
+            Fixture.denyCodexWrite = false
+            guard case .success = await provider.fetch(recovered[0]) else {
+                throw Failure(description: "The discovered recovery could not persist its pending rotation during ordinary polling")
+            }
+            try expect(Renewal$Codex.refreshToken(durableHome.appendingPathComponent("auth.json")) == "synthetic-rotated"
+                       && Fixture.refreshCalls == 1,
+                       "Recovery polling did not persist its accepted rotation before termination")
+            try expect(await Renewal$Codex.shared.prepareForTermination(timeout: 0.2),
+                       "The retained recovery rotation could not become durable")
+            try expect(Renewal$Codex.refreshToken(durableHome.appendingPathComponent("auth.json")) == "synthetic-rotated"
+                       && Fixture.refreshCalls == 1,
+                       "Removing replacement B discarded the retained recovery A's accepted rotation")
         }
     }
 

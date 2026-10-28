@@ -234,6 +234,27 @@ final class NSMenuItem { var representedObject: Any? }
     def test_codex_removal_recovery_move_refusal_control(self):
         self.check_scenario("codex-removal-recovery-move-refusal-control")
 
+    def test_claude_released_pending_rollback(self):
+        self.check_scenario("claude-released-pending-rollback")
+
+    def test_claude_released_pending_rollback_control(self):
+        self.check_scenario("claude-released-pending-rollback-control")
+
+    def test_claude_released_pending_rollback_conflict(self):
+        self.check_scenario("claude-released-pending-rollback-conflict")
+
+    def test_codex_recovery_second_removal_keyring(self):
+        self.check_scenario("codex-recovery-second-removal-keyring")
+
+    def test_codex_recovery_second_removal_auto(self):
+        self.check_scenario("codex-recovery-second-removal-auto")
+
+    def test_codex_recovery_second_removal_file(self):
+        self.check_scenario("codex-recovery-second-removal-file")
+
+    def test_codex_recovery_own_removal_control(self):
+        self.check_scenario("codex-recovery-own-removal-control")
+
     def test_claude_publication_file_200_login(self):
         self.check_scenario("claude-publication-file-200-login")
 

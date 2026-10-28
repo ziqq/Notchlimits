@@ -242,6 +242,7 @@ final class RefreshLock$Claude: @unchecked Sendable {
     }
     private static let registryLock = NSLock()
     private static var active: [String: Active] = [:]
+    private static var owners: [Active] = []
     private let current: StorageLock$Claude
     private let legacy: StorageLock$Claude
     private let directoryKey: String
@@ -266,6 +267,8 @@ final class RefreshLock$Claude: @unchecked Sendable {
         }
         Self.registryLock.lock()
         Self.active[directoryKey] = Active(self)
+        Self.owners.removeAll { $0.lease == nil }
+        Self.owners.append(Active(self))
         Self.registryLock.unlock()
     }
 
@@ -297,23 +300,32 @@ final class RefreshLock$Claude: @unchecked Sendable {
     }
 
     static func recordRestoredFileOwner(from source: URL, to destination: URL) {
+        guard let original = DirectoryIdentity.capture(source),
+              let restored = DirectoryIdentity.capture(destination) else { return }
+        moveFileOwners(from: original, to: restored)
+    }
+
+    /// A pending grant can retain its owner after releasing a lost lease.
+    /// Authorized moves update that owner without making the old lease borrowable.
+    private static func moveFileOwners(from original: DirectoryIdentity, to restored: DirectoryIdentity) {
         registryLock.lock()
-        let leases = active.values.compactMap(\.lease)
+        owners.removeAll { $0.lease == nil }
+        let leases = owners.compactMap(\.lease)
         registryLock.unlock()
-        guard let restored = DirectoryIdentity.capture(destination) else { return }
         for lease in leases {
             lease.fileOwnerLock.lock()
-            if lease.fileOwner?.matches(source) == true { lease.fileOwner = restored }
+            if lease.fileOwner?.isSameDirectory(as: original) == true { lease.fileOwner = restored }
             lease.fileOwnerLock.unlock()
         }
     }
 
     func moveDirectory(from: URL, to: URL, storage: StorageLock$Claude) throws {
+        guard let original = DirectoryIdentity.capture(from) else { throw StorageLock$Claude.Failure.lost }
         // The legacy OAuth lock is adjacent to the profile and stays in place.
         try StorageLock$Claude.moveDirectory(from: from, to: to, locks: [current, storage])
-        fileOwnerLock.lock()
-        fileOwner = DirectoryIdentity.capture(to)
-        fileOwnerLock.unlock()
+        if let restored = DirectoryIdentity.capture(to), restored.isSameDirectory(as: original) {
+            Self.moveFileOwners(from: original, to: restored)
+        }
     }
 
     func onLost(_ handler: @escaping () -> Void) {

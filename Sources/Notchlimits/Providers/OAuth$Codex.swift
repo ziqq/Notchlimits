@@ -140,6 +140,11 @@ actor Renewal$Codex {
         if let saved = pending[columnID] {
             if let result = persist(saved, columnID: columnID, home: home) { return result }
         }
+        if let (pendingID, saved) = pending.first(where: {
+            $0.key != columnID && AuthSwap$Codex.recoveryMatches($0.value.renewal, columnID: columnID, home: home)
+        }) {
+            if let result = persist(saved, columnID: pendingID, home: home, currentColumnID: columnID) { return result }
+        }
         guard !terminating else { return .skipped }
         let renewal: AuthSwap$Codex.Renewal
         do {
@@ -220,7 +225,8 @@ actor Renewal$Codex {
     func cancelTermination() { terminating = false }
 
     /// A changed login or retired generation discards only its own pending response.
-    private func persist(_ saved: Pending, columnID: String, home: URL? = nil) -> Result? {
+    private func persist(_ saved: Pending, columnID: String, home: URL? = nil,
+                         currentColumnID: String? = nil) -> Result? {
         do {
             let stored = try AuthSwap$Codex.storeRenewed(saved.renewal,
                                                        usedRefreshToken: saved.usedRefreshToken,
@@ -233,7 +239,8 @@ actor Renewal$Codex {
                 } ?? nil
                 // Durability for a previous owner does not renew the current
                 // login after the same logical column has been redirected.
-                if let home, try !AuthSwap$Codex.isCurrent(stored, columnID: columnID, home: home) { return nil }
+                if let home,
+                   try !AuthSwap$Codex.isCurrent(stored, columnID: currentColumnID ?? columnID, home: home) { return nil }
                 return .renewed
             }
             // Потраченный токен не используем, даже если его копия осталась в другом профиле.
