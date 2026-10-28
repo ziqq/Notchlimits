@@ -54,10 +54,14 @@ enum AuthSwap$Codex {
         let sourceKey: String
         let sourceGeneration: UUID?
     }
+    private struct RenewalRecovery {
+        let removal: AuthStorage$Codex.RemovalKeyring
+        let generation: UUID?
+    }
     private static var generations: [String: UUID] = [:]
     private static var columnGenerations: [String: UUID] = [:]
     private static var renewals: [String: Renewal] = [:]
-    private static var renewalRecoveries: [UUID: AuthStorage$Codex.RemovalKeyring] = [:]
+    private static var renewalRecoveries: [UUID: RenewalRecovery] = [:]
 
     /// Базовый CODEX_HOME: его берут голая `codex` и приложение.
     static var baseHome: URL {
@@ -444,9 +448,22 @@ enum AuthSwap$Codex {
     /// pending rotation in the recovery namespace without publishing over a new login.
     static func retainRemovalRecovery(_ recovery: AuthStorage$Codex.RemovalKeyring) {
         for renewal in renewals.values where renewal.record.backend == .keyring {
-            let storage = renewalRecoveries[renewal.id]?.storage ?? renewal.storage
-            if storage.home.path == recovery.original.home.path { renewalRecoveries[renewal.id] = recovery }
+            let storage = renewalRecoveries[renewal.id]?.removal.storage ?? renewal.storage
+            if storage.home.path == recovery.original.home.path {
+                renewalRecoveries[renewal.id] = RenewalRecovery(removal: recovery,
+                                                               generation: generations[recovery.storage.home.path])
+            }
         }
+    }
+
+    /// Discovery gives a retained recovery its own column. Retry only the
+    /// pending grant routed to that native namespace; persistence verifies its owner.
+    static func recoveryMatches(_ renewal: Renewal, columnID: String, home: URL) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard renewals[renewal.key]?.id == renewal.id,
+              let recovery = renewalRecoveries[renewal.id] else { return false }
+        return homeKey(liveHome(columnID: columnID, home: home)) == recovery.removal.storage.home.path
     }
 
     /// Retry only the backend that supplied the submitted refresh grant. In auto
@@ -457,19 +474,30 @@ enum AuthSwap$Codex {
         lock.lock()
         defer { lock.unlock() }
         let key = renewal.key
-        guard generations[key] == renewal.generation,
-              columnGenerations[renewal.columnID] == renewal.columnGeneration,
-              generations[renewal.sourceKey] == renewal.sourceGeneration,
-              renewals[key]?.id == renewal.id else { return nil }
+        guard renewals[key]?.id == renewal.id else { return nil }
         let recovery = renewalRecoveries[renewal.id]
-        let destination = recovery?.storage ?? renewal.storage
-        let destinationKey = recovery?.storage.home.path ?? renewal.sourceKey
-        guard recovery?.owner.matches(destination.home) != false,
-              sourceKey(destination, backend: renewal.record.backend) == destinationKey else { return nil }
+        let destination = recovery?.removal.storage ?? renewal.storage
+        let destinationKey = recovery?.removal.storage.home.path ?? renewal.sourceKey
+        if let recovery {
+            // Recovery is now a separate owner. Removing a replacement at the
+            // old column must not discard this owner's accepted rotation.
+            guard recovery.removal.owner.matches(destination.home),
+                  generations[destinationKey] == recovery.generation else { return nil }
+        } else {
+            guard generations[key] == renewal.generation,
+                  columnGenerations[renewal.columnID] == renewal.columnGeneration,
+                  generations[renewal.sourceKey] == renewal.sourceGeneration else { return nil }
+        }
+        guard sourceKey(destination, backend: renewal.record.backend) == destinationKey else { return nil }
         guard let record = try destination.load(backend: renewal.record.backend) else { return nil }
         guard let updated = renewedAuth(record.data, usedRefreshToken: usedRefreshToken,
                                        tokens: tokens, now: Date()) else { return nil }
         try destination.save(updated, backend: record.backend)
+        if recovery != nil {
+            return AuthSnapshot(data: updated, key: destinationKey, generation: generations[destinationKey],
+                                columnGeneration: columnGenerations[profileColumnID(destination.home.lastPathComponent)],
+                                sourceKey: destinationKey, sourceGeneration: generations[destinationKey])
+        }
         return AuthSnapshot(data: updated, key: renewal.key, generation: renewal.generation,
                             columnGeneration: renewal.columnGeneration,
                             sourceKey: destinationKey, sourceGeneration: generations[destinationKey])
@@ -679,12 +707,14 @@ enum AuthSwap$Codex {
         generations[key] = UUID()
         if !preservesSharedFile, let fileOwner { generations[fileOwner] = UUID() }
         if let columnID { columnGenerations[columnID] = UUID() }
-        if let renewal = renewals.removeValue(forKey: key) { renewalRecoveries[renewal.id] = nil }
         // The logical profile may have moved to another physical root while its
-        // old request was in flight. Successful removal retires that owner too.
+        // old request was in flight. Recovery retains its own separate owner.
         let retired = renewals.filter {
-            $0.value.columnID == columnID
-                || (renewalRecoveries[$0.value.id]?.storage ?? $0.value.storage).home.path == target.home.path
+            if let recovery = renewalRecoveries[$0.value.id] {
+                return recovery.removal.storage.home.path == target.home.path
+            }
+            return $0.key == key || $0.value.columnID == columnID
+                || $0.value.storage.home.path == target.home.path
                 || !preservesSharedFile && $0.value.record.backend == .file && $0.value.sourceKey == fileOwner
         }.map(\.key)
         for key in retired {
@@ -713,7 +743,7 @@ enum AuthSwap$Codex {
     /// backup. Fence the actual source/destination while its grant is in flight.
     private static func requireIdle(_ storage: AuthStorage$Codex) throws {
         for renewal in renewals.values {
-            let destination = renewalRecoveries[renewal.id]?.storage ?? renewal.storage
+            let destination = renewalRecoveries[renewal.id]?.removal.storage ?? renewal.storage
             if destination.home.path == storage.home.path { throw Failure.busy }
             guard let owner = fileOwnerKey(storage.home), owner == fileOwnerKey(destination.home) else { continue }
             // Keychain saves also remove auth.json. A pending file grant must
