@@ -543,13 +543,16 @@ enum AuthSwap$Codex {
         guard let projected = renewedAuth(renewal.record.data, usedRefreshToken: usedRefreshToken,
                                          tokens: tokens, now: Date()) else { return nil }
         rememberRotation(from: renewal.record.data, to: projected)
-        let currentKey = try renewal.record.backend == .file
-            ? availableFileOwnerKey(destination.home) : destination.home.path
-        guard currentKey == destinationKey else { return nil }
         var failure: Error?
         for copy in renewal.copies {
             do { try persist(copy, tokens: tokens, usedRefreshToken: usedRefreshToken) }
             catch { failure = error }
+        }
+        let currentKey = try renewal.record.backend == .file
+            ? availableFileOwnerKey(destination.home) : destination.home.path
+        guard currentKey == destinationKey else {
+            if let failure { throw failure }
+            return nil
         }
         var updated: Data?
         do {

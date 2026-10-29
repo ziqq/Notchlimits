@@ -172,3 +172,15 @@ class CodexPersistenceRegressions(unittest.TestCase):
 
     def test_codex_copy_primary_bootstrap_auto(self):
         self.check_scenario("codex-copy-primary-bootstrap-auto")
+
+    def test_codex_copy_source_replaced_keyring(self):
+        self.check_scenario("codex-copy-source-replaced-keyring")
+
+    def test_codex_copy_source_replaced_auto(self):
+        self.check_scenario("codex-copy-source-replaced-auto")
+
+    def test_codex_copy_source_replaced_keyring_denied(self):
+        self.check_scenario("codex-copy-source-replaced-keyring-denied")
+
+    def test_codex_copy_source_replaced_auto_denied(self):
+        self.check_scenario("codex-copy-source-replaced-auto-denied")
