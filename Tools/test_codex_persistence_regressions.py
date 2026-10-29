@@ -127,3 +127,48 @@ class CodexPersistenceRegressions(unittest.TestCase):
 
     def test_codex_file_rollback_inflight(self):
         self.check_scenario("codex-file-rollback-inflight")
+
+    def test_codex_copy_bootstrap_keyring(self):
+        self.check_scenario("codex-copy-bootstrap-keyring")
+
+    def test_codex_copy_bootstrap_auto(self):
+        self.check_scenario("codex-copy-bootstrap-auto")
+
+    def test_codex_copy_bootstrap_keyring_new_login(self):
+        self.check_scenario("codex-copy-bootstrap-keyring-new-login")
+
+    def test_codex_copy_bootstrap_auto_new_login(self):
+        self.check_scenario("codex-copy-bootstrap-auto-new-login")
+
+    def test_codex_copy_bootstrap_keyring_retarget(self):
+        self.check_scenario("codex-copy-bootstrap-keyring-retarget")
+
+    def test_codex_copy_bootstrap_auto_retarget(self):
+        self.check_scenario("codex-copy-bootstrap-auto-retarget")
+
+    def test_codex_copy_bootstrap_file(self):
+        self.check_scenario("codex-copy-bootstrap-file")
+
+    def test_codex_copy_bootstrap_keyring_readded(self):
+        self.check_scenario("codex-copy-bootstrap-keyring-readded")
+
+    def test_codex_copy_bootstrap_auto_readded(self):
+        self.check_scenario("codex-copy-bootstrap-auto-readded")
+
+    def test_codex_copy_bootstrap_keyring_pending(self):
+        self.check_scenario("codex-copy-bootstrap-keyring-pending")
+
+    def test_codex_copy_bootstrap_auto_pending(self):
+        self.check_scenario("codex-copy-bootstrap-auto-pending")
+
+    def test_codex_copy_native_bootstrap_keyring(self):
+        self.check_scenario("codex-copy-native-bootstrap-keyring")
+
+    def test_codex_copy_native_bootstrap_auto(self):
+        self.check_scenario("codex-copy-native-bootstrap-auto")
+
+    def test_codex_copy_primary_bootstrap_keyring(self):
+        self.check_scenario("codex-copy-primary-bootstrap-keyring")
+
+    def test_codex_copy_primary_bootstrap_auto(self):
+        self.check_scenario("codex-copy-primary-bootstrap-auto")

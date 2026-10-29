@@ -919,7 +919,11 @@ enum AuthSwap$Codex {
 
     private static func ownsCopy(_ copy: SessionCopy) throws -> Bool {
         guard generations[copy.sourceKey] == copy.generation else { return false }
-        return try ownsDirectory(copy.owner, at: copy.storage.home)
+        if copy.record.backend == .keyring, homeKey(copy.storage.home) != copy.sourceKey { return false }
+        let sameDirectory = try ownsDirectory(copy.owner, at: copy.storage.home)
+        // Recreating a directory does not replace its native Keychain namespace.
+        // Defer unavailable owners; persistence still verifies their credentials.
+        return copy.record.backend == .keyring || sameDirectory
     }
 
     /// Codex removal holds the swap lock. An exclusive rollback rename can
@@ -969,10 +973,10 @@ enum AuthSwap$Codex {
         guard authIdentity(data) != authIdentity(record.data),
               let owner = DirectoryIdentity.capture(source.home) else { return record }
         let key = sourceKey(source, backend: record.backend)
-        // An identical login in a replacement directory does not authorize an
-        // earlier request to write there. Never republish its known spent grant.
-        guard let known = knownCopies[key], known.owner == owner,
-              known.generation == generations[key] else { throw Failure.busy }
+        // File copies retain their physical directory; Keychain copies retain
+        // their native namespace. Neither may republish a known spent grant.
+        guard let known = knownCopies[key], known.record.backend == record.backend,
+              try ownsCopy(known) else { throw Failure.busy }
         let copy = SessionCopy(storage: source, record: record, owner: owner,
                                sourceKey: key, generation: generations[key])
         do {
@@ -1062,9 +1066,9 @@ enum AuthSwap$Codex {
             clearPrimarySession()
             return false
         }
-        guard knownCopies.values.contains(where: {
-            refreshToken($0.record.data) == refreshToken(baseline)
-                && $0.owner.matches($0.storage.home) && generations[$0.sourceKey] == $0.generation
+        guard try knownCopies.values.contains(where: {
+            guard refreshToken($0.record.data) == refreshToken(baseline) else { return false }
+            return try ownsCopy($0)
         }) else { return false }
         guard let native = try storage(at: baseHome).load(verifyingOwner: true),
               accountID(native.data) == accountID(primary.data) else {

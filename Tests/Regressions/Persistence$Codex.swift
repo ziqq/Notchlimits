@@ -39,6 +39,21 @@ enum Persistence$Codex {
             case "codex-auth-file-missing": try await missingFile()
             case "codex-file-rollback-pending": try await fileRollback(pending: true)
             case "codex-file-rollback-inflight": try await fileRollback(pending: false)
+            case "codex-copy-bootstrap-keyring": try await copyBootstrap(mode: "keyring")
+            case "codex-copy-bootstrap-auto": try await copyBootstrap(mode: "auto")
+            case "codex-copy-bootstrap-keyring-new-login": try await copyBootstrap(mode: "keyring", replacement: "new-login")
+            case "codex-copy-bootstrap-auto-new-login": try await copyBootstrap(mode: "auto", replacement: "new-login")
+            case "codex-copy-bootstrap-keyring-retarget": try await copyBootstrap(mode: "keyring", replacement: "retarget")
+            case "codex-copy-bootstrap-auto-retarget": try await copyBootstrap(mode: "auto", replacement: "retarget")
+            case "codex-copy-bootstrap-file": try await copyBootstrap(mode: "file")
+            case "codex-copy-bootstrap-keyring-readded": try await copyBootstrap(mode: "keyring", replacement: "readded")
+            case "codex-copy-bootstrap-auto-readded": try await copyBootstrap(mode: "auto", replacement: "readded")
+            case "codex-copy-bootstrap-keyring-pending": try await copyBootstrap(mode: "keyring", pending: true)
+            case "codex-copy-bootstrap-auto-pending": try await copyBootstrap(mode: "auto", pending: true)
+            case "codex-copy-native-bootstrap-keyring": try await copyNativeRotation(mode: "keyring", primary: false)
+            case "codex-copy-native-bootstrap-auto": try await copyNativeRotation(mode: "auto", primary: false)
+            case "codex-copy-primary-bootstrap-keyring": try await copyNativeRotation(mode: "keyring", primary: true)
+            case "codex-copy-primary-bootstrap-auto": try await copyNativeRotation(mode: "auto", primary: true)
             case "codex-quarantine-child": try await restartChild()
             default: throw Failure(description: "Unknown persistence scenario")
             }
@@ -381,6 +396,137 @@ enum Persistence$Codex {
                    "Renewal after rollback changed the native bootstrap data")
         let quit = await Renewal$Codex.shared.prepareForTermination(timeout: 0.02)
         try expect(quit, "Restored file owner could not drain")
+    }
+
+    @MainActor
+    private static func copyBootstrap(mode: String, replacement: String = "same", pending: Bool = false) async throws {
+        let source = ProfileDirectories.codexRoot.appendingPathComponent("bootstrap-source")
+        let copy = ProfileDirectories.codexRoot.appendingPathComponent("bootstrap-copy")
+        try Fixture.codexLogin(AuthSwap$Codex.baseHome, account: "independent-native", mode: "file")
+        try Fixture.codexLogin(source, account: "shared-session", mode: "file", expired: true)
+        var json = try JSONSerialization.jsonObject(with: Data(contentsOf: source.appendingPathComponent("auth.json"))) as! [String: Any]
+        var tokens = json["tokens"] as! [String: Any]
+        tokens["account_id"] = "copy-routing"
+        json["tokens"] = tokens
+        json["local_metadata"] = "preserved"
+        let original = try JSONSerialization.data(withJSONObject: json)
+        try Fixture.codexMode(copy, mode)
+        let key = Fixture.codexKey(copy)
+        if mode == "file" { try original.write(to: copy.appendingPathComponent("auth.json")) }
+        else { Fixture.codexKeychain[key] = original }
+        guard let owner = DirectoryIdentity.capture(copy) else { throw Failure(description: "Missing copy owner") }
+        let account = DiscoveredAccount(id: "codex:bootstrap-copy", provider: .codex,
+                                       profileName: "bootstrap-copy", source: .codexHome(copy))
+        let sourceAccount = DiscoveredAccount(id: "codex:bootstrap-source", provider: .codex,
+                                             profileName: "bootstrap-source", source: .codexHome(source))
+        defer { Fixture.releaseRefresh(); Fixture.denyCodexWriteAccount = nil }
+        var request: Task<Renewal$Codex.Result, Never>?
+        if pending {
+            Fixture.denyCodexWriteAccount = key
+            let result = await Renewal$Codex.shared.renew(columnID: sourceAccount.id, home: source, force: true)
+            try expect(result == .unavailable && Fixture.refreshCalls == 1, "Copy write refusal did not retain the accepted rotation")
+            let quit = await Renewal$Codex.shared.prepareForTermination(timeout: 0.02)
+            await Renewal$Codex.shared.cancelTermination()
+            try expect(!quit, "Pending copy was discarded before its namespace became writable")
+        } else {
+            Fixture.response = .heldRenewed
+            request = Task { await Renewal$Codex.shared.renew(columnID: sourceAccount.id, home: source, force: true) }
+            try await waitForPOST()
+        }
+        if replacement == "readded" { try AccountRemoval.remove(account) }
+        else { try Foundation.FileManager.default.removeItem(at: copy) }
+        let target = Fixture.root.appendingPathComponent("independent-copy-target")
+        if replacement == "retarget" {
+            try Fixture.codexLogin(target, account: "independent-target", mode: "file")
+            try Foundation.FileManager.default.createSymbolicLink(at: copy, withDestinationURL: target)
+        } else { try Fixture.codexMode(copy, mode) }
+        try expect(!owner.matches(copy) && (Fixture.codexKey(copy) == key) == (replacement != "retarget"),
+                   "Bootstrap did not establish its expected native namespace")
+        if replacement == "new-login" {
+            tokens["refresh_token"] = "independent-new-login"
+            json["tokens"] = tokens
+        }
+        json["local_metadata"] = "changed-during-request"
+        let expected: Data
+        if replacement == "retarget" { expected = try Data(contentsOf: target.appendingPathComponent("auth.json")) }
+        else {
+            expected = try JSONSerialization.data(withJSONObject: json)
+            if mode == "file" { try expected.write(to: copy.appendingPathComponent("auth.json")) }
+            else { Fixture.codexKeychain[key] = expected }
+        }
+        Fixture.denyCodexWriteAccount = nil
+        if let request { Fixture.releaseRefresh(); _ = await request.value }
+        else { _ = await Renewal$Codex.shared.renew(columnID: sourceAccount.id, home: source, force: false) }
+        let quit = await Renewal$Codex.shared.prepareForTermination(timeout: 0.02)
+        await Renewal$Codex.shared.cancelTermination()
+        guard let stored = try AuthStorage$Codex(home: copy).load()?.data else {
+            throw Failure(description: "Copy credentials disappeared after bootstrap")
+        }
+        let preserved = replacement != "same" || mode == "file"
+        print("BOOTSTRAP mode=\(mode) replacement=\(replacement) pending=\(pending) quit=\(quit) posts=\(Fixture.refreshCalls)")
+        if replacement == "retarget" {
+            try expect(stored == expected && Fixture.codexKeychain[key] == original,
+                       "A retargeted path changed another native namespace or its file login")
+        } else if preserved {
+            try expect(stored == expected, "A retired file owner or independent/re-added Keychain login was overwritten")
+            if replacement != "new-login" {
+                let replay = await Renewal$Codex.shared.renew(columnID: account.id, home: copy, force: false)
+                try expect(Fixture.refreshCalls == 1 && replay != .renewed, "A replacement replayed the spent grant")
+            }
+        } else {
+            let value = try JSONSerialization.jsonObject(with: stored) as! [String: Any]
+            let fresh = (value["tokens"] as? [String: Any])?["refresh_token"] as? String
+            try expect(fresh == "synthetic-rotated", "The unchanged Keychain namespace retained its spent copied grant")
+            try expect(Provider$Codex.parseAuth(stored)?.accountID == "copy-routing"
+                       && value["local_metadata"] as? String == "changed-during-request",
+                       "Copy renewal changed routing or current metadata")
+            try AccountRemoval.remove(sourceAccount)
+            try AuthSwap$Codex.activate(columnID: account.id, home: copy)
+            try expect(Renewal$Codex.refreshToken(AuthSwap$Codex.baseHome.appendingPathComponent("auth.json")) == fresh,
+                       "Removing the source or switching published the spent copy")
+        }
+        try expect(quit && Fixture.refreshCalls == 1, "Bootstrap lost a pending rotation or repeated its POST")
+    }
+
+    @MainActor
+    private static func copyNativeRotation(mode: String, primary: Bool) async throws {
+        let base = AuthSwap$Codex.baseHome
+        let source = ProfileDirectories.codexRoot.appendingPathComponent("native-source")
+        let copy = ProfileDirectories.codexRoot.appendingPathComponent("native-copy")
+        try Fixture.codexLogin(base, account: primary ? "shared-primary" : "independent-native", mode: "file")
+        try Fixture.codexLogin(source, account: primary ? "independent-source" : "shared-selected", mode: "file")
+        let shared = primary ? base : source
+        var json = try JSONSerialization.jsonObject(with: Data(contentsOf: shared.appendingPathComponent("auth.json"))) as! [String: Any]
+        var tokens = json["tokens"] as! [String: Any]
+        tokens["account_id"] = "native-copy-routing"
+        json["tokens"] = tokens
+        json["local_metadata"] = "native-copy-metadata"
+        try Fixture.codexMode(copy, mode)
+        let key = Fixture.codexKey(copy)
+        Fixture.codexKeychain[key] = try JSONSerialization.data(withJSONObject: json)
+        guard let owner = DirectoryIdentity.capture(copy) else { throw Failure(description: "Missing native copy owner") }
+        try AuthSwap$Codex.activate(columnID: "codex:native-source", home: source)
+        if primary { try AuthSwap$Codex.restoreDefault() }
+        try Fixture.writeAuth(base, account: primary ? "shared-primary" : "shared-selected",
+                              refresh: "native-client-rotation", expired: false)
+        try Foundation.FileManager.default.removeItem(at: copy)
+        try Fixture.codexMode(copy, mode)
+        try expect(!owner.matches(copy) && Fixture.codexKey(copy) == key, "Native copy bootstrap retained its directory owner")
+        if primary {
+            _ = await Renewal$Codex.shared.renew(columnID: "codex:native-copy", home: copy, force: true)
+        } else { try AuthSwap$Codex.restoreDefault() }
+        let quit = await Renewal$Codex.shared.prepareForTermination(timeout: 0.02)
+        guard let stored = Fixture.codexKeychain[key],
+              let value = try JSONSerialization.jsonObject(with: stored) as? [String: Any] else {
+            throw Failure(description: "Native copy credentials disappeared")
+        }
+        let refresh = (value["tokens"] as? [String: Any])?["refresh_token"] as? String
+        print("NATIVE BOOTSTRAP mode=\(mode) primary=\(primary) quit=\(quit) posts=\(Fixture.refreshCalls)")
+        try expect(quit && Fixture.refreshCalls == 0 && refresh == "native-client-rotation",
+                   "Native rotation left a spent Keychain copy or submitted its old grant")
+        try expect(Provider$Codex.parseAuth(stored)?.accountID == "native-copy-routing"
+                   && value["local_metadata"] as? String == "native-copy-metadata",
+                   "Native copyback changed routing or metadata")
     }
 
 }
