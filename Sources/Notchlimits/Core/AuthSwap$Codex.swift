@@ -32,6 +32,8 @@ enum AuthSwap$Codex {
     private static let stashHomeKey = "codexAppStashHome"
     private static let sourceAuthKey = "codexAppSourceAuth"
     private static let primarySessionKey = "codexAppPrimarySession"
+    private static let nativeGrantKey = "codexNativeGrant"
+    private static let retiredNativeGrantsKey = "codexRetiredNativeGrants"
 
     /// Перестановка входов и запись продлённых токенов не должны пересечься:
     /// иначе в `~/.codex` уедет уже потраченный refresh-токен.
@@ -77,6 +79,7 @@ enum AuthSwap$Codex {
     private static var knownCopies: [String: SessionCopy] = [:]
     private static var copyDebt: [String: SessionCopy] = [:]
     private static var primarySession: (data: Data, owner: DirectoryIdentity, generation: UUID?)?
+    private static var nativeGrantsDirty = false
 
     /// Базовый CODEX_HOME: его берут голая `codex` и приложение.
     static var baseHome: URL {
@@ -392,11 +395,13 @@ enum AuthSwap$Codex {
         guard homeKey(incoming) == source.home.path else { throw Failure.busy }
         payload = incomingRecord?.data
         if let payload { try base.save(payload) } else { try base.delete() }
+        rememberNativeGrant(payload, home: base.home.path)
         if columnID == defaultColumnID {
             // Do not forget a refused backup cleanup or report a completed switch.
             if !keepBackup {
                 do { try source.delete() } catch {
                     try base.restore(previous)
+                    rememberNativeGrant(previous?.data, home: base.home.path)
                     throw error
                 }
             }
@@ -432,6 +437,10 @@ enum AuthSwap$Codex {
         let key = homeKey(home)
         if let expected, expected.key != key || expected.generation != generations[key]
             || expected.columnGeneration != columnGenerations[columnID] { return nil }
+        let nativeStorage = try storage(at: baseHome)
+        let native = try nativeStorage.load(verifyingOwner: true)
+        guard homeKey(baseHome) == nativeStorage.home.path else { throw Failure.busy }
+        try observeNativeGrant(native?.data, home: nativeStorage.home.path)
         guard renewals[key] == nil,
               !renewals.values.contains(where: { $0.columnID == columnID }) else { throw Failure.busy }
         let live = liveHome(columnID: columnID, home: home)
@@ -448,7 +457,6 @@ enum AuthSwap$Codex {
         try requireIdleGrant(observed.data)
         let record = try reconcile(source, record: observed)
         guard homeKey(home) == key, homeKey(live) == source.home.path else { throw Failure.busy }
-        let nativeStorage = try storage(at: baseHome)
         guard !(try sameOwner(source, nativeStorage)),
               !(try removesFile(source, backend: record.backend, ownedBy: nativeStorage)) else { return nil }
         if let active = activeOwnerPath, isSwapped {
@@ -461,6 +469,7 @@ enum AuthSwap$Codex {
         // A copied grant is still native-owned even in a different directory.
         // Independent sessions of the same account have different refresh tokens.
         if let token = refreshToken(record.data) {
+            guard try !nativeOwnsOrRetired(record.data) else { return nil }
             if let native = try nativeStorage.load(verifyingOwner: true), refreshToken(native.data) == token { return nil }
             let proof = isSwapped ? try sourceProof() : nil
             if isSwapped, let identity = authIdentity(record.data),
@@ -610,6 +619,8 @@ enum AuthSwap$Codex {
         let live = try storage(at: baseHome)
         let record = try live.load(verifyingOwner: true)
         let payload = record?.data
+        guard homeKey(baseHome) == live.home.path else { throw Failure.busy }
+        try observeNativeGrant(payload, home: live.home.path)
         if !isSwapped {
             try advancePrimaryCopies()
             if let payload { trackCopies(of: payload) }
@@ -779,6 +790,7 @@ enum AuthSwap$Codex {
                 if let primary = removedBackup { try restoreBackup(primary, to: backup) }
                 if restore {
                     try base.restore(selected)
+                    rememberNativeGrant(selected?.data, home: base.home.path)
                     for (name, value) in zip(keys, saved) {
                         if let value { UserDefaults.standard.set(value, forKey: name) }
                         else { UserDefaults.standard.removeObject(forKey: name) }
@@ -789,7 +801,10 @@ enum AuthSwap$Codex {
             UserDefaults.standard.removeObject(forKey: stashStoreKey)
             UserDefaults.standard.removeObject(forKey: stashHomeKey)
             UserDefaults.standard.removeObject(forKey: sourceAuthKey)
-            if columnID == defaultColumnID { clearPrimarySession() }
+            if columnID == defaultColumnID {
+                clearPrimarySession()
+                rememberNativeGrant(nil, home: base.home.path)
+            }
         } else {
             try operation(target)
         }
@@ -1029,6 +1044,88 @@ enum AuthSwap$Codex {
         refreshToken(data).map { SHA256.hash(data: Data($0.utf8)).map { String(format: "%02x", $0) }.joined() }
     }
 
+    private static func nativeGrantProof(_ data: Data?, home: String) -> [String: String]? {
+        guard let data, let grant = grantIdentity(data), let account = accountID(data) else { return nil }
+        return ["home": home, "account": account, "grant": grant]
+    }
+
+    /// Intentional handoff releases an unchanged grant to its sleeping profile.
+    /// Normal termination must flush the new native owner before a restart.
+    private static func rememberNativeGrant(_ data: Data?, home: String) {
+        let proof = nativeGrantProof(data, home: home)
+        guard UserDefaults.standard.dictionary(forKey: nativeGrantKey) as? [String: String] != proof else { return }
+        UserDefaults.standard.set(proof, forKey: nativeGrantKey)
+        nativeGrantsDirty = true
+    }
+
+    private static func nativeGrantOwner(home: String) throws -> [String: String]? {
+        if let value = UserDefaults.standard.object(forKey: nativeGrantKey) {
+            guard let proof = value as? [String: String], proof["home"] != nil,
+                  proof["account"] != nil, proof["grant"]?.count == 64 else { throw Failure.busy }
+            return proof
+        }
+        // Upgrade existing selections without making credential identity or
+        // physical copy ownership the authority to spend a native grant.
+        if !isSwapped {
+            return UserDefaults.standard.dictionary(forKey: primarySessionKey) as? [String: String]
+        }
+        if let path = activeOwnerPath,
+           let selected = try storage(at: URL(fileURLWithPath: path)).load(verifyingOwner: true),
+           let identity = authIdentity(selected.data), try sourceProof()?.ownsSelected(identity) == true {
+            return nativeGrantProof(selected.data, home: home)
+        }
+        return nil
+    }
+
+    private static func retiredNativeGrants() throws -> Set<String> {
+        guard let value = UserDefaults.standard.object(forKey: retiredNativeGrantsKey) else { return [] }
+        guard let grants = value as? [String] else { throw Failure.busy }
+        return Set(grants)
+    }
+
+    /// Native rotation retires the grant itself, including unobserved copies
+    /// and copies with another account routing or a replaced file directory.
+    private static func observeNativeGrant(_ data: Data?, home: String) throws {
+        if let current = nativeGrantProof(data, home: home), let previous = try nativeGrantOwner(home: home) {
+            var observed: [String: String]? = current
+            if let formerHome = previous["home"], formerHome != home {
+                // A file alias can still expose the same native rotation, while
+                // Keychain aliases have independent native namespaces.
+                let former = try AuthStorage$Codex(home: URL(fileURLWithPath: formerHome))
+                observed = nil
+                if former.home.path == formerHome {
+                    let record = try former.load(verifyingOwner: true)
+                    guard homeKey(former.home) == formerHome else { throw Failure.busy }
+                    observed = nativeGrantProof(record?.data, home: formerHome)
+                }
+            }
+            if let grant = previous["grant"], observed == nil
+                || previous["home"] == observed?["home"] && previous["account"] == observed?["account"]
+                    && grant != observed?["grant"] {
+                var retired = try retiredNativeGrants()
+                if retired.insert(grant).inserted {
+                    UserDefaults.standard.set(retired.sorted(), forKey: retiredNativeGrantsKey)
+                    nativeGrantsDirty = true
+                }
+            }
+        }
+        if data != nil { rememberNativeGrant(data, home: home) }
+        try flushNativeGrants()
+    }
+
+    private static func nativeOwnsOrRetired(_ data: Data) throws -> Bool {
+        guard let grant = grantIdentity(data) else { return false }
+        if try retiredNativeGrants().contains(grant) { return true }
+        let owner = try nativeGrantOwner(home: homeKey(baseHome))
+        return owner?["home"] == homeKey(baseHome) && owner?["grant"] == grant
+    }
+
+    private static func flushNativeGrants() throws {
+        guard nativeGrantsDirty else { return }
+        guard UserDefaults.standard.synchronize() else { throw Failure.busy }
+        nativeGrantsDirty = false
+    }
+
     private static func rememberPrimarySession(_ data: Data) {
         guard let grant = grantIdentity(data), let account = accountID(data) else {
             UserDefaults.standard.removeObject(forKey: primarySessionKey)
@@ -1103,6 +1200,7 @@ enum AuthSwap$Codex {
             copyDebt[key] = nil
         }
         for data in Array(rotations.values) { try synchronizeCopies(to: data) }
+        try flushNativeGrants()
     }
 
     private static func storage(at home: URL) throws -> AuthStorage$Codex {

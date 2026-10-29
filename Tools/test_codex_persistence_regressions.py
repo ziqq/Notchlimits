@@ -184,3 +184,117 @@ class CodexPersistenceRegressions(unittest.TestCase):
 
     def test_codex_copy_source_replaced_auto_denied(self):
         self.check_scenario("codex-copy-source-replaced-auto-denied")
+
+    def test_codex_native_grant_fresh_replaced_file(self):
+        self.check_scenario("codex-native-grant-fresh-replaced-file")
+
+    def test_codex_native_grant_fresh_replaced_auto_file(self):
+        self.check_scenario("codex-native-grant-fresh-replaced-auto-file")
+
+    def test_codex_native_grant_fresh_stable_file(self):
+        self.check_scenario("codex-native-grant-fresh-stable-file")
+
+    def test_codex_native_grant_fresh_replaced_keyring(self):
+        self.check_scenario("codex-native-grant-fresh-replaced-keyring")
+
+    def test_codex_native_grant_fresh_independent_file(self):
+        self.check_scenario("codex-native-grant-fresh-independent-file")
+
+    def test_codex_native_grant_fresh_independent_auto_file(self):
+        self.check_scenario("codex-native-grant-fresh-independent-auto-file")
+
+    def test_codex_native_grant_fresh_late_routing_file(self):
+        self.check_scenario("codex-native-grant-fresh-late-routing-file")
+
+    def test_codex_native_grant_fresh_late_routing_keyring(self):
+        self.check_scenario("codex-native-grant-fresh-late-routing-keyring")
+
+    def test_codex_native_grant_fresh_late_same_routing_file(self):
+        self.check_scenario("codex-native-grant-fresh-late-same-routing-file")
+
+    def test_codex_native_grant_fresh_late_same_routing_keyring(self):
+        self.check_scenario("codex-native-grant-fresh-late-same-routing-keyring")
+
+    def test_codex_native_grant_expired_replaced_file(self):
+        self.check_scenario("codex-native-grant-expired-replaced-file")
+
+    def test_codex_native_grant_expired_replaced_auto_file(self):
+        self.check_scenario("codex-native-grant-expired-replaced-auto-file")
+
+    def test_codex_native_grant_expired_stable_file(self):
+        self.check_scenario("codex-native-grant-expired-stable-file")
+
+    def test_codex_native_grant_expired_replaced_keyring(self):
+        self.check_scenario("codex-native-grant-expired-replaced-keyring")
+
+    def test_codex_native_grant_expired_independent_file(self):
+        self.check_scenario("codex-native-grant-expired-independent-file")
+
+    def test_codex_native_grant_expired_independent_auto_file(self):
+        self.check_scenario("codex-native-grant-expired-independent-auto-file")
+
+    def test_codex_native_grant_expired_late_routing_file(self):
+        self.check_scenario("codex-native-grant-expired-late-routing-file")
+
+    def test_codex_native_grant_expired_late_routing_keyring(self):
+        self.check_scenario("codex-native-grant-expired-late-routing-keyring")
+
+    def test_codex_native_grant_expired_late_same_routing_file(self):
+        self.check_scenario("codex-native-grant-expired-late-same-routing-file")
+
+    def test_codex_native_grant_expired_late_same_routing_keyring(self):
+        self.check_scenario("codex-native-grant-expired-late-same-routing-keyring")
+
+    def test_codex_native_grant_restart_file_unobserved(self):
+        self.check_scenario("codex-native-grant-restart-file-unobserved")
+
+    def test_codex_native_grant_restart_file_retired(self):
+        self.check_scenario("codex-native-grant-restart-file-retired")
+
+    def test_codex_native_grant_observe_file(self):
+        self.check_scenario("codex-native-grant-observe-file")
+
+    def test_codex_native_grant_selected_file(self):
+        self.check_scenario("codex-native-grant-selected-file")
+
+    def test_codex_native_grant_sync_file(self):
+        self.check_scenario("codex-native-grant-sync-file")
+
+    def test_codex_native_grant_handoff_file(self):
+        self.check_scenario("codex-native-grant-handoff-file")
+
+    def test_codex_native_grant_rollback_file(self):
+        self.check_scenario("codex-native-grant-rollback-file")
+
+    def test_codex_native_grant_restart_keyring_unobserved(self):
+        self.check_scenario("codex-native-grant-restart-keyring-unobserved")
+
+    def test_codex_native_grant_restart_keyring_retired(self):
+        self.check_scenario("codex-native-grant-restart-keyring-retired")
+
+    def test_codex_native_grant_observe_keyring(self):
+        self.check_scenario("codex-native-grant-observe-keyring")
+
+    def test_codex_native_grant_selected_keyring(self):
+        self.check_scenario("codex-native-grant-selected-keyring")
+
+    def test_codex_native_grant_sync_keyring(self):
+        self.check_scenario("codex-native-grant-sync-keyring")
+
+    def test_codex_native_grant_handoff_keyring(self):
+        self.check_scenario("codex-native-grant-handoff-keyring")
+
+    def test_codex_native_grant_rollback_keyring(self):
+        self.check_scenario("codex-native-grant-rollback-keyring")
+
+    def test_codex_native_grant_path_retarget(self):
+        self.check_scenario("codex-native-grant-path-retarget")
+
+    def test_codex_native_grant_path_stable(self):
+        self.check_scenario("codex-native-grant-path-stable")
+
+    def test_codex_native_grant_alias_file(self):
+        self.check_scenario("codex-native-grant-alias-file")
+
+    def test_codex_native_grant_alias_keyring(self):
+        self.check_scenario("codex-native-grant-alias-keyring")

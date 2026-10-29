@@ -58,6 +58,45 @@ enum Persistence$Codex {
             case "codex-copy-source-replaced-auto": try await copySourceReplacement(mode: "auto", denied: false)
             case "codex-copy-source-replaced-keyring-denied": try await copySourceReplacement(mode: "keyring", denied: true)
             case "codex-copy-source-replaced-auto-denied": try await copySourceReplacement(mode: "auto", denied: true)
+            case "codex-native-grant-fresh-replaced-file": try await nativeGrant(mode: "file", action: "replace", expired: false)
+            case "codex-native-grant-fresh-replaced-auto-file": try await nativeGrant(mode: "auto-file", action: "replace", expired: false)
+            case "codex-native-grant-fresh-stable-file": try await nativeGrant(mode: "file", action: "stable", expired: false)
+            case "codex-native-grant-fresh-replaced-keyring": try await nativeGrant(mode: "keyring", action: "replace", expired: false)
+            case "codex-native-grant-fresh-independent-file": try await nativeGrant(mode: "file", action: "independent", expired: false)
+            case "codex-native-grant-fresh-independent-auto-file": try await nativeGrant(mode: "auto-file", action: "independent", expired: false)
+            case "codex-native-grant-fresh-late-routing-file": try await nativeGrant(mode: "file", action: "late-routing", expired: false)
+            case "codex-native-grant-fresh-late-routing-keyring": try await nativeGrant(mode: "keyring", action: "late-routing", expired: false)
+            case "codex-native-grant-fresh-late-same-routing-file": try await nativeGrant(mode: "file", action: "late-same", expired: false)
+            case "codex-native-grant-fresh-late-same-routing-keyring": try await nativeGrant(mode: "keyring", action: "late-same", expired: false)
+            case "codex-native-grant-expired-replaced-file": try await nativeGrant(mode: "file", action: "replace", expired: true)
+            case "codex-native-grant-expired-replaced-auto-file": try await nativeGrant(mode: "auto-file", action: "replace", expired: true)
+            case "codex-native-grant-expired-stable-file": try await nativeGrant(mode: "file", action: "stable", expired: true)
+            case "codex-native-grant-expired-replaced-keyring": try await nativeGrant(mode: "keyring", action: "replace", expired: true)
+            case "codex-native-grant-expired-independent-file": try await nativeGrant(mode: "file", action: "independent", expired: true)
+            case "codex-native-grant-expired-independent-auto-file": try await nativeGrant(mode: "auto-file", action: "independent", expired: true)
+            case "codex-native-grant-expired-late-routing-file": try await nativeGrant(mode: "file", action: "late-routing", expired: true)
+            case "codex-native-grant-expired-late-routing-keyring": try await nativeGrant(mode: "keyring", action: "late-routing", expired: true)
+            case "codex-native-grant-expired-late-same-routing-file": try await nativeGrant(mode: "file", action: "late-same", expired: true)
+            case "codex-native-grant-expired-late-same-routing-keyring": try await nativeGrant(mode: "keyring", action: "late-same", expired: true)
+            case "codex-native-grant-restart-file-unobserved": try await nativeGrant(mode: "file", action: "replace", expired: true, restart: true, handoff: false)
+            case "codex-native-grant-restart-file-retired": try await nativeGrant(mode: "file", action: "late-routing", expired: true, restart: true, handoff: true)
+            case "codex-native-grant-observe-file": try await nativeGrantControl(mode: "file", action: "observe")
+            case "codex-native-grant-selected-file": try await nativeGrantControl(mode: "file", action: "selected")
+            case "codex-native-grant-sync-file": try await nativeGrantControl(mode: "file", action: "sync")
+            case "codex-native-grant-handoff-file": try await nativeGrantControl(mode: "file", action: "handoff")
+            case "codex-native-grant-rollback-file": try await nativeGrantControl(mode: "file", action: "rollback")
+            case "codex-native-grant-restart-keyring-unobserved": try await nativeGrant(mode: "keyring", action: "replace", expired: true, restart: true, handoff: false)
+            case "codex-native-grant-restart-keyring-retired": try await nativeGrant(mode: "keyring", action: "late-routing", expired: true, restart: true, handoff: true)
+            case "codex-native-grant-observe-keyring": try await nativeGrantControl(mode: "keyring", action: "observe")
+            case "codex-native-grant-selected-keyring": try await nativeGrantControl(mode: "keyring", action: "selected")
+            case "codex-native-grant-sync-keyring": try await nativeGrantControl(mode: "keyring", action: "sync")
+            case "codex-native-grant-handoff-keyring": try await nativeGrantControl(mode: "keyring", action: "handoff")
+            case "codex-native-grant-rollback-keyring": try await nativeGrantControl(mode: "keyring", action: "rollback")
+            case "codex-native-grant-path-retarget": try await nativeGrantPath(retarget: true)
+            case "codex-native-grant-path-stable": try await nativeGrantPath(retarget: false)
+            case "codex-native-grant-alias-file": try await nativeGrantAlias(mode: "file")
+            case "codex-native-grant-alias-keyring": try await nativeGrantAlias(mode: "keyring")
+            case "codex-native-grant-child": try await nativeGrantChild()
             case "codex-quarantine-child": try await restartChild()
             default: throw Failure(description: "Unknown persistence scenario")
             }
@@ -585,6 +624,301 @@ enum Persistence$Codex {
                    "Surviving copy persistence changed routing or metadata")
         try expect(try Data(contentsOf: source.appendingPathComponent("auth.json")) == independent,
                    "Copy persistence overwrote the replacement source login")
+    }
+
+    @MainActor
+    private static func nativeGrant(mode: String, action: String, expired: Bool,
+                                    restart: Bool = false, handoff: Bool = false) async throws {
+        let base = AuthSwap$Codex.baseHome
+        let copy = ProfileDirectories.codexRoot.appendingPathComponent("native-grant-copy")
+        let other = ProfileDirectories.codexRoot.appendingPathComponent("native-grant-other")
+        let late = ProfileDirectories.codexRoot.appendingPathComponent("native-grant-late")
+        let fileBackend = mode == "file" || mode == "auto-file"
+        try nativeGrantAuth(base, mode: "file", account: "native-primary", grant: "synthetic-already-spent", expired: expired)
+        let original = try Data(contentsOf: base.appendingPathComponent("auth.json"))
+        try Fixture.codexMode(copy, mode == "auto-file" ? "auto" : mode)
+        if fileBackend { try original.write(to: copy.appendingPathComponent("auth.json")) }
+        else { Fixture.codexKeychain[Fixture.codexKey(copy)] = original }
+        guard let owner = DirectoryIdentity.capture(copy) else { throw Failure(description: "Missing original native copy") }
+        try Fixture.codexLogin(other, account: "independent-other", mode: "file")
+        try AuthSwap$Codex.activate(columnID: "codex:native-grant-other", home: other)
+        try AuthSwap$Codex.restoreDefault()
+        try Fixture.writeAuth(base, account: "native-primary", refresh: "native-current-grant", expired: false)
+        if handoff {
+            _ = await Provider$Codex().fetch(DiscoveredAccount(id: "codex:native-grant-copy", provider: .codex,
+                profileName: "native-grant-copy", source: .codexHome(copy)))
+            try AuthSwap$Codex.activate(columnID: "codex:native-grant-other", home: other)
+        }
+        let native = try AuthSwap$Codex.authData(home: base)
+        var target = copy
+        if action == "replace" || action == "independent" {
+            try Foundation.FileManager.default.removeItem(at: copy)
+            try Fixture.codexMode(copy, mode == "auto-file" ? "auto" : mode)
+            try expect(!owner.matches(copy), "Native copy bootstrap retained its physical owner")
+            if fileBackend {
+                var payload = original
+                if action == "independent" {
+                    var root = try JSONSerialization.jsonObject(with: original) as! [String: Any]
+                    var tokens = root["tokens"] as! [String: Any]
+                    tokens["refresh_token"] = "independent-new-session"
+                    root["tokens"] = tokens
+                    payload = try JSONSerialization.data(withJSONObject: root)
+                }
+                try payload.write(to: copy.appendingPathComponent("auth.json"))
+            }
+        } else if action.hasPrefix("late-") {
+            target = late
+            try Fixture.codexMode(late, mode == "auto-file" ? "auto" : mode)
+            var root = try JSONSerialization.jsonObject(with: original) as! [String: Any]
+            if action == "late-routing" {
+                var tokens = root["tokens"] as! [String: Any]
+                tokens["account_id"] = "late-native-routing"
+                root["tokens"] = tokens
+            }
+            let payload = try JSONSerialization.data(withJSONObject: root)
+            if fileBackend { try payload.write(to: late.appendingPathComponent("auth.json")) }
+            else { Fixture.codexKeychain[Fixture.codexKey(late)] = payload }
+        }
+        if restart { try await nativeGrantRestart(target: target, expectedPosts: 0); return }
+        Fixture.rejectSpentRefresh = true
+        Fixture.holdFirstUsage = true
+        Fixture.releaseFirstUsage = true
+        Fixture.firstUsageStatus = expired && action == "independent" ? 200 : 401
+        let account = DiscoveredAccount(id: AuthSwap$Codex.profileColumnID(target.lastPathComponent), provider: .codex,
+                                        profileName: target.lastPathComponent, source: .codexHome(target))
+        let result = await Provider$Codex().fetch(account)
+        try expect(try AuthSwap$Codex.authData(home: base) == native, "Sleeping renewal overwrote the native login")
+        print("NATIVE GRANT mode=\(mode) action=\(action) expired=\(expired) posts=\(Fixture.refreshCalls) outcome=\(result)")
+        if action == "independent" {
+            try expect(Fixture.refreshCalls == 1, "Independent native-account session did not renew exactly once")
+            guard case .success = result else { throw Failure(description: "Independent session could not fetch usage") }
+        } else {
+            try expect(Fixture.refreshCalls == 0, "A native-owned refresh grant was submitted again after CLI rotation")
+        }
+    }
+
+    private static func nativeGrantAuth(_ home: URL, mode: String, account: String,
+                                        grant: String, expired: Bool) throws {
+        try Fixture.codexMode(home, mode)
+        try Fixture.writeAuth(home, account: account, refresh: grant, expired: expired)
+        if mode != "file" {
+            Fixture.codexKeychain[Fixture.codexKey(home)] = try Data(contentsOf: home.appendingPathComponent("auth.json"))
+            try Foundation.FileManager.default.removeItem(at: home.appendingPathComponent("auth.json"))
+        }
+    }
+
+    @MainActor
+    private static func nativeGrantControl(mode: String, action: String) async throws {
+        let base = AuthSwap$Codex.baseHome
+        let source = ProfileDirectories.codexRoot.appendingPathComponent("native-control-source")
+        let other = ProfileDirectories.codexRoot.appendingPathComponent("native-control-other")
+        let copy = ProfileDirectories.codexRoot.appendingPathComponent("native-control-copy")
+        defer { Fixture.failDefaultsSynchronization = false; Fixture.denyCodexDelete = false }
+        if action == "handoff" || action == "rollback" {
+            try nativeGrantAuth(base, mode: action == "rollback" ? "keyring" : "file",
+                                account: "same-account", grant: "valid-primary-grant", expired: true)
+            try nativeGrantAuth(source, mode: mode, account: "same-account", grant: "valid-selected-grant", expired: action == "handoff")
+            try nativeGrantAuth(other, mode: mode, account: "same-account", grant: "valid-other-grant", expired: false)
+            try AuthSwap$Codex.activate(columnID: "codex:native-control-source", home: source)
+            if action == "handoff" {
+                try AuthSwap$Codex.activate(columnID: "codex:native-control-other", home: other)
+                try await nativeGrantRestart(target: source, expectedPosts: 1)
+                return
+            }
+            Fixture.denyCodexDelete = true
+            var refused = false
+            do { try AuthSwap$Codex.restoreDefault() } catch { refused = true }
+            Fixture.denyCodexDelete = false
+            try expect(refused && AuthSwap$Codex.activeColumnID == "codex:native-control-source", "Failed backup cleanup did not restore the selected native account")
+            let account = DiscoveredAccount(id: AuthSwap$Codex.defaultColumnID, provider: .codex,
+                                            profileName: "main", source: .codexHome(base))
+            let outcome = await Provider$Codex().fetch(account)
+            try expect(Fixture.refreshCalls == 1, "Rollback retired the still-valid sleeping primary grant")
+            guard case .success = outcome else { throw Failure(description: "Sleeping primary could not renew after native rollback") }
+            return
+        }
+        try nativeGrantAuth(base, mode: "file", account: "native-owner", grant: "synthetic-already-spent", expired: true)
+        try nativeGrantAuth(copy, mode: mode, account: "copy-routing", grant: "synthetic-already-spent", expired: true)
+        if action == "selected" {
+            try Fixture.writeAuth(base, account: "unrelated-primary", refresh: "unrelated-primary-grant", expired: false)
+            try nativeGrantAuth(source, mode: "file", account: "native-owner", grant: "synthetic-already-spent", expired: true)
+            try AuthSwap$Codex.activate(columnID: "codex:native-control-source", home: source)
+        } else {
+            _ = await Provider$Codex().fetch(DiscoveredAccount(id: AuthSwap$Codex.defaultColumnID, provider: .codex,
+                profileName: "main", source: .codexHome(base)))
+        }
+        try expect(Fixture.refreshCalls == 0, "Observing a native session submitted its grant")
+        try Fixture.writeAuth(base, account: "native-owner", refresh: "native-current-grant", expired: false)
+        let native = try Data(contentsOf: base.appendingPathComponent("auth.json"))
+        if action == "selected" { try Foundation.FileManager.default.removeItem(at: source) }
+        let account = DiscoveredAccount(id: "codex:native-control-copy", provider: .codex,
+                                        profileName: "native-control-copy", source: .codexHome(copy))
+        Fixture.rejectSpentRefresh = true
+        if action == "sync" { Fixture.failDefaultsSynchronization = true }
+        _ = await Provider$Codex().fetch(account)
+        try expect(Fixture.refreshCalls == 0, "Native grant protection depended on copy routing, directory or write access")
+        if action == "sync" {
+            let refused = await Renewal$Codex.shared.prepareForTermination(timeout: 0.02)
+            await Renewal$Codex.shared.cancelTermination()
+            try expect(!refused, "Normal quit discarded an undurable native grant marker")
+            Fixture.failDefaultsSynchronization = false
+            _ = await Provider$Codex().fetch(account)
+            try expect(Fixture.refreshCalls == 0, "Preference recovery replayed the consumed native grant")
+        }
+        try expect(try Data(contentsOf: base.appendingPathComponent("auth.json")) == native, "Grant bookkeeping changed native credentials")
+        if action == "selected" {
+            try expect(!Foundation.FileManager.default.fileExists(atPath: source.path), "Grant protection recreated the removed selected profile")
+        }
+        let quit = await Renewal$Codex.shared.prepareForTermination(timeout: 0.02)
+        try expect(quit, "Durable native grant bookkeeping prevented normal quit")
+    }
+
+    @MainActor
+    private static func nativeGrantRestart(target: URL, expectedPosts: Int) async throws {
+        let quit = await Renewal$Codex.shared.prepareForTermination(timeout: 0.02)
+        try expect(quit, "Native grant metadata could not terminate normally")
+        let defaults = UserDefaults.standard.dictionaryRepresentation()
+        try expect(!strings(in: defaults).contains(where: {
+            $0.contains("synthetic-already-spent") || $0.contains("native-current-grant") || $0.contains("valid-selected-grant")
+        }), "Native grant preferences contain raw refresh credentials")
+        let state: [String: Any] = ["defaults": defaults, "keychain": Fixture.codexKeychain,
+                                    "target": target.path, "posts": expectedPosts]
+        try PropertyListSerialization.data(fromPropertyList: state, format: .binary, options: 0)
+            .write(to: Fixture.root.appendingPathComponent("native-grant-checkpoint.plist"))
+        let process = Foundation.Process()
+        process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+        process.arguments = ["codex-native-grant-child", Fixture.root.path]
+        let output = Pipe(); process.standardOutput = output; process.standardError = output
+        try process.run(); process.waitUntilExit()
+        let diagnostic = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        print(diagnostic)
+        try expect(process.terminationStatus == 0, "Native grant restart violated ownership: " + diagnostic)
+    }
+
+    @MainActor
+    private static func nativeGrantChild() async throws {
+        let data = try Data(contentsOf: Fixture.root.appendingPathComponent("native-grant-checkpoint.plist"))
+        guard let state = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let defaults = state["defaults"] as? [String: Any], let keychain = state["keychain"] as? [String: Data],
+              let path = state["target"] as? String, let posts = state["posts"] as? Int else {
+            throw Failure(description: "Invalid native grant checkpoint")
+        }
+        for (key, value) in defaults { UserDefaults.standard.set(value, forKey: key) }
+        Fixture.codexKeychain = keychain
+        Fixture.rejectSpentRefresh = true
+        let target = URL(fileURLWithPath: path)
+        let account = DiscoveredAccount(id: AuthSwap$Codex.profileColumnID(target.lastPathComponent), provider: .codex,
+                                        profileName: target.lastPathComponent, source: .codexHome(target))
+        let outcome = await Provider$Codex().fetch(account)
+        print("NATIVE RESTART expectedPosts=\(posts) posts=\(Fixture.refreshCalls) outcome=\(outcome)")
+        try expect(Fixture.refreshCalls == posts, "Restart replayed a native grant or blocked an independent handoff")
+        if posts > 0 {
+            guard case .success = outcome else { throw Failure(description: "Independent sleeping session could not renew after restart") }
+        }
+    }
+
+    @MainActor
+    private static func nativeGrantPath(retarget: Bool) async throws {
+        let old = ProfileDirectories.codexRoot.appendingPathComponent("old-native")
+        let new = Fixture.root.appendingPathComponent("new-native")
+        let link = Fixture.root.appendingPathComponent("native-home-link")
+        let sleeper = ProfileDirectories.codexRoot.appendingPathComponent("independent-sleeper")
+        try Fixture.codexMode(old, "file")
+        try Fixture.writeAuth(old, account: "same-native-account", refresh: "valid-old-native-grant", expired: true)
+        try Fixture.codexMode(new, "file")
+        try Fixture.writeAuth(new, account: "same-native-account", refresh: "valid-new-home-grant", expired: false)
+        let current = try Data(contentsOf: new.appendingPathComponent("auth.json"))
+        try Fixture.codexLogin(sleeper, account: "independent-sleeper", mode: "file")
+        try Foundation.FileManager.default.createSymbolicLink(at: link, withDestinationURL: old)
+        Fixture.codexHome = link.path
+        _ = try AuthSwap$Codex.beginRenewal(columnID: AuthSwap$Codex.defaultColumnID, home: link)
+        Fixture.pauseAuthReadPath = old.appendingPathComponent("auth.json").path
+        let task = Task.detached {
+            Result { () -> Void in
+                if let lease = try AuthSwap$Codex.beginRenewal(columnID: "codex:independent-sleeper", home: sleeper) {
+                    AuthSwap$Codex.finishRenewal(lease)
+                }
+            }
+        }
+        var paused = false
+        for _ in 0..<400 {
+            Fixture.lock.lock(); paused = Fixture.authReadPaused; Fixture.lock.unlock()
+            if paused { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(paused, "Native credential read did not reach the barrier")
+        if retarget {
+            try Foundation.FileManager.default.removeItem(at: link)
+            try Foundation.FileManager.default.createSymbolicLink(at: link, withDestinationURL: new)
+        }
+        Fixture.lock.lock(); Fixture.releaseAuthRead = true; Fixture.lock.unlock()
+        _ = await task.value
+        let account = DiscoveredAccount(id: "codex:old-native", provider: .codex, profileName: "old-native", source: .codexHome(old))
+        let outcome = await Provider$Codex().fetch(account)
+        print("NATIVE PATH retarget=\(retarget) posts=\(Fixture.refreshCalls) outcome=\(outcome)")
+        try expect(Fixture.refreshCalls == (retarget ? 1 : 0), "A grant read from the old canonical home was attributed to the new native namespace")
+        try expect(try Data(contentsOf: new.appendingPathComponent("auth.json")) == current, "Namespace bookkeeping changed the new native login")
+        if retarget {
+            guard case .success = outcome else { throw Failure(description: "The valid sleeping login could not renew after native home retarget") }
+        }
+    }
+
+    @MainActor
+    private static func nativeGrantAlias(mode: String) async throws {
+        let old = ProfileDirectories.codexRoot.appendingPathComponent("native-alias-owner")
+        let alias = URL(fileURLWithPath: "/System/Volumes/Data" + old.path)
+        let link = Fixture.root.appendingPathComponent("native-alias-link")
+        let copy = ProfileDirectories.codexRoot.appendingPathComponent("native-alias-copy")
+        let sleeper = ProfileDirectories.codexRoot.appendingPathComponent("native-alias-sleeper")
+        let grant = mode == "file" ? "synthetic-already-spent" : "valid-independent-keyring-grant"
+        try nativeGrantAuth(old, mode: mode, account: "native-alias-account", grant: grant, expired: true)
+        guard let owner = DirectoryIdentity.capture(old), let physicalAlias = DirectoryIdentity.capture(alias) else {
+            throw Failure(description: "Data-volume alias is unavailable")
+        }
+        try expect(owner.isSameDirectory(as: physicalAlias) && Fixture.codexKey(old) != Fixture.codexKey(alias),
+                   "The OS did not expose distinct native namespaces for one physical directory")
+        try nativeGrantAuth(copy, mode: "file", account: "copy-routing", grant: grant, expired: true)
+        try Fixture.codexLogin(sleeper, account: "alias-sleeper", mode: "file")
+        try Foundation.FileManager.default.createSymbolicLink(at: link, withDestinationURL: old)
+        Fixture.codexHome = link.path
+        _ = try AuthSwap$Codex.beginRenewal(columnID: AuthSwap$Codex.defaultColumnID, home: link)
+        if mode == "file" {
+            try Fixture.writeAuth(old, account: "native-alias-account", refresh: "native-alias-current", expired: false)
+        } else {
+            try nativeGrantAuth(alias, mode: "keyring", account: "native-alias-account", grant: "independent-alias-current", expired: false)
+        }
+        let native = try AuthSwap$Codex.authData(home: alias)
+        Fixture.pauseAuthReadPath = old.appendingPathComponent(mode == "file" ? "auth.json" : "config.toml").path
+        let task = Task.detached {
+            Result { () -> Void in
+                if let lease = try AuthSwap$Codex.beginRenewal(columnID: "codex:native-alias-sleeper", home: sleeper) {
+                    AuthSwap$Codex.finishRenewal(lease)
+                }
+            }
+        }
+        var paused = false
+        for _ in 0..<400 {
+            Fixture.lock.lock(); paused = Fixture.authReadPaused; Fixture.lock.unlock()
+            if paused { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(paused, "Native alias observation did not reach its read barrier")
+        try Foundation.FileManager.default.removeItem(at: link)
+        try Foundation.FileManager.default.createSymbolicLink(at: link, withDestinationURL: alias)
+        Fixture.lock.lock(); Fixture.releaseAuthRead = true; Fixture.lock.unlock()
+        _ = await task.value
+        Fixture.rejectSpentRefresh = true
+        let target = mode == "file" ? copy : old
+        let account = DiscoveredAccount(id: AuthSwap$Codex.profileColumnID(target.lastPathComponent), provider: .codex,
+                                        profileName: target.lastPathComponent, source: .codexHome(target))
+        let result = await Provider$Codex().fetch(account)
+        print("NATIVE ALIAS mode=\(mode) posts=\(Fixture.refreshCalls) outcome=\(result)")
+        try expect(Fixture.refreshCalls == (mode == "file" ? 0 : 1),
+                   "Native grant ownership confused a shared file with independent Keychain namespaces")
+        try expect(try AuthSwap$Codex.authData(home: alias) == native, "Alias bookkeeping overwrote the current native login")
+        if mode == "keyring" {
+            guard case .success = result else { throw Failure(description: "Independent Keychain namespace could not renew") }
+        }
     }
 
 }
