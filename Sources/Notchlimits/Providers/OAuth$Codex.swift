@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Продление входа Codex по refresh-токену из auth.json.
 ///
@@ -124,11 +125,13 @@ actor Renewal$Codex {
 
     private struct Attempt {
         let result: Result
-        let data: Data
+        let identity: String?
     }
 
     /// Учитываем и запрос в полёте: actor допускает другой вызов на время await.
     private var attempts: [String: Attempt] = [:]
+    private static let attemptsKey = "codexRefreshAttempts"
+    private var attemptsDirty = false
     /// Живая копия после ротации, если запись auth.json не удалась.
     private var pending: [String: Pending] = [:]
     private var inFlight: Set<UUID> = []
@@ -159,10 +162,18 @@ actor Renewal$Codex {
                                expiresAt: Provider$Codex.parseAuth(renewal.record.data)?.expiresAt,
                                force: force, now: Date())
         else { return .skipped }
-        if let attempt = attempts[refreshToken] {
+        let grant = Self.grantIdentity(refreshToken)
+        if let attempt = savedAttempt(for: grant) {
             return currentResult(attempt, renewal: renewal, home: home)
         }
-        attempts[refreshToken] = Attempt(result: .unavailable, data: renewal.record.data)
+        let identity = AuthSwap$Codex.authIdentity(renewal.record.data)
+        // Commit the quarantine before sending a one-use grant. A failed
+        // preference write must not spend a token that restart could replay.
+        guard recordAttempt(Attempt(result: .uncertain, identity: identity), for: grant) else {
+            recordAttempt(nil, for: grant)
+            return .unavailable
+        }
+        attempts[grant] = Attempt(result: .unavailable, identity: identity)
         inFlight.insert(renewal.id)
         defer { inFlight.remove(renewal.id) }
 
@@ -171,11 +182,11 @@ actor Renewal$Codex {
         // its destination. Only a known temporary refusal permits another POST.
         switch response {
         case .success, .uncertain:
-            attempts[refreshToken] = Attempt(result: .uncertain, data: renewal.record.data)
+            recordAttempt(Attempt(result: .uncertain, identity: identity), for: grant)
         case .rejected:
-            attempts[refreshToken] = Attempt(result: .rejected, data: renewal.record.data)
+            recordAttempt(Attempt(result: .rejected, identity: identity), for: grant)
         case .unavailable:
-            attempts[refreshToken] = nil
+            recordAttempt(nil, for: grant)
         }
         guard AuthSwap$Codex.isCurrent(renewal) else { return .skipped }
         switch response {
@@ -184,11 +195,11 @@ actor Renewal$Codex {
             pending[columnID] = saved
             return persist(saved, columnID: columnID, home: home) ?? .skipped
         case .rejected:
-            return currentResult(Attempt(result: .rejected, data: renewal.record.data), renewal: renewal, home: home)
+            return currentResult(Attempt(result: .rejected, identity: identity), renewal: renewal, home: home)
         case .unavailable:
             return .unavailable
         case .uncertain:
-            return currentResult(Attempt(result: .uncertain, data: renewal.record.data), renewal: renewal, home: home)
+            return currentResult(Attempt(result: .uncertain, identity: identity), renewal: renewal, home: home)
         }
     }
 
@@ -197,15 +208,46 @@ actor Renewal$Codex {
     /// when its unchanged refresh grant cannot safely be posted again.
     private func currentResult(_ attempt: Attempt, renewal: AuthSwap$Codex.Renewal, home: URL) -> Result {
         guard attempt.result == .uncertain || attempt.result == .rejected else { return attempt.result }
-        let snapshot = AuthSwap$Codex.AuthSnapshot(data: attempt.data, key: renewal.key,
+        guard let identity = attempt.identity else { return .unavailable }
+        let snapshot = AuthSwap$Codex.AuthSnapshot(data: renewal.record.data, key: renewal.key,
             generation: renewal.generation, columnGeneration: renewal.columnGeneration,
             sourceKey: renewal.sourceKey, sourceGeneration: renewal.sourceGeneration)
         do {
             return try AuthSwap$Codex.isCurrent(snapshot, columnID: renewal.columnID, home: home)
+                && AuthSwap$Codex.authIdentity(renewal.record.data) == identity
                 ? attempt.result : .renewed
         } catch {
             return .unavailable
         }
+    }
+
+    private static func grantIdentity(_ token: String) -> String {
+        SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func savedAttempt(for grant: String) -> Attempt? {
+        if let attempt = attempts[grant] { return attempt }
+        guard let value = UserDefaults.standard.dictionary(forKey: Self.attemptsKey)?[grant] else { return nil }
+        let record = value as? [String: String]
+        let attempt = Attempt(result: record?["result"] == "rejected" ? .rejected : .uncertain,
+                              identity: record?["identity"])
+        attempts[grant] = attempt
+        return attempt
+    }
+
+    @discardableResult
+    private func recordAttempt(_ attempt: Attempt?, for grant: String) -> Bool {
+        attempts[grant] = attempt
+        var records = UserDefaults.standard.dictionary(forKey: Self.attemptsKey) ?? [:]
+        if let attempt {
+            var record = ["result": attempt.result == .rejected ? "rejected" : "uncertain"]
+            record["identity"] = attempt.identity
+            records[grant] = record
+        } else { records[grant] = nil }
+        if records.isEmpty { UserDefaults.standard.removeObject(forKey: Self.attemptsKey) }
+        else { UserDefaults.standard.set(records, forKey: Self.attemptsKey) }
+        attemptsDirty = !UserDefaults.standard.synchronize()
+        return !attemptsDirty
     }
 
     /// Drain accepted refresh requests and retry persistence without another POST.
@@ -221,6 +263,10 @@ actor Renewal$Codex {
         }
         do { try AuthSwap$Codex.flushCopies() }
         catch { terminating = false; return false }
+        if attemptsDirty {
+            guard UserDefaults.standard.synchronize() else { terminating = false; return false }
+            attemptsDirty = false
+        }
         return true
     }
 
@@ -236,9 +282,11 @@ actor Renewal$Codex {
             if pending[columnID]?.renewal.id == saved.renewal.id { pending[columnID] = nil }
             AuthSwap$Codex.finishRenewal(saved.renewal)
             if let stored {
-                attempts[saved.usedRefreshToken] = saved.tokens.refreshToken.map {
-                    $0 != saved.usedRefreshToken ? Attempt(result: .uncertain, data: saved.renewal.record.data) : nil
-                } ?? nil
+                let attempt = saved.tokens.refreshToken.flatMap {
+                    $0 != saved.usedRefreshToken
+                        ? Attempt(result: .uncertain, identity: AuthSwap$Codex.authIdentity(saved.renewal.record.data)) : nil
+                }
+                recordAttempt(attempt, for: Self.grantIdentity(saved.usedRefreshToken))
                 // Durability for a previous owner does not renew the current
                 // login after the same logical column has been redirected.
                 if let home,
@@ -246,7 +294,8 @@ actor Renewal$Codex {
                 return .renewed
             }
             // Потраченный токен не используем, даже если его копия осталась в другом профиле.
-            attempts[saved.usedRefreshToken] = Attempt(result: .uncertain, data: saved.renewal.record.data)
+            recordAttempt(Attempt(result: .uncertain, identity: AuthSwap$Codex.authIdentity(saved.renewal.record.data)),
+                          for: Self.grantIdentity(saved.usedRefreshToken))
             return nil
         } catch {
             return .unavailable

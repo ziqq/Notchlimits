@@ -19,6 +19,7 @@ private enum Fixture {
     static var keychainWrites = 0
     static var codexKeychain: [String: Data] = [:]
     static var denyCodexRead = false
+    static var failDefaultsSynchronization = false
     static var denyClaudeMetadata = false
     static var denyClaudeRead = false
     static var denyClaudeReadAt = 0
@@ -455,6 +456,7 @@ final class UserDefaults {
         values[key] = value
     }
     func removeObject(forKey key: String) { set(nil, forKey: key) }
+    func synchronize() -> Bool { !Fixture.failDefaultsSynchronization }
 }
 
 // Only notification delivery is replaced. History and threshold decisions use
