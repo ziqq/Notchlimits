@@ -54,6 +54,10 @@ enum Persistence$Codex {
             case "codex-copy-native-bootstrap-auto": try await copyNativeRotation(mode: "auto", primary: false)
             case "codex-copy-primary-bootstrap-keyring": try await copyNativeRotation(mode: "keyring", primary: true)
             case "codex-copy-primary-bootstrap-auto": try await copyNativeRotation(mode: "auto", primary: true)
+            case "codex-copy-source-replaced-keyring": try await copySourceReplacement(mode: "keyring", denied: false)
+            case "codex-copy-source-replaced-auto": try await copySourceReplacement(mode: "auto", denied: false)
+            case "codex-copy-source-replaced-keyring-denied": try await copySourceReplacement(mode: "keyring", denied: true)
+            case "codex-copy-source-replaced-auto-denied": try await copySourceReplacement(mode: "auto", denied: true)
             case "codex-quarantine-child": try await restartChild()
             default: throw Failure(description: "Unknown persistence scenario")
             }
@@ -527,6 +531,60 @@ enum Persistence$Codex {
         try expect(Provider$Codex.parseAuth(stored)?.accountID == "native-copy-routing"
                    && value["local_metadata"] as? String == "native-copy-metadata",
                    "Native copyback changed routing or metadata")
+    }
+
+    @MainActor
+    private static func copySourceReplacement(mode: String, denied: Bool) async throws {
+        let source = ProfileDirectories.codexRoot.appendingPathComponent("replaced-copy-source")
+        let copy = ProfileDirectories.codexRoot.appendingPathComponent("surviving-copy")
+        try Fixture.codexLogin(AuthSwap$Codex.baseHome, account: "independent-native", mode: "file")
+        try Fixture.codexLogin(source, account: "old-source", mode: "file", expired: true)
+        var json = try JSONSerialization.jsonObject(with: Data(contentsOf: source.appendingPathComponent("auth.json"))) as! [String: Any]
+        var tokens = json["tokens"] as! [String: Any]
+        tokens["account_id"] = "surviving-copy-routing"
+        json["tokens"] = tokens
+        json["local_metadata"] = "surviving-copy-metadata"
+        try Fixture.codexMode(copy, mode)
+        let key = Fixture.codexKey(copy)
+        Fixture.codexKeychain[key] = try JSONSerialization.data(withJSONObject: json)
+        guard let oldSource = DirectoryIdentity.capture(source), let oldCopy = DirectoryIdentity.capture(copy) else {
+            throw Failure(description: "Missing original copy owners")
+        }
+        Fixture.response = .heldRenewed
+        let request = Task { await Renewal$Codex.shared.renew(columnID: "codex:replaced-copy-source", home: source, force: true) }
+        defer { Fixture.releaseRefresh(); Fixture.denyCodexWriteAccount = nil }
+        try await waitForPOST()
+        try Foundation.FileManager.default.removeItem(at: source)
+        try Fixture.codexLogin(source, account: "independent-replacement", mode: "file")
+        let independent = try Data(contentsOf: source.appendingPathComponent("auth.json"))
+        try Foundation.FileManager.default.removeItem(at: copy)
+        try Fixture.codexMode(copy, mode)
+        try expect(!oldSource.matches(source) && !oldCopy.matches(copy) && Fixture.codexKey(copy) == key,
+                   "Replacement did not change both directory owners within the copied Keychain namespace")
+        if denied { Fixture.denyCodexWriteAccount = key }
+        Fixture.releaseRefresh()
+        let result = await request.value
+        if denied {
+            try expect(result == .unavailable, "Source replacement discarded the refused copy's accepted rotation")
+            let quit = await Renewal$Codex.shared.prepareForTermination(timeout: 0.02)
+            await Renewal$Codex.shared.cancelTermination()
+            try expect(!quit, "Normal quit abandoned the only live copy after source replacement")
+            Fixture.denyCodexWriteAccount = nil
+        }
+        _ = await Renewal$Codex.shared.renew(columnID: "codex:surviving-copy", home: copy, force: false)
+        let quit = await Renewal$Codex.shared.prepareForTermination(timeout: 0.02)
+        guard let stored = Fixture.codexKeychain[key],
+              let value = try JSONSerialization.jsonObject(with: stored) as? [String: Any] else {
+            throw Failure(description: "Surviving copy credentials disappeared")
+        }
+        let refresh = (value["tokens"] as? [String: Any])?["refresh_token"] as? String
+        try expect(quit && refresh == "synthetic-rotated" && Fixture.refreshCalls == 1,
+                   "The surviving copy lost or replayed the accepted refresh after source replacement")
+        try expect(Provider$Codex.parseAuth(stored)?.accountID == "surviving-copy-routing"
+                   && value["local_metadata"] as? String == "surviving-copy-metadata",
+                   "Surviving copy persistence changed routing or metadata")
+        try expect(try Data(contentsOf: source.appendingPathComponent("auth.json")) == independent,
+                   "Copy persistence overwrote the replacement source login")
     }
 
 }
