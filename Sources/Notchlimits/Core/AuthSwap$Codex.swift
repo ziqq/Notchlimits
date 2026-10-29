@@ -197,9 +197,21 @@ enum AuthSwap$Codex {
     /// Keychain keeps native realpath keys. Only file grants share an owner
     /// across Data-volume firmlink spellings of the same physical directory.
     private static func fileOwnerKey(_ home: URL) -> String? {
+        try? availableFileOwnerKey(home)
+    }
+
+    private static func availableFileOwnerKey(_ home: URL) throws -> String? {
         var info = stat()
-        guard home.path.withCString({ Darwin.lstat($0, &info) }) == 0,
-              info.st_mode & S_IFMT == S_IFDIR else { return nil }
+        guard home.path.withCString({ Darwin.lstat($0, &info) }) == 0 else {
+            let code = errno
+            guard code == ENOENT else { throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO) }
+            return nil
+        }
+        return fileOwnerKey(info)
+    }
+
+    private static func fileOwnerKey(_ info: stat) -> String? {
+        guard info.st_mode & S_IFMT == S_IFDIR else { return nil }
         return "file:\(info.st_dev):\(info.st_ino)"
     }
 
@@ -521,17 +533,19 @@ enum AuthSwap$Codex {
         if let recovery {
             // Recovery is now a separate owner. Removing a replacement at the
             // old column must not discard this owner's accepted rotation.
-            guard recovery.removal.owner.matches(destination.home),
+            guard try ownsDirectory(recovery.removal.owner, at: destination.home),
                   generations[destinationKey] == recovery.generation else { return nil }
         } else {
             guard generations[key] == renewal.generation,
                   columnGenerations[renewal.columnID] == renewal.columnGeneration,
                   generations[renewal.sourceKey] == renewal.sourceGeneration else { return nil }
         }
-        guard sourceKey(destination, backend: renewal.record.backend) == destinationKey else { return nil }
         guard let projected = renewedAuth(renewal.record.data, usedRefreshToken: usedRefreshToken,
                                          tokens: tokens, now: Date()) else { return nil }
         rememberRotation(from: renewal.record.data, to: projected)
+        let currentKey = try renewal.record.backend == .file
+            ? availableFileOwnerKey(destination.home) : destination.home.path
+        guard currentKey == destinationKey else { return nil }
         var failure: Error?
         for copy in renewal.copies {
             do { try persist(copy, tokens: tokens, usedRefreshToken: usedRefreshToken) }
@@ -896,12 +910,29 @@ enum AuthSwap$Codex {
         return current
     }
 
-    private static func ownsCopy(_ copy: SessionCopy) throws -> Bool {
-        guard generations[copy.sourceKey] == copy.generation else { return false }
-        if let current = DirectoryIdentity.capture(copy.storage.home) { return current == copy.owner }
-        if DirectoryIdentity.missingPath(copy.storage.home) != nil { return false }
+    private static func ownsDirectory(_ owner: DirectoryIdentity, at home: URL) throws -> Bool {
+        if let current = DirectoryIdentity.capture(home) { return current == owner }
+        if DirectoryIdentity.missingPath(home) != nil { return false }
         // An unreadable directory is not evidence of removal or replacement.
         throw Failure.busy
+    }
+
+    private static func ownsCopy(_ copy: SessionCopy) throws -> Bool {
+        guard generations[copy.sourceKey] == copy.generation else { return false }
+        return try ownsDirectory(copy.owner, at: copy.storage.home)
+    }
+
+    /// Codex removal holds the swap lock. An exclusive rollback rename can
+    /// authorize the restored file's new directory, unlike a copied login.
+    static func recordRestoredFileOwner(from source: Int32, to destination: Int32) {
+        var original = stat(), restored = stat()
+        guard fstat(source, &original) == 0, fstat(destination, &restored) == 0,
+              let oldKey = fileOwnerKey(original), let key = fileOwnerKey(restored),
+              let previous = knownCopies[oldKey], previous.record.backend == .file,
+              let owner = DirectoryIdentity.capture(descriptor: destination),
+              let storage = try? AuthStorage$Codex(home: URL(fileURLWithPath: owner.path), mode: .file) else { return }
+        knownCopies[key] = SessionCopy(storage: storage, record: previous.record, owner: owner,
+                                      sourceKey: key, generation: generations[key])
     }
 
     private static func persist(_ copy: SessionCopy, data: Data) throws {
@@ -1086,7 +1117,7 @@ enum AuthSwap$Codex {
 
     /// Persist only a digest of the source session, never credentials in defaults.
     /// Native metadata updates do not constitute another login.
-    private static func authIdentity(_ data: Data) -> String? {
+    static func authIdentity(_ data: Data) -> String? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         let fields = ["auth_mode", "tokens", "OPENAI_API_KEY"]
         let auth = root.filter { fields.contains($0.key) }

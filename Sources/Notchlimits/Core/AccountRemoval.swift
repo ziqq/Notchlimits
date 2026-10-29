@@ -174,7 +174,8 @@ enum AccountRemoval {
                     var retainsOriginalFile = true
                     do {
                         try withProfileDirectory(url, root: ProfileDirectories.codexRoot,
-                                                 rollbackFile: { retainsOriginalFile = $0 }) { directory in
+                                                 rollbackFile: { retainsOriginalFile = $0 },
+                                                 restoredFileOwner: AuthSwap$Codex.recordRestoredFileOwner) { directory in
                             try storage.delete(fileHome: directory, keyring: keyring?.storage)
                         }
                         keyring?.finish()
@@ -198,6 +199,7 @@ enum AccountRemoval {
     private static func withProfileDirectory(_ directory: URL?, root: URL,
                                              move: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) },
                                              rollbackFile: ((Bool) -> Void)? = nil,
+                                             restoredFileOwner: ((Int32, Int32) -> Void)? = nil,
                                              operation: (URL?) throws -> Void) throws {
         let manager = FileManager.default
         guard let directory, directory.path.hasPrefix(root.path + "/"),
@@ -218,7 +220,10 @@ enum AccountRemoval {
                 // for OAuth locks. Restore missing entries atomically, keeping
                 // replacement credentials and all native lock owners untouched.
                 try restoreContents(from: removed, to: directory,
-                                    authFileRestored: { rollbackFile?(true) })
+                                    authFileRestored: {
+                                        rollbackFile?(true)
+                                        restoredFileOwner?($0, $1)
+                                    })
             }
             throw error
         }
@@ -227,7 +232,7 @@ enum AccountRemoval {
 
     private static func restoreContents(from source: URL, to destination: URL,
                                         isProfileRoot: Bool = true,
-                                        authFileRestored: (() -> Void)? = nil) throws {
+                                        authFileRestored: ((Int32, Int32) -> Void)? = nil) throws {
         let sourceFD = open(source.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard sourceFD >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         defer { _ = close(sourceFD) }
@@ -255,7 +260,7 @@ enum AccountRemoval {
             // the adjacent legacy OAuth lock continues to fence native writers.
             if name.hasPrefix(".oauth_refresh.lock") || name.hasPrefix(".storage-write.lock") { continue }
             if renameatx_np(sourceFD, name, destinationFD, name, UInt32(RENAME_EXCL)) == 0 {
-                if isProfileRoot && name == "auth.json" { authFileRestored?() }
+                if isProfileRoot && name == "auth.json" { authFileRestored?(sourceFD, destinationFD) }
                 if isProfileRoot && name == ".credentials.json" {
                     AuthStorage$Claude.recordRestoredFileOwner(from: source, to: destination)
                 }

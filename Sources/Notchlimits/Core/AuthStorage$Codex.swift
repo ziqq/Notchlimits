@@ -204,7 +204,16 @@ struct AuthStorage$Codex {
     }
 
     private func loadFile() throws -> Record? {
-        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
+        if !FileManager.default.fileExists(atPath: file.path) {
+            let descriptor = open(file.path, O_RDONLY | O_CLOEXEC)
+            guard descriptor >= 0 else {
+                let code = errno
+                guard code == ENOENT else { throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO) }
+                return nil
+            }
+            let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+            return Record(data: try handle.readToEnd() ?? Data(), backend: .file)
+        }
         return Record(data: try Data(contentsOf: file), backend: .file)
     }
 

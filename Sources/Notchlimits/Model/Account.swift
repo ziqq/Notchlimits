@@ -23,6 +23,21 @@ struct DirectoryIdentity: Equatable {
         let path = directory.resolvingSymlinksInPath().path
         let descriptor = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard descriptor >= 0 else { return nil }
+        return capture(path: path, descriptor: descriptor)
+    }
+
+    /// A transaction already holding the directory can retain its owner even
+    /// if path permissions change before asynchronous persistence resumes.
+    static func capture(descriptor: Int32) -> DirectoryIdentity? {
+        var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard fcntl(descriptor, F_GETPATH, &path) == 0 else { return nil }
+        let duplicate = fcntl(descriptor, F_DUPFD_CLOEXEC, 0)
+        guard duplicate >= 0 else { return nil }
+        let directory = URL(fileURLWithPath: String(cString: path)).resolvingSymlinksInPath().path
+        return capture(path: directory, descriptor: duplicate)
+    }
+
+    private static func capture(path: String, descriptor: Int32) -> DirectoryIdentity? {
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         var info = stat()
         guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else { return nil }

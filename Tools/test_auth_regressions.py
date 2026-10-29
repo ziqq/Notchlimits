@@ -103,7 +103,7 @@ final class NSMenuItem { var representedObject: Any? }
             "Providers/AuthStorage$Claude.swift", "Providers/OAuth$Claude.swift",
             "Providers/Provider$Claude.swift", "Providers/OAuth$Codex.swift",
             "Providers/Provider$Codex.swift", "Providers/Discovery$Real.swift",
-        ], flags, extra_sources=[termination, menu])
+        ], flags, extra_sources=[termination, menu], fixture_path=getattr(cls, "fixture_path", None))
 
     def check_scenario(self, scenario):
         # Match the canonical home URLs returned by macOS directory discovery.
