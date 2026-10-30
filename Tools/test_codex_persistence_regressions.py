@@ -298,3 +298,87 @@ class CodexPersistenceRegressions(unittest.TestCase):
 
     def test_codex_native_grant_alias_keyring(self):
         self.check_scenario("codex-native-grant-alias-keyring")
+
+    def test_codex_native_boundary_publish_spent_file_unobserved(self):
+        self.check_scenario("codex-native-boundary-publish-spent-file-unobserved")
+
+    def test_codex_native_boundary_publish_spent_file_observed(self):
+        self.check_scenario("codex-native-boundary-publish-spent-file-observed")
+
+    def test_codex_native_boundary_publish_spent_keyring_unobserved(self):
+        self.check_scenario("codex-native-boundary-publish-spent-keyring-unobserved")
+
+    def test_codex_native_boundary_publish_spent_keyring_observed(self):
+        self.check_scenario("codex-native-boundary-publish-spent-keyring-observed")
+
+    def test_codex_native_boundary_publish_spent_auto_file_unobserved(self):
+        self.check_scenario("codex-native-boundary-publish-spent-auto-file-unobserved")
+
+    def test_codex_native_boundary_publish_spent_auto_file_observed(self):
+        self.check_scenario("codex-native-boundary-publish-spent-auto-file-observed")
+
+    def test_codex_native_boundary_publish_spent_auto_keyring_unobserved(self):
+        self.check_scenario("codex-native-boundary-publish-spent-auto-keyring-unobserved")
+
+    def test_codex_native_boundary_publish_spent_auto_keyring_observed(self):
+        self.check_scenario("codex-native-boundary-publish-spent-auto-keyring-observed")
+
+    def test_codex_native_boundary_publish_independent_file(self):
+        self.check_scenario("codex-native-boundary-publish-independent-file")
+
+    def test_codex_native_boundary_publish_unchanged_file(self):
+        self.check_scenario("codex-native-boundary-publish-unchanged-file")
+
+    def test_codex_native_boundary_publish_independent_keyring(self):
+        self.check_scenario("codex-native-boundary-publish-independent-keyring")
+
+    def test_codex_native_boundary_publish_unchanged_keyring(self):
+        self.check_scenario("codex-native-boundary-publish-unchanged-keyring")
+
+    def test_codex_native_boundary_remove_spent_file(self):
+        self.check_scenario("codex-native-boundary-remove-spent-file")
+
+    def test_codex_native_boundary_remove_spent_keyring(self):
+        self.check_scenario("codex-native-boundary-remove-spent-keyring")
+
+    def test_codex_native_boundary_remove_spent_auto_file(self):
+        self.check_scenario("codex-native-boundary-remove-spent-auto-file")
+
+    def test_codex_native_boundary_remove_spent_auto_keyring(self):
+        self.check_scenario("codex-native-boundary-remove-spent-auto-keyring")
+
+    def test_codex_native_boundary_remove_independent_file(self):
+        self.check_scenario("codex-native-boundary-remove-independent-file")
+
+    def test_codex_native_boundary_remove_unchanged_file(self):
+        self.check_scenario("codex-native-boundary-remove-unchanged-file")
+
+    def test_codex_native_boundary_remove_restart_file(self):
+        self.check_scenario("codex-native-boundary-remove-restart-file")
+
+    def test_codex_native_boundary_remove_sync_refused_file(self):
+        self.check_scenario("codex-native-boundary-remove-sync-refused-file")
+
+    def test_codex_native_boundary_remove_delete_refused_file(self):
+        self.check_scenario("codex-native-boundary-remove-delete-refused-file")
+
+    def test_codex_native_boundary_remove_independent_keyring(self):
+        self.check_scenario("codex-native-boundary-remove-independent-keyring")
+
+    def test_codex_native_boundary_remove_unchanged_keyring(self):
+        self.check_scenario("codex-native-boundary-remove-unchanged-keyring")
+
+    def test_codex_native_boundary_remove_restart_keyring(self):
+        self.check_scenario("codex-native-boundary-remove-restart-keyring")
+
+    def test_codex_native_boundary_remove_sync_refused_keyring(self):
+        self.check_scenario("codex-native-boundary-remove-sync-refused-keyring")
+
+    def test_codex_native_boundary_remove_delete_refused_keyring(self):
+        self.check_scenario("codex-native-boundary-remove-delete-refused-keyring")
+
+    def test_codex_native_boundary_remove_read_refused_keyring(self):
+        self.check_scenario("codex-native-boundary-remove-read-refused-keyring")
+
+    def test_codex_native_boundary_remove_read_refused_auto_keyring(self):
+        self.check_scenario("codex-native-boundary-remove-read-refused-auto-keyring")

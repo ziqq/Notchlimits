@@ -96,6 +96,34 @@ enum Persistence$Codex {
             case "codex-native-grant-path-stable": try await nativeGrantPath(retarget: false)
             case "codex-native-grant-alias-file": try await nativeGrantAlias(mode: "file")
             case "codex-native-grant-alias-keyring": try await nativeGrantAlias(mode: "keyring")
+            case "codex-native-boundary-publish-spent-file-unobserved": try nativeGrantPublication(mode: "file", kind: "spent", observed: false)
+            case "codex-native-boundary-publish-spent-file-observed": try nativeGrantPublication(mode: "file", kind: "spent", observed: true)
+            case "codex-native-boundary-publish-spent-keyring-unobserved": try nativeGrantPublication(mode: "keyring", kind: "spent", observed: false)
+            case "codex-native-boundary-publish-spent-keyring-observed": try nativeGrantPublication(mode: "keyring", kind: "spent", observed: true)
+            case "codex-native-boundary-publish-spent-auto-file-unobserved": try nativeGrantPublication(mode: "auto-file", kind: "spent", observed: false)
+            case "codex-native-boundary-publish-spent-auto-file-observed": try nativeGrantPublication(mode: "auto-file", kind: "spent", observed: true)
+            case "codex-native-boundary-publish-spent-auto-keyring-unobserved": try nativeGrantPublication(mode: "auto-keyring", kind: "spent", observed: false)
+            case "codex-native-boundary-publish-spent-auto-keyring-observed": try nativeGrantPublication(mode: "auto-keyring", kind: "spent", observed: true)
+            case "codex-native-boundary-publish-independent-file": try nativeGrantPublication(mode: "file", kind: "independent")
+            case "codex-native-boundary-publish-unchanged-file": try nativeGrantPublication(mode: "file", kind: "unchanged")
+            case "codex-native-boundary-publish-independent-keyring": try nativeGrantPublication(mode: "keyring", kind: "independent")
+            case "codex-native-boundary-publish-unchanged-keyring": try nativeGrantPublication(mode: "keyring", kind: "unchanged")
+            case "codex-native-boundary-remove-spent-file": try await nativeGrantRemoval(mode: "file", kind: "spent")
+            case "codex-native-boundary-remove-spent-keyring": try await nativeGrantRemoval(mode: "keyring", kind: "spent")
+            case "codex-native-boundary-remove-spent-auto-file": try await nativeGrantRemoval(mode: "auto-file", kind: "spent")
+            case "codex-native-boundary-remove-spent-auto-keyring": try await nativeGrantRemoval(mode: "auto-keyring", kind: "spent")
+            case "codex-native-boundary-remove-independent-file": try await nativeGrantRemoval(mode: "file", kind: "independent")
+            case "codex-native-boundary-remove-unchanged-file": try await nativeGrantRemoval(mode: "file", kind: "unchanged")
+            case "codex-native-boundary-remove-restart-file": try await nativeGrantRemoval(mode: "file", kind: "restart")
+            case "codex-native-boundary-remove-sync-refused-file": try await nativeGrantRemoval(mode: "file", kind: "sync-refused")
+            case "codex-native-boundary-remove-delete-refused-file": try await nativeGrantRemoval(mode: "file", kind: "delete-refused")
+            case "codex-native-boundary-remove-independent-keyring": try await nativeGrantRemoval(mode: "keyring", kind: "independent")
+            case "codex-native-boundary-remove-unchanged-keyring": try await nativeGrantRemoval(mode: "keyring", kind: "unchanged")
+            case "codex-native-boundary-remove-restart-keyring": try await nativeGrantRemoval(mode: "keyring", kind: "restart")
+            case "codex-native-boundary-remove-sync-refused-keyring": try await nativeGrantRemoval(mode: "keyring", kind: "sync-refused")
+            case "codex-native-boundary-remove-delete-refused-keyring": try await nativeGrantRemoval(mode: "keyring", kind: "delete-refused")
+            case "codex-native-boundary-remove-read-refused-keyring": try await nativeGrantRemoval(mode: "keyring", kind: "read-refused")
+            case "codex-native-boundary-remove-read-refused-auto-keyring": try await nativeGrantRemoval(mode: "auto-keyring", kind: "read-refused")
             case "codex-native-grant-child": try await nativeGrantChild()
             case "codex-quarantine-child": try await restartChild()
             default: throw Failure(description: "Unknown persistence scenario")
@@ -919,6 +947,138 @@ enum Persistence$Codex {
         if mode == "keyring" {
             guard case .success = result else { throw Failure(description: "Independent Keychain namespace could not renew") }
         }
+    }
+
+
+    private static func nativeBoundaryAuth(_ home: URL, mode: String, account: String,
+                                           grant: String, expired: Bool) throws {
+        try nativeGrantAuth(home, mode: mode.hasPrefix("auto-") ? "auto" : mode,
+                            account: account, grant: grant, expired: expired)
+        if mode == "auto-file" {
+            guard let data = Fixture.codexKeychain.removeValue(forKey: Fixture.codexKey(home)) else {
+                throw Failure(description: "Missing auto fallback fixture")
+            }
+            try data.write(to: home.appendingPathComponent("auth.json"))
+        }
+    }
+
+    @MainActor
+    private static func nativeGrantPublication(mode: String, kind: String, observed: Bool = false) throws {
+        let base = AuthSwap$Codex.baseHome
+        let copy = ProfileDirectories.codexRoot.appendingPathComponent("publication-copy")
+        let oldGrant = "synthetic-already-spent"
+        try nativeBoundaryAuth(base, mode: mode, account: "native-owner", grant: oldGrant, expired: true)
+        _ = try AuthSwap$Codex.beginRenewal(columnID: AuthSwap$Codex.defaultColumnID, home: base)
+        if kind != "unchanged" {
+            try nativeBoundaryAuth(base, mode: mode, account: "native-owner", grant: "native-current-grant", expired: false)
+        }
+        // The copy appeared after native ownership was recorded. Routing and
+        // physical inventory cannot authorize replaying its shared old grant.
+        let grant = kind == "independent" ? "valid-independent-publication" : oldGrant
+        try nativeBoundaryAuth(copy, mode: mode, account: kind == "independent" ? "native-owner" : "copy-routing",
+                               grant: grant, expired: true)
+        let native = try AuthSwap$Codex.authData(home: base)
+        let original = try AuthSwap$Codex.authData(home: copy)
+        if observed { _ = try AuthSwap$Codex.beginRenewal(columnID: AuthSwap$Codex.defaultColumnID, home: base) }
+        let account = DiscoveredAccount(id: "codex:publication-copy", provider: .codex,
+                                        profileName: "publication-copy", source: .codexHome(copy))
+        var result: Result<Void, Error>?
+        AppSwitcher$Codex().switchTo(account) { result = $0 }
+        guard let result else { throw Failure(description: "Desktop switch did not complete") }
+        let refused: Bool
+        if case .failure = result { refused = true } else { refused = false }
+        print("NATIVE PUBLICATION mode=\(mode) kind=\(kind) observed=\(observed) refused=\(refused)")
+        if kind == "spent" {
+            try expect(refused && AuthSwap$Codex.activeColumnID == AuthSwap$Codex.defaultColumnID,
+                       "A late copy published a consumed native grant")
+            try expect(try AuthSwap$Codex.authData(home: base) == native,
+                       "Refusing the consumed copy changed the current native login")
+        } else {
+            try expect(!refused && AuthSwap$Codex.activeColumnID == account.id,
+                       "An unspent independent session or intentional handoff could not activate")
+            try expect(try AuthSwap$Codex.authData(home: base) == original,
+                       "The valid session was not published through its configured native backend")
+        }
+        try expect(try AuthSwap$Codex.authData(home: copy) == original,
+                   "Grant validation changed the copied profile's credentials")
+        try expect(Fixture.refreshCalls == 0 && !AppSwitchState.inProgress.contains(.codex),
+                   "Desktop switching issued a refresh POST or stranded its switch reservation")
+    }
+
+    @MainActor
+    private static func nativeGrantRemoval(mode: String, kind: String) async throws {
+        let base = AuthSwap$Codex.baseHome
+        let copy = ProfileDirectories.codexRoot.appendingPathComponent("removal-copy")
+        let oldGrant = "synthetic-already-spent"
+        try nativeBoundaryAuth(base, mode: mode, account: "native-owner", grant: oldGrant, expired: true)
+        _ = try AuthSwap$Codex.beginRenewal(columnID: AuthSwap$Codex.defaultColumnID, home: base)
+        if kind != "unchanged" {
+            try nativeBoundaryAuth(base, mode: mode, account: "native-owner", grant: "native-current-grant", expired: false)
+        }
+        try nativeBoundaryAuth(copy, mode: mode, account: kind == "independent" ? "native-owner" : "copy-routing",
+                               grant: kind == "independent" ? "valid-independent-removal" : oldGrant, expired: true)
+        let primary = DiscoveredAccount(id: AuthSwap$Codex.defaultColumnID, provider: .codex,
+                                        profileName: "main", source: .codexHome(base))
+        let native = try AuthSwap$Codex.authData(home: base)
+        let original = try AuthSwap$Codex.authData(home: copy)
+        defer {
+            Fixture.failDefaultsSynchronization = false
+            Fixture.denyCredentialFileRemovalPath = nil
+            Fixture.denyCodexDelete = false
+            Fixture.denyCodexRead = false
+        }
+        if kind == "sync-refused" || kind == "delete-refused" || kind == "read-refused" {
+            Fixture.failDefaultsSynchronization = kind == "sync-refused"
+            Fixture.denyCodexRead = kind == "read-refused"
+            if kind == "delete-refused" {
+                Fixture.denyCodexDelete = mode == "keyring"
+                Fixture.denyCredentialFileRemovalPath = mode == "file" ? base.appendingPathComponent("auth.json").path : nil
+            }
+            var refused = false
+            do { try AccountRemoval.remove(primary) } catch { refused = true }
+            Fixture.denyCodexRead = false
+            let retainedNative = try AuthSwap$Codex.authData(home: base)
+            try expect(refused && retainedNative == native,
+                       "A refused metadata or credential deletion changed the native login")
+            if kind == "sync-refused" {
+                let quit = await Renewal$Codex.shared.prepareForTermination(timeout: 0.02)
+                await Renewal$Codex.shared.cancelTermination()
+                try expect(!quit, "Normal quit discarded undurable retirement metadata after refused removal")
+            }
+            Fixture.failDefaultsSynchronization = false
+            Fixture.denyCredentialFileRemovalPath = nil
+            Fixture.denyCodexDelete = false
+        }
+        try AccountRemoval.remove(primary)
+        try expect(!AuthSwap$Codex.hasAuth(home: base)
+                   && Foundation.FileManager.default.fileExists(atPath: base.path),
+                   "Primary removal retained credentials or deleted native configuration")
+        try expect(try AuthSwap$Codex.authData(home: copy) == original,
+                   "Primary removal changed the surviving copy")
+        // A replacement login cannot revive the previous native grant. A valid
+        // surviving session of that account must remain independently renewable.
+        try nativeBoundaryAuth(base, mode: mode, account: "native-owner", grant: "replacement-native-grant", expired: false)
+        let replacement = try AuthSwap$Codex.authData(home: base)
+        let valid = kind == "independent" || kind == "unchanged"
+        if kind == "restart" {
+            try await nativeGrantRestart(target: copy, expectedPosts: 0)
+        } else {
+            Fixture.rejectSpentRefresh = !valid
+            let account = DiscoveredAccount(id: "codex:removal-copy", provider: .codex,
+                                            profileName: "removal-copy", source: .codexHome(copy))
+            let result = await Provider$Codex().fetch(account)
+            print("NATIVE REMOVAL mode=\(mode) kind=\(kind) posts=\(Fixture.refreshCalls) outcome=\(result)")
+            try expect(Fixture.refreshCalls == (valid ? 1 : 0),
+                       "Primary removal replayed a consumed native grant or blocked an unspent surviving session")
+            if valid {
+                guard case .success = result else { throw Failure(description: "Valid surviving session could not fetch usage") }
+            } else {
+                try expect(try AuthSwap$Codex.authData(home: copy) == original,
+                           "Grant retirement overwrote the surviving copy")
+            }
+        }
+        try expect(try AuthSwap$Codex.authData(home: base) == replacement,
+                   "Surviving copy renewal changed the replacement native login")
     }
 
 }

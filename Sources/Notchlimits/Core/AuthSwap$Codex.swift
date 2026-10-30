@@ -394,6 +394,10 @@ enum AuthSwap$Codex {
         }
         guard homeKey(incoming) == source.home.path else { throw Failure.busy }
         payload = incomingRecord?.data
+        // Copyback may have retired this grant or advanced a known copy. Check
+        // the final payload before handing credentials to native clients.
+        if let payload, let grant = grantIdentity(payload),
+           try retiredNativeGrants().contains(grant) { throw Failure.busy }
         if let payload { try base.save(payload) } else { try base.delete() }
         rememberNativeGrant(payload, home: base.home.path)
         if columnID == defaultColumnID {
@@ -775,6 +779,13 @@ enum AuthSwap$Codex {
             try requireRemovalOwners(backup)
             try requireIdle(base)
             try requireIdle(backup)
+            if !restore, try nativeGrantOwner(home: base.home.path) != nil {
+                // Deletion must not erase an unobserved native rotation before
+                // its spent grant has been durably reserved across copies.
+                let native = try base.load(verifyingOwner: true)
+                guard homeKey(baseHome) == base.home.path else { throw Failure.busy }
+                try observeNativeGrant(native?.data, home: base.home.path)
+            }
             let keys = [activeIDKey, activeHomeKey, activePhysicalHomeKey]
             let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
             // Restore primary credentials before removing their backup. A
