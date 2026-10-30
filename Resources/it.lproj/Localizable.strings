@@ -68,6 +68,8 @@
 "menu.hotKey.standard" = "Predefinita (⌘P)";
 "menu.hotKey.disable" = "Disattiva";
 "menu.loginItem" = "Avvia all’accesso";
+"menu.switchCLI" = "Cambia CLI";
+"menu.switchCLI.help" = "Cambia anche Claude Code. Apri un nuovo terminale dopo il primo cambio. Le sessioni CLI attive mantengono il proprio account.";
 "menu.about" = "Informazioni su Notchlimits";
 "menu.quit" = "Esci da Notchlimits";
 "menu.telemetry" = "Mostra telemetria";
@@ -78,6 +80,7 @@
 "remove.body" = "Le credenziali dell'account verranno eliminate definitivamente. Accedi di nuovo con claude o codex per ripristinarlo.";
 "remove.delete" = "Elimina";
 "remove.failed.title" = "Impossibile rimuovere l'account";
+"remove.busy" = "Questo account è in aggiornamento. Attendi il completamento, poi riprova.";
 "remove.incomplete" = "%@ — accesso non eseguito";
 
 // Обновления
@@ -154,12 +157,17 @@
 
 // Ошибки в колонке
 "error.network" = "errore di rete";
+"error.codexStorage" = "Impossibile leggere le impostazioni di archiviazione di Codex oppure questo tipo di archivio non è supportato.";
+"error.codexEphemeral" = "Codex conserva questo accesso solo nel proprio processo. Scegli file, keyring o auto in Codex per usare account persistenti.";
 "error.keychainWrite" = "nessuna scrittura nel portachiavi";
+"error.pendingCredentials" = "Le credenziali sono ancora in fase di salvataggio. Sblocca il portachiavi e riprova a uscire.";
 "error.timeout" = "timeout";
 "error.noHTTP" = "nessuna risposta HTTP";
 "error.http" = "HTTP %d";
 "error.parse" = "risposta non leggibile";
 "error.unknownSource" = "origine sconosciuta";
+"error.cliProfile" = "Impossibile identificare la cartella del profilo CLI.";
+"error.cliShell" = "Il cambio CLI supporta zsh e bash. Apri un nuovo terminale dopo il primo cambio.";
 "error.noProvider" = "nessun provider";
 "error.unreachable" = "rete non disponibile";
 
@@ -172,4 +180,5 @@
 "appswitch.error.title" = "Impossibile cambiare account";
 "appswitch.error.notInstalled" = "%@ non è installato.";
 "appswitch.error.didNotQuit" = "%@ non si è chiuso: chiudilo e riprova.";
-"appswitch.error.noAuth" = "Questo account non ha un accesso a Codex (auth.json). Accedi di nuovo.";
+"appswitch.error.noAuth" = "Questo account non ha un accesso a Codex. Accedi di nuovo.";
+"appswitch.error.inProgress" = "È già in corso un cambio account.";

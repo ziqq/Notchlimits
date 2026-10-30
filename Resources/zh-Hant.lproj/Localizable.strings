@@ -68,6 +68,8 @@
 "menu.hotKey.standard" = "預設 (⌘P)";
 "menu.hotKey.disable" = "關閉";
 "menu.loginItem" = "登入時啟動";
+"menu.switchCLI" = "切換CLI";
+"menu.switchCLI.help" = "同時切換Claude Code。首次切換後請開啟新終端機。執行中的CLI工作階段保留原帳號。";
 "menu.about" = "關於 Notchlimits";
 "menu.quit" = "結束 Notchlimits";
 "menu.telemetry" = "顯示遙測";
@@ -78,6 +80,7 @@
 "remove.body" = "該帳號的登入憑證將被永久刪除。用 claude 或 codex 重新登入即可復原。";
 "remove.delete" = "刪除";
 "remove.failed.title" = "無法移除帳號";
+"remove.busy" = "此帳號正在更新。請等待完成後重試。";
 "remove.incomplete" = "%@ — 未登入";
 
 // Обновления
@@ -154,12 +157,17 @@
 
 // Ошибки в колонке
 "error.network" = "網路錯誤";
+"error.codexStorage" = "無法讀取 Codex 儲存設定，或不支援此儲存方式。";
+"error.codexEphemeral" = "Codex 僅在其程序內保留此登入。若要使用持久帳號，請在 Codex 中選擇 file、keyring 或 auto。";
 "error.keychainWrite" = "無法寫入鑰匙圈";
+"error.pendingCredentials" = "憑證仍在儲存。請解鎖鑰匙圈後重試結束。";
 "error.timeout" = "逾時";
 "error.noHTTP" = "沒有 HTTP 回應";
 "error.http" = "HTTP %d";
 "error.parse" = "無法解析回應";
 "error.unknownSource" = "來源不明";
+"error.cliProfile" = "無法確定CLI設定目錄。";
+"error.cliShell" = "CLI切換支援zsh和bash。首次切換後請開啟新終端機。";
 "error.noProvider" = "沒有提供者";
 "error.unreachable" = "網路無法使用";
 
@@ -172,4 +180,5 @@
 "appswitch.error.title" = "無法切換帳號";
 "appswitch.error.notInstalled" = "未安裝 %@。";
 "appswitch.error.didNotQuit" = "%@ 未結束——請關閉後再試一次。";
-"appswitch.error.noAuth" = "此帳號沒有 Codex 登入資訊 (auth.json)。請重新登入。";
+"appswitch.error.noAuth" = "此帳號沒有 Codex 登入資訊。請重新登入。";
+"appswitch.error.inProgress" = "正在切換帳號。";

@@ -39,6 +39,8 @@ final class UsageStore: ObservableObject {
     }
 
     private struct Runtime {
+        let generation = UUID()
+        let codexUsageOwner: AuthSwap$Codex.UsageOwner?
         var nextDue: Date
         var backoffStep: Int = 0
         var inFlight: Bool = false
@@ -47,6 +49,7 @@ final class UsageStore: ObservableObject {
     init(providers: [Provider: UsageProvider], discovery: AccountDiscovery) {
         self.providers = providers
         self.discovery = discovery
+        DefaultsMigration.migrateCodexProfileSettingsIfNeeded()
         hidden = Set(UserDefaults.standard.stringArray(forKey: "hiddenColumns") ?? [])
         customNames = UserDefaults.standard.dictionary(forKey: "columnNames") as? [String: String] ?? [:]
     }
@@ -70,14 +73,40 @@ final class UsageStore: ObservableObject {
         lastDiscovery = now
 
         let found = discovery.discover()
+        let usageOwners = Dictionary(uniqueKeysWithValues: found.compactMap { account -> (String, AuthSwap$Codex.UsageOwner)? in
+            guard case .codexHome(let home) = account.source else { return nil }
+            return (account.id, AuthSwap$Codex.usageOwner(columnID: account.id, home: home))
+        })
         // Пересобираем при любой смене состава ИЛИ активного (после свича id
         // могут совпасть, а флаг isActive — нет).
-        guard found != accounts else { return }
+        guard found != accounts || found.contains(where: {
+            runtime[$0.id] == nil || runtime[$0.id]?.codexUsageOwner != usageOwners[$0.id]
+        }) else { return }
+        let previousAccounts = accounts
+        let foundIDs = Set(found.map(\.id))
+        for account in previousAccounts where !foundIDs.contains(account.id) {
+            // A later same-name login must not hydrate the retired owner's state.
+            retireUsage(account.id)
+        }
         accounts = found
 
         var next: [AccountColumn] = []
         for (index, account) in found.enumerated() {
-            if var existing = columns.first(where: { $0.id == account.id }) {
+            let previous = previousAccounts.first { $0.id == account.id }
+            let replaced = previous.map {
+                runtime[account.id] == nil || $0.source != account.source
+                    || $0.claudeConfigOwner != account.claudeConfigOwner
+                    || $0.claudePrimaryOwner != account.claudePrimaryOwner
+                    || $0.codexHomeOwner != account.codexHomeOwner
+                    || $0.codexHomeMissingPath != account.codexHomeMissingPath
+                    || runtime[account.id]?.codexUsageOwner != usageOwners[account.id]
+            } ?? false
+            if replaced {
+                // A queued result must not populate a newly discovered owner.
+                // Keep user preferences, but retire usage and its generation.
+                retireUsage(account.id)
+            }
+            if !replaced, var existing = columns.first(where: { $0.id == account.id }) {
                 // Уже известная колонка — данные сохраняем, обновляем активность.
                 existing.isActive = account.isActive
                 next.append(existing)
@@ -96,7 +125,8 @@ final class UsageStore: ObservableObject {
                     column.status = .ok
                 }
                 next.append(column)
-                runtime[account.id] = Runtime(nextDue: now.addingTimeInterval(Double(index) * Schedule.stagger))
+                runtime[account.id] = Runtime(codexUsageOwner: usageOwners[account.id],
+                                              nextDue: now.addingTimeInterval(Double(index) * Schedule.stagger))
             }
         }
         // Забываем расписание исчезнувших профилей.
@@ -116,7 +146,7 @@ final class UsageStore: ObservableObject {
             guard var state = runtime[account.id], !state.inFlight, state.nextDue <= now else { continue }
             state.inFlight = true
             runtime[account.id] = state
-            Task { await self.fetch(account) }
+            Task { await self.fetch(account, generation: state.generation) }
         }
     }
 
@@ -185,11 +215,29 @@ final class UsageStore: ObservableObject {
     /// уведомлений. После удаления колонка исчезает и сама не возвращается.
     func removeAccount(id: String) throws {
         guard let account = accounts.first(where: { $0.id == id }) else { return }
-        try AccountRemoval.remove(account)
+        var removal: AccountRemoval.ClaudeRemoval?
+        try AccountRemoval.remove(account, claudeRemoval: { removal = $0 })
+        finishRemoval(account, claudeRemoval: removal)
+    }
 
-        cache.remove(id: id)
-        history.purge(columnID: id)
-        notifier.purge(columnID: id)
+    func removeAccount(id: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard let account = accounts.first(where: { $0.id == id }) else { completion(.success(())); return }
+        var removal: AccountRemoval.ClaudeRemoval?
+        AccountRemoval.remove(account, claudeRemoval: { removal = $0 }) { result in
+            if case .success = result { self.finishRemoval(account, claudeRemoval: removal) }
+            completion(result)
+        }
+    }
+
+    private func finishRemoval(_ account: DiscoveredAccount,
+                               claudeRemoval: AccountRemoval.ClaudeRemoval?) {
+        let id = account.id
+        if let claude = providers[.claude] as? Provider$Claude,
+           case .claudeKeychain = account.source {
+            Task { await claude.accountRemoved(account, removal: claudeRemoval) }
+        }
+
+        retireUsage(id)
         runtime[id] = nil
         if customNames[id] != nil {
             customNames[id] = nil
@@ -199,22 +247,47 @@ final class UsageStore: ObservableObject {
             UserDefaults.standard.set(Array(hidden), forKey: "hiddenColumns")
         }
 
+        // Retire the old column before discovery can observe a same-name login
+        // created while its previous directory was staged for deletion.
+        accounts.removeAll { $0.id == id }
+        columns.removeAll { $0.id == id }
+        onColumnsChanged?()
         rediscover(force: true)
     }
 
     // MARK: - Опрос
 
-    private func fetch(_ account: DiscoveredAccount) async {
-        guard let provider = providers[account.provider] else {
-            finish(account.id, outcome: .failure(L.t("error.noProvider")))
-            return
-        }
-        let outcome = await provider.fetch(account)
-        finish(account.id, outcome: outcome)
+    /// Usage, history and notification state belong to one verified login epoch.
+    private func retireUsage(_ id: String) {
+        cache.remove(id: id)
+        history.purge(columnID: id)
+        notifier.purge(columnID: id)
     }
 
-    private func finish(_ id: String, outcome: FetchOutcome) {
-        guard var state = runtime[id] else { return }
+    private func fetch(_ account: DiscoveredAccount, generation: UUID) async {
+        guard runtime[account.id]?.generation == generation else { return }
+        guard let provider = providers[account.provider] else {
+            finish(account.id, generation: generation, outcome: .failure(L.t("error.noProvider")))
+            return
+        }
+        let result = await provider.fetchValidated(account)
+        guard runtime[account.id]?.generation == generation else { return }
+        if let isCurrent = result.isCurrent {
+            do {
+                guard try isCurrent() else {
+                    finish(account.id, generation: generation, outcome: .superseded)
+                    return
+                }
+            } catch {
+                finish(account.id, generation: generation, outcome: .failure(error.localizedDescription))
+                return
+            }
+        }
+        finish(account.id, generation: generation, outcome: result.outcome)
+    }
+
+    private func finish(_ id: String, generation: UUID, outcome: FetchOutcome) {
+        guard var state = runtime[id], state.generation == generation else { return }
         state.inFlight = false
         guard let index = columns.firstIndex(where: { $0.id == id }) else {
             runtime[id] = state
@@ -222,6 +295,13 @@ final class UsageStore: ObservableObject {
         }
 
         switch outcome {
+        case .superseded:
+            // Retire all state of the superseded login, including outcomes that
+            // detect replacement before a publication proof can be captured.
+            runtime[id] = nil
+            rediscover(force: true)
+            return
+
         case .success(let snapshot):
             state.backoffStep = 0
             state.nextDue = Date().addingTimeInterval(Schedule.interval)
@@ -263,7 +343,7 @@ final class UsageStore: ObservableObject {
         case .notAnAccount:
             // Запись без входа: запоминаем и убираем колонку при пересборке.
             if case .claudeKeychain(let service, _)? = account(for: id)?.source {
-                ClaudeKeychain.markNoLogin(service: service)
+                AuthStorage$Claude.markNoLogin(service: service)
             }
             runtime[id] = state
             rediscover(force: true)

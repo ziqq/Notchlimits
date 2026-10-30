@@ -68,6 +68,8 @@
 "menu.hotKey.standard" = "Varsayılan (⌘P)";
 "menu.hotKey.disable" = "Kapat";
 "menu.loginItem" = "Girişte başlat";
+"menu.switchCLI" = "CLI değiştir";
+"menu.switchCLI.help" = "Claude Code hesabını da değiştir. İlk geçişten sonra yeni bir terminal açın. Çalışan CLI oturumları hesaplarını korur.";
 "menu.about" = "Notchlimits hakkında";
 "menu.quit" = "Notchlimits’ten çık";
 "menu.telemetry" = "Telemetriyi göster";
@@ -78,6 +80,7 @@
 "remove.body" = "Hesabın kimlik bilgileri kalıcı olarak silinecek. Geri getirmek için claude veya codex ile yeniden giriş yap.";
 "remove.delete" = "Sil";
 "remove.failed.title" = "Hesap kaldırılamadı";
+"remove.busy" = "Bu hesap güncelleniyor. İşlemin bitmesini bekleyip tekrar dene.";
 "remove.incomplete" = "%@ — oturum açılmadı";
 
 // Обновления
@@ -154,12 +157,17 @@
 
 // Ошибки в колонке
 "error.network" = "ağ hatası";
+"error.codexStorage" = "Codex depolama ayarları okunamıyor veya bu depolama türü desteklenmiyor.";
+"error.codexEphemeral" = "Codex bu oturumu yalnızca kendi işleminde tutar. Kalıcı hesaplar için Codex içinde file, keyring veya auto seç.";
 "error.keychainWrite" = "Anahtar Zinciri'ne yazılamıyor";
+"error.pendingCredentials" = "Kimlik bilgileri hâlâ kaydediliyor. Anahtar Zinciri kilidini açıp yeniden çıkmayı deneyin.";
 "error.timeout" = "zaman aşımı";
 "error.noHTTP" = "HTTP yanıtı yok";
 "error.http" = "HTTP %d";
 "error.parse" = "yanıt çözümlenemedi";
 "error.unknownSource" = "bilinmeyen kaynak";
+"error.cliProfile" = "CLI profil klasörü belirlenemedi.";
+"error.cliShell" = "CLI geçişi zsh ve bash destekler. İlk geçişten sonra yeni bir terminal açın.";
 "error.noProvider" = "sağlayıcı yok";
 "error.unreachable" = "ağ kullanılamıyor";
 
@@ -172,4 +180,5 @@
 "appswitch.error.title" = "Hesap değiştirilemedi";
 "appswitch.error.notInstalled" = "%@ yüklü değil.";
 "appswitch.error.didNotQuit" = "%@ kapanmadı — kapatıp tekrar dene.";
-"appswitch.error.noAuth" = "Bu hesabın Codex oturumu (auth.json) yok. Yeniden giriş yap.";
+"appswitch.error.noAuth" = "Bu hesabın Codex oturumu yok. Yeniden giriş yap.";
+"appswitch.error.inProgress" = "Hesap geçişi zaten devam ediyor.";

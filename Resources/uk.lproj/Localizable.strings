@@ -68,6 +68,8 @@
 "menu.hotKey.standard" = "Стандартна (⌘P)";
 "menu.hotKey.disable" = "Вимкнути";
 "menu.loginItem" = "Запуск при вході";
+"menu.switchCLI" = "Перемикати CLI";
+"menu.switchCLI.help" = "Також перемикати Claude Code. Після першого перемикання відкрийте новий термінал. Запущені CLI-сеанси зберігають свій акаунт.";
 "menu.about" = "Про Notchlimits";
 "menu.quit" = "Вийти з Notchlimits";
 "menu.telemetry" = "Показувати телеметрію";
@@ -78,6 +80,7 @@
 "remove.body" = "Облікові дані акаунта буде видалено безповоротно. Щоб повернути його, увійдіть знову через claude або codex.";
 "remove.delete" = "Видалити";
 "remove.failed.title" = "Не вдалося видалити акаунт";
+"remove.busy" = "Обліковий запис зараз оновлюється. Дочекайтеся завершення та спробуйте ще раз.";
 "remove.incomplete" = "%@ — вхід не виконано";
 
 // Обновления
@@ -154,12 +157,17 @@
 
 // Ошибки в колонке
 "error.network" = "збій мережі";
+"error.codexStorage" = "Не вдалося прочитати налаштування сховища Codex або цей тип сховища не підтримується.";
+"error.codexEphemeral" = "Codex зберігає цей вхід лише у своєму процесі. Для постійних облікових записів вибери в Codex file, keyring або auto.";
 "error.keychainWrite" = "немає запису в Keychain";
+"error.pendingCredentials" = "Облікові дані ще зберігаються. Розблокуйте Keychain і спробуйте вийти знову.";
 "error.timeout" = "тайм-аут";
 "error.noHTTP" = "немає HTTP-відповіді";
 "error.http" = "HTTP %d";
 "error.parse" = "не розібрав відповідь";
 "error.unknownSource" = "невідоме джерело";
+"error.cliProfile" = "Не вдалося визначити папку профілю CLI.";
+"error.cliShell" = "Перемикання CLI підтримує zsh і bash. Після першого перемикання відкрийте новий термінал.";
 "error.noProvider" = "немає провайдера";
 "error.unreachable" = "мережа недоступна";
 
@@ -172,4 +180,5 @@
 "appswitch.error.title" = "Не вдалося перемкнути акаунт";
 "appswitch.error.notInstalled" = "%@ не встановлено.";
 "appswitch.error.didNotQuit" = "%@ не закрився — закрий його й спробуй ще раз.";
-"appswitch.error.noAuth" = "У цього акаунта немає входу в Codex (auth.json). Увійди в нього знову.";
+"appswitch.error.noAuth" = "У цього акаунта немає входу в Codex. Увійди в нього знову.";
+"appswitch.error.inProgress" = "Перемикання акаунта вже виконується.";

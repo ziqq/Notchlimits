@@ -68,6 +68,8 @@
 "menu.hotKey.standard" = "デフォルト (⌘P)";
 "menu.hotKey.disable" = "オフにする";
 "menu.loginItem" = "ログイン時に起動";
+"menu.switchCLI" = "CLIを切り替える";
+"menu.switchCLI.help" = "Claude Codeも切り替えます。初回切替後に新しいターミナルを開いてください。実行中のCLIセッションは元のアカウントを維持します。";
 "menu.about" = "Notchlimits について";
 "menu.quit" = "Notchlimitsを終了";
 "menu.telemetry" = "テレメトリーを表示";
@@ -78,6 +80,7 @@
 "remove.body" = "アカウントの認証情報は完全に削除されます。元に戻すには claude か codex で再度サインインしてください。";
 "remove.delete" = "削除";
 "remove.failed.title" = "アカウントを削除できませんでした";
+"remove.busy" = "このアカウントは更新中です。完了してからもう一度お試しください。";
 "remove.incomplete" = "%@ — 未ログイン";
 
 // Обновления
@@ -154,12 +157,17 @@
 
 // Ошибки в колонке
 "error.network" = "ネットワークエラー";
+"error.codexStorage" = "Codexの保存設定を読み取れないか、この保存方式はサポートされていません。";
+"error.codexEphemeral" = "Codexはこのログインを自身のプロセス内にのみ保持します。永続的なアカウントにはCodexでfile、keyring、autoのいずれかを選択してください。";
 "error.keychainWrite" = "キーチェーンに書き込めません";
+"error.pendingCredentials" = "認証情報を保存中です。キーチェーンのロックを解除してから終了を再試行してください。";
 "error.timeout" = "タイムアウト";
 "error.noHTTP" = "HTTP 応答なし";
 "error.http" = "HTTP %d";
 "error.parse" = "応答を解析できません";
 "error.unknownSource" = "不明なソース";
+"error.cliProfile" = "CLIプロファイルのフォルダを特定できません。";
+"error.cliShell" = "CLI切替はzshとbashに対応しています。初回切替後に新しいターミナルを開いてください。";
 "error.noProvider" = "プロバイダなし";
 "error.unreachable" = "ネットワークに接続できません";
 
@@ -172,4 +180,5 @@
 "appswitch.error.title" = "アカウントを切り替えられませんでした";
 "appswitch.error.notInstalled" = "%@ がインストールされていません。";
 "appswitch.error.didNotQuit" = "%@ が終了しませんでした。終了してからもう一度お試しください。";
-"appswitch.error.noAuth" = "このアカウントには Codex のサインイン (auth.json) がありません。もう一度サインインしてください。";
+"appswitch.error.noAuth" = "このアカウントには Codex のサインイン がありません。もう一度サインインしてください。";
+"appswitch.error.inProgress" = "アカウントの切替中です。";
