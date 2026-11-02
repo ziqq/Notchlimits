@@ -30,6 +30,8 @@ private enum Fixture {
     static var beforeCredentialDelete: (() -> Void)?
     static var rejectSpentRefresh = false
     static var pauseAuthReadPath: String?
+    static var authReadRequiresPath: String?
+    static var beforeDirectoryCreate: ((URL) throws -> Void)?
     static var authReadPaused = false
     static var releaseAuthRead = false
     static var authSwitchCompleted = false
@@ -363,12 +365,23 @@ private final class FixtureFileManager: Foundation.FileManager, @unchecked Senda
     }
 
 
+    override func createDirectory(at url: URL, withIntermediateDirectories createIntermediates: Bool,
+                                  attributes: [FileAttributeKey: Any]? = nil) throws {
+        try Fixture.beforeDirectoryCreate?(url)
+        try super.createDirectory(at: url, withIntermediateDirectories: createIntermediates, attributes: attributes)
+    }
+
     private func configPath(_ path: String) -> String {
         path.hasPrefix("/etc/codex/") ? Fixture.root.path + "/system/" + URL(fileURLWithPath: path).lastPathComponent : path
     }
     override func fileExists(atPath path: String) -> Bool {
         let exists = super.fileExists(atPath: configPath(path))
         if path == Fixture.pauseAuthReadPath {
+            // Target a later read without changing production synchronization.
+            if let required = Fixture.authReadRequiresPath,
+               !Foundation.FileManager.default.fileExists(atPath: required) {
+                return exists
+            }
             Fixture.lock.lock()
             Fixture.pauseAuthReadPath = nil
             Fixture.authReadPaused = true

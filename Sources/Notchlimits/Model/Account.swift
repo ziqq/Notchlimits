@@ -156,10 +156,13 @@ protocol UsageProvider {
 struct UsageFetchResult {
     let outcome: FetchOutcome
     let isCurrent: (() throws -> Bool)?
+    /// Stable across accepted refreshes, distinct for an independently observed login.
+    let loginID: UUID?
 
-    init(outcome: FetchOutcome, isCurrent: (() throws -> Bool)? = nil) {
+    init(outcome: FetchOutcome, isCurrent: (() throws -> Bool)? = nil, loginID: UUID? = nil) {
         self.outcome = outcome
         self.isCurrent = isCurrent
+        self.loginID = loginID
     }
 }
 
