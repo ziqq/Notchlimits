@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Лимиты Claude Code: GET https://api.anthropic.com/api/oauth/usage
 ///
@@ -21,6 +22,30 @@ actor Provider$Claude: UsageProvider {
 
     private var tokens: [String: CachedToken] = [:]
     private var origins: [String: AuthStorage$Claude.Credentials] = [:]
+    private static func usageIdentity(service: String, accessToken: String, refreshToken: String?) -> String {
+        let fields = [service, accessToken, refreshToken ?? ""]
+        let bytes = fields.map { "\($0.utf8.count):\($0)" }.joined()
+        return SHA256.hash(data: Data(bytes.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+    private var usageLogins: [String: UUID] =
+        (UserDefaults.standard.dictionary(forKey: "claudeUsageLogins") as? [String: String] ?? [:])
+            .compactMapValues { UUID(uuidString: $0) }
+
+    private func rememberUsageLogin(_ login: UUID, identity: String) {
+        guard usageLogins[identity] != login else { return }
+        usageLogins[identity] = login
+        // Persistent history needs a durable epoch, never raw credentials.
+        UserDefaults.standard.set(usageLogins.mapValues(\.uuidString), forKey: "claudeUsageLogins")
+    }
+
+    private func usageLogin(_ credentials: AuthStorage$Claude.Credentials, service: String) -> UUID {
+        let key = Self.usageIdentity(service: service, accessToken: credentials.accessToken,
+                                    refreshToken: credentials.refreshToken)
+        if let login = usageLogins[key] { return login }
+        let login = UUID()
+        rememberUsageLogin(login, identity: key)
+        return login
+    }
     private var terminating = false
     private var renewing: Set<String> = []
     private var renewingFileOwners: [String: RefreshLock$Claude] = [:]
@@ -79,7 +104,7 @@ actor Provider$Claude: UsageProvider {
             if let issue = resolved?.issue, let origin = resolved?.origin {
                 return UsageFetchResult(outcome: .failure(issue), isCurrent: {
                     try AuthStorage$Claude.isCurrent(origin, service: service)
-                })
+                }, loginID: usageLogin(origin, service: service))
             }
             let state = await Task.detached(priority: .utility) {
                 AuthStorage$Claude.unresolvedUsage(service: service)
@@ -94,14 +119,16 @@ actor Provider$Claude: UsageProvider {
             }
             let outcome = (resolved?.issue).map(FetchOutcome.failure)
                 ?? (state.noLogin ? .notAnAccount : .reauth(L.t("column.reauth")))
-            return UsageFetchResult(outcome: outcome, isCurrent: state.isCurrent)
+            return UsageFetchResult(outcome: outcome, isCurrent: state.isCurrent,
+                                    loginID: state.credentials.map { usageLogin($0, service: service) })
         }
 
         let origin = token.origin
+        let loginID = usageLogin(origin, service: service)
         func checked(_ outcome: FetchOutcome) -> UsageFetchResult {
             UsageFetchResult(outcome: outcome, isCurrent: {
                 try AuthStorage$Claude.isCurrent(origin, service: service)
-            })
+            }, loginID: loginID)
         }
         // Почту API не отдаёт. Обычно берём из discovery (конфиг/снимок), иначе
         // читаем сами из конфига CLI. Так библиотечные колонки без папки конфига
@@ -422,7 +449,14 @@ actor Provider$Claude: UsageProvider {
             let result = await write(pending, to: service, lease: lease)
             guard removalGenerations[service] == generation else { return .failed }
             switch result {
-            case .saved, .changed:
+            case .saved:
+                let login = usageLogin(pending.credentials, service: service)
+                let next = Self.usageIdentity(service: service, accessToken: pending.tokens.accessToken,
+                                             refreshToken: pending.tokens.refreshToken ?? pending.credentials.refreshToken)
+                rememberUsageLogin(login, identity: next)
+                issues[service] = nil
+                return result
+            case .changed:
                 issues[service] = nil
                 return result
             case .failed:

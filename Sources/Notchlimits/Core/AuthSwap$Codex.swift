@@ -76,6 +76,9 @@ enum AuthSwap$Codex {
     /// Forward only an observed credential identity, never another login that
     /// happens to use the same profile name. No credentials are stored in defaults.
     private static var rotations: [String: Data] = [:]
+    private static var usageLogins: [String: UUID] =
+        (UserDefaults.standard.dictionary(forKey: "codexUsageLogins") as? [String: String] ?? [:])
+            .compactMapValues { UUID(uuidString: $0) }
     private static var knownCopies: [String: SessionCopy] = [:]
     private static var copyDebt: [String: SessionCopy] = [:]
     private static var primarySession: (data: Data, owner: DirectoryIdentity, generation: UUID?)?
@@ -352,6 +355,7 @@ enum AuthSwap$Codex {
     private static func activateLocked(columnID: String, home: URL,
                                        keepBackup: Bool = false) throws -> AuthStorage$Codex.Record? {
         let base = try storage(at: baseHome)
+        var baseOwner = DirectoryIdentity.capture(base.home)
         guard base.mode != .ephemeral else { throw AuthStorage$Codex.Failure.ephemeral }
         guard columnID == defaultColumnID || !isBaseHome(home) else { throw Failure.busy }
         guard columnID != activeColumnID else { return nil }
@@ -383,8 +387,11 @@ enum AuthSwap$Codex {
             throw Failure.busy
         }
         guard columnID == defaultColumnID || payload != nil else { throw Failure.missingAuth }
-        try FileManager.default.createDirectory(at: baseHome, withIntermediateDirectories: true)
-        let previous = try giveBackCurrent()
+        try requireNative(base, owner: baseOwner)
+        try FileManager.default.createDirectory(at: base.home, withIntermediateDirectories: true)
+        if baseOwner == nil { baseOwner = DirectoryIdentity.capture(base.home) }
+        try requireNative(base, owner: baseOwner)
+        let previous = try giveBackCurrent(base)
         // Copyback can advance a primary backup that shared the selected grant.
         // Publish that updated record instead of its pre-copyback token snapshot.
         incomingRecord = try source.load(verifyingOwner: true)
@@ -398,6 +405,7 @@ enum AuthSwap$Codex {
         // the final payload before handing credentials to native clients.
         if let payload, let grant = grantIdentity(payload),
            try retiredNativeGrants().contains(grant) { throw Failure.busy }
+        try requireNative(base, owner: baseOwner)
         if let payload { try base.save(payload) } else { try base.delete() }
         rememberNativeGrant(payload, home: base.home.path)
         if columnID == defaultColumnID {
@@ -442,8 +450,9 @@ enum AuthSwap$Codex {
         if let expected, expected.key != key || expected.generation != generations[key]
             || expected.columnGeneration != columnGenerations[columnID] { return nil }
         let nativeStorage = try storage(at: baseHome)
+        let nativeOwner = DirectoryIdentity.capture(nativeStorage.home)
         let native = try nativeStorage.load(verifyingOwner: true)
-        guard homeKey(baseHome) == nativeStorage.home.path else { throw Failure.busy }
+        try requireNative(nativeStorage, owner: nativeOwner)
         try observeNativeGrant(native?.data, home: nativeStorage.home.path)
         guard renewals[key] == nil,
               !renewals.values.contains(where: { $0.columnID == columnID }) else { throw Failure.busy }
@@ -461,6 +470,7 @@ enum AuthSwap$Codex {
         try requireIdleGrant(observed.data)
         let record = try reconcile(source, record: observed)
         guard homeKey(home) == key, homeKey(live) == source.home.path else { throw Failure.busy }
+        try requireNative(nativeStorage, owner: nativeOwner)
         guard !(try sameOwner(source, nativeStorage)),
               !(try removesFile(source, backend: record.backend, ownedBy: nativeStorage)) else { return nil }
         if let active = activeOwnerPath, isSwapped {
@@ -491,6 +501,7 @@ enum AuthSwap$Codex {
                               sourceKey: sourceKey, sourceGeneration: generations[sourceKey],
                               storage: source, record: record,
                               copies: sessionCopies(of: record.data, excluding: sourceKey))
+        try requireNative(nativeStorage, owner: nativeOwner)
         renewals[key] = renewal
         return renewal
     }
@@ -618,12 +629,21 @@ enum AuthSwap$Codex {
         return formatter
     }()
 
+    /// Revalidate the native namespace, storage mode and physical directory.
+    private static func requireNative(_ expected: AuthStorage$Codex, owner: DirectoryIdentity?) throws {
+        let current = try storage(at: baseHome)
+        guard current.home.path == expected.home.path, current.mode == expected.mode,
+              DirectoryIdentity.capture(expected.home) == owner else { throw Failure.busy }
+    }
+
     /// Вход, что сейчас в `~/.codex`, — обратно владельцу.
-    private static func giveBackCurrent() throws -> AuthStorage$Codex.Record? {
-        let live = try storage(at: baseHome)
+    private static func giveBackCurrent(_ expected: AuthStorage$Codex? = nil) throws -> AuthStorage$Codex.Record? {
+        let live = try expected ?? storage(at: baseHome)
+        let owner = DirectoryIdentity.capture(live.home)
+        try requireNative(live, owner: owner)
         let record = try live.load(verifyingOwner: true)
         let payload = record?.data
-        guard homeKey(baseHome) == live.home.path else { throw Failure.busy }
+        try requireNative(live, owner: owner)
         try observeNativeGrant(payload, home: live.home.path)
         if !isSwapped {
             try advancePrimaryCopies()
@@ -924,10 +944,49 @@ enum AuthSwap$Codex {
         guard Provider$Codex.parseAuth(old) != nil, Provider$Codex.parseAuth(fresh) != nil,
               let identity = authIdentity(old), let grant = refreshToken(old),
               let updated = sessionUpdate(from: fresh, in: old), authIdentity(updated) != identity else { return }
+        let login = usageLoginLocked(old)
         for (key, value) in rotations where refreshToken(value) == grant {
-            if let next = sessionUpdate(from: fresh, in: value) { rotations[key] = next }
+            if let next = sessionUpdate(from: fresh, in: value) {
+                if let nextIdentity = authIdentity(next), let nextLogin = usageLogins[key] ?? login {
+                    rememberUsageLogin(nextLogin, identity: nextIdentity)
+                }
+                rotations[key] = next
+            }
         }
         rotations[identity] = updated
+        if let nextIdentity = authIdentity(updated), let login { rememberUsageLogin(login, identity: nextIdentity) }
+    }
+
+    /// Accepted rotations retain the usage epoch; an independent login does not.
+    static func usageLogin(_ data: Data) -> UUID? {
+        lock.lock()
+        defer { lock.unlock() }
+        return usageLoginLocked(data)
+    }
+
+    static func usageLogin(_ owner: LoginOwner) -> UUID? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let identity = owner.authIdentity else { return nil }
+        if let next = rotations[identity] { return usageLoginLocked(next) }
+        if let login = usageLogins[identity] { return login }
+        let login = UUID()
+        rememberUsageLogin(login, identity: identity)
+        return login
+    }
+
+    private static func usageLoginLocked(_ data: Data) -> UUID? {
+        guard let identity = authIdentity(forwarded(data)) else { return nil }
+        if let login = usageLogins[identity] { return login }
+        let login = UUID()
+        rememberUsageLogin(login, identity: identity)
+        return login
+    }
+
+    private static func rememberUsageLogin(_ login: UUID, identity: String) {
+        guard usageLogins[identity] != login else { return }
+        usageLogins[identity] = login
+        UserDefaults.standard.set(usageLogins.mapValues(\.uuidString), forKey: "codexUsageLogins")
     }
 
     private static func forwarded(_ data: Data) -> Data {

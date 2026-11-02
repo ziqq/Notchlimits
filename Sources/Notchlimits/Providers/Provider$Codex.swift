@@ -43,7 +43,8 @@ struct Provider$Codex: UsageProvider {
         let response = await request(snapshot, owner: owner, columnID: account.id, home: home)
         guard case .reauth = response.outcome else { return response }
         if renewal == .unavailable {
-            return UsageFetchResult(outcome: .failure(L.t("error.network")), isCurrent: response.isCurrent)
+            return UsageFetchResult(outcome: .failure(L.t("error.network")), isCurrent: response.isCurrent,
+                                    loginID: response.loginID)
         }
         // Не продлеваем второй раз в одном опросе после успешной ротации.
         guard renewal == .skipped, let snapshot else { return response }
@@ -69,14 +70,14 @@ struct Provider$Codex: UsageProvider {
                         columnID: String, home: URL) -> UsageFetchResult {
         UsageFetchResult(outcome: outcome, isCurrent: {
             try AuthSwap$Codex.isCurrent(snapshot, columnID: columnID, home: home)
-        })
+        }, loginID: AuthSwap$Codex.usageLogin(snapshot.data))
     }
 
     private func result(_ outcome: FetchOutcome, owner: AuthSwap$Codex.LoginOwner,
                         columnID: String, home: URL) -> UsageFetchResult {
         UsageFetchResult(outcome: outcome, isCurrent: {
             try AuthSwap$Codex.isCurrent(owner, columnID: columnID, home: home)
-        })
+        }, loginID: AuthSwap$Codex.usageLogin(owner))
     }
 
     private func request(_ snapshot: AuthSwap$Codex.AuthSnapshot?, owner: AuthSwap$Codex.LoginOwner,

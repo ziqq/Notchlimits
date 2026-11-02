@@ -44,6 +44,7 @@ final class UsageStore: ObservableObject {
         var nextDue: Date
         var backoffStep: Int = 0
         var inFlight: Bool = false
+        var loginID: UUID?
     }
 
     init(providers: [Provider: UsageProvider], discovery: AccountDiscovery) {
@@ -90,6 +91,7 @@ final class UsageStore: ObservableObject {
         }
         accounts = found
 
+        let loginEpochs = UserDefaults.standard.dictionary(forKey: "usageLoginEpochs") as? [String: String] ?? [:]
         var next: [AccountColumn] = []
         for (index, account) in found.enumerated() {
             let previous = previousAccounts.first { $0.id == account.id }
@@ -126,7 +128,8 @@ final class UsageStore: ObservableObject {
                 }
                 next.append(column)
                 runtime[account.id] = Runtime(codexUsageOwner: usageOwners[account.id],
-                                              nextDue: now.addingTimeInterval(Double(index) * Schedule.stagger))
+                                              nextDue: now.addingTimeInterval(Double(index) * Schedule.stagger),
+                                              loginID: loginEpochs[account.id].flatMap { UUID(uuidString: $0) })
             }
         }
         // Забываем расписание исчезнувших профилей.
@@ -262,6 +265,9 @@ final class UsageStore: ObservableObject {
         cache.remove(id: id)
         history.purge(columnID: id)
         notifier.purge(columnID: id)
+        var epochs = UserDefaults.standard.dictionary(forKey: "usageLoginEpochs") as? [String: String] ?? [:]
+        epochs[id] = nil
+        UserDefaults.standard.set(epochs, forKey: "usageLoginEpochs")
     }
 
     private func fetch(_ account: DiscoveredAccount, generation: UUID) async {
@@ -282,6 +288,23 @@ final class UsageStore: ObservableObject {
                 finish(account.id, generation: generation, outcome: .failure(error.localizedDescription))
                 return
             }
+        }
+        if let loginID = result.loginID {
+            if let previous = runtime[account.id]?.loginID, previous != loginID {
+                retireUsage(account.id)
+                if let index = columns.firstIndex(where: { $0.id == account.id }) {
+                    columns[index].windows = []
+                    columns[index].subtitle = nil
+                    columns[index].stats = []
+                    columns[index].updatedAt = nil
+                    columns[index].fromCache = false
+                }
+                runtime[account.id]?.backoffStep = 0
+            }
+            runtime[account.id]?.loginID = loginID
+            var epochs = UserDefaults.standard.dictionary(forKey: "usageLoginEpochs") as? [String: String] ?? [:]
+            epochs[account.id] = loginID.uuidString
+            UserDefaults.standard.set(epochs, forKey: "usageLoginEpochs")
         }
         finish(account.id, generation: generation, outcome: result.outcome)
     }
