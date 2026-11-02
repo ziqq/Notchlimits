@@ -161,10 +161,19 @@ enum AccountRemoval {
                 if isBase {
                     try storage.delete()
                 } else {
+                    // Pin the managed entry's parent before any recovery I/O.
+                    // Preserve a profile symlink as an entry, not its target.
+                    let root = URL(fileURLWithPath: AuthStorage$Codex.canonicalPath(ProfileDirectories.codexRoot))
+                    let managed = url.path.hasPrefix(ProfileDirectories.codexRoot.path + "/")
+                    let directory = managed
+                        ? root.appendingPathComponent(String(url.path.dropFirst(ProfileDirectories.codexRoot.path.count + 1)))
+                        : storage.home
+                    guard AuthStorage$Codex.canonicalPath(directory) == storage.home.path,
+                          account.codexHomeOwner?.matches(directory) == true else { throw Failure.busy }
                     var info = stat()
-                    if url.path.withCString({ Darwin.lstat($0, &info) }) == 0,
+                    if directory.path.withCString({ Darwin.lstat($0, &info) }) == 0,
                        info.st_mode & S_IFMT == S_IFDIR,
-                       AuthSwap$Codex.directoryIsShared(home: storage.home, directory: url) {
+                       AuthSwap$Codex.directoryIsShared(home: storage.home, directory: directory) {
                         // Moving the physical directory would also move another
                         // native namespace's file/configuration. A symlink can
                         // be removed independently without moving that owner.
@@ -173,7 +182,7 @@ enum AccountRemoval {
                     let keyring = try storage.beginRemoval()
                     var retainsOriginalFile = true
                     do {
-                        try withProfileDirectory(url, root: ProfileDirectories.codexRoot,
+                        try withProfileDirectory(managed ? directory : nil, root: root, expectedOwner: account.codexHomeOwner,
                                                  rollbackFile: { retainsOriginalFile = $0 },
                                                  restoredFileOwner: AuthSwap$Codex.recordRestoredFileOwner) { directory in
                             try storage.delete(fileHome: directory, keyring: keyring?.storage)
@@ -198,17 +207,28 @@ enum AccountRemoval {
     /// Cleanup of a hidden, logged-out directory cannot block same-name re-addition.
     private static func withProfileDirectory(_ directory: URL?, root: URL,
                                              move: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) },
+                                             expectedOwner: DirectoryIdentity? = nil,
                                              rollbackFile: ((Bool) -> Void)? = nil,
                                              restoredFileOwner: ((Int32, Int32) -> Void)? = nil,
                                              operation: (URL?) throws -> Void) throws {
         let manager = FileManager.default
+        if let directory, let expectedOwner {
+            guard let current = DirectoryIdentity.capture(directory),
+                  current.isSameDirectory(as: expectedOwner) else { throw Failure.busy }
+        }
         guard let directory, directory.path.hasPrefix(root.path + "/"),
               manager.fileExists(atPath: directory.path) else { try operation(directory); return }
         guard !ProfileDirectories.containsNativeHome(directory) else { throw Failure.busy }
         let removed = directory.deletingLastPathComponent()
             .appendingPathComponent(".removed-" + UUID().uuidString, isDirectory: true)
         try move(directory, removed)
-        do { try operation(removed) } catch {
+        do {
+            if let expectedOwner {
+                guard let moved = DirectoryIdentity.capture(removed),
+                      moved.isSameDirectory(as: expectedOwner) else { throw Failure.busy }
+            }
+            try operation(removed)
+        } catch {
             rollbackFile?(false)
             do {
                 try move(removed, directory)
