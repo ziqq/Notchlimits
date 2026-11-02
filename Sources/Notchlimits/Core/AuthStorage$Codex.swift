@@ -64,6 +64,9 @@ struct AuthStorage$Codex {
         // key. A later symlink retarget must not redirect a pending rotation.
         self.home = URL(fileURLWithPath: path, isDirectory: true)
         self.mode = try mode ?? Self.configuredMode(home: self.home)
+        // Configuration reads can block. Do not return a snapshot of a former
+        // namespace after the caller's logical home has been redirected.
+        guard Self.canonicalPath(home) == path else { throw Failure.settings }
         let hash = SHA256.hash(data: Data(path.utf8))
             .map { String(format: "%02x", $0) }.joined()
         account = "cli|" + hash.prefix(16)

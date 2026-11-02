@@ -32,6 +32,8 @@ private enum Fixture {
     static var pauseAuthReadPath: String?
     static var authReadRequiresPath: String?
     static var beforeDirectoryCreate: ((URL) throws -> Void)?
+    static var beforeDirectoryMove: ((URL, URL) throws -> Void)?
+    static var beforeDefaultsSynchronization: (() -> Void)?
     static var authReadPaused = false
     static var releaseAuthRead = false
     static var authSwitchCompleted = false
@@ -341,6 +343,7 @@ private final class FixtureFileManager: Foundation.FileManager, @unchecked Senda
     }
 
     override func moveItem(at srcURL: URL, to dstURL: URL) throws {
+        try Fixture.beforeDirectoryMove?(srcURL, dstURL)
         if Fixture.denyProfileMove && srcURL.path == Fixture.denyProfileRemoval {
             throw CocoaError(.fileWriteNoPermission)
         }
@@ -469,7 +472,10 @@ final class UserDefaults {
         values[key] = value
     }
     func removeObject(forKey key: String) { set(nil, forKey: key) }
-    func synchronize() -> Bool { !Fixture.failDefaultsSynchronization }
+    func synchronize() -> Bool {
+        Fixture.beforeDefaultsSynchronization?()
+        return !Fixture.failDefaultsSynchronization
+    }
 }
 
 // Only notification delivery is replaced. History and threshold decisions use

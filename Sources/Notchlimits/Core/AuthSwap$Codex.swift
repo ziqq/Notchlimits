@@ -56,6 +56,8 @@ enum AuthSwap$Codex {
         let storage: AuthStorage$Codex
         let record: AuthStorage$Codex.Record
         let copies: [SessionCopy]
+        let nativeStorage: AuthStorage$Codex
+        let nativeOwner: DirectoryIdentity?
     }
     struct AuthSnapshot {
         let data: Data
@@ -500,10 +502,41 @@ enum AuthSwap$Codex {
                               columnGeneration: columnGenerations[columnID],
                               sourceKey: sourceKey, sourceGeneration: generations[sourceKey],
                               storage: source, record: record,
-                              copies: sessionCopies(of: record.data, excluding: sourceKey))
+                              copies: sessionCopies(of: record.data, excluding: sourceKey),
+                              nativeStorage: nativeStorage, nativeOwner: nativeOwner)
         try requireNative(nativeStorage, owner: nativeOwner)
         renewals[key] = renewal
         return renewal
+    }
+
+    /// Quarantine persistence is outside the swap lock and may block. Recheck
+    /// the complete reservation after it, before spending the one-use grant.
+    static func canSubmit(_ renewal: Renewal, home: URL) throws -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard renewals[renewal.key]?.id == renewal.id,
+              generations[renewal.key] == renewal.generation,
+              columnGenerations[renewal.columnID] == renewal.columnGeneration,
+              generations[renewal.sourceKey] == renewal.sourceGeneration else { return false }
+        try requireNative(renewal.nativeStorage, owner: renewal.nativeOwner)
+        let live = liveHome(columnID: renewal.columnID, home: home)
+        let source = try storage(at: live)
+        guard source.home == renewal.storage.home, source.mode == renewal.storage.mode else { return false }
+        let native = try renewal.nativeStorage.load(verifyingOwner: true)
+        try observeNativeGrant(native?.data, home: renewal.nativeStorage.home.path)
+        guard try !nativeOwnsOrRetired(renewal.record.data),
+              native.flatMap({ refreshToken($0.data) }) != refreshToken(renewal.record.data),
+              !(try sameOwner(source, renewal.nativeStorage)),
+              !(try removesFile(source, backend: renewal.record.backend, ownedBy: renewal.nativeStorage)) else { return false }
+        try requireNative(renewal.nativeStorage, owner: renewal.nativeOwner)
+        // Finish configuration and grant-metadata I/O before the final source
+        // read. Subsequent checks inspect only the captured location bindings.
+        guard let current = try source.load(verifyingOwner: true),
+              current.backend == renewal.record.backend,
+              authIdentity(current.data) == authIdentity(renewal.record.data) else { return false }
+        try requireNativeLocation(renewal.nativeStorage, owner: renewal.nativeOwner)
+        return homeKey(home) == renewal.key && homeKey(live) == source.home.path
+            && sourceKey(source, backend: current.backend) == renewal.sourceKey
     }
 
     static func isCurrent(_ renewal: Renewal) -> Bool {
@@ -632,8 +665,13 @@ enum AuthSwap$Codex {
     /// Revalidate the native namespace, storage mode and physical directory.
     private static func requireNative(_ expected: AuthStorage$Codex, owner: DirectoryIdentity?) throws {
         let current = try storage(at: baseHome)
-        guard current.home.path == expected.home.path, current.mode == expected.mode,
-              DirectoryIdentity.capture(expected.home) == owner else { throw Failure.busy }
+        guard current.home.path == expected.home.path, current.mode == expected.mode else { throw Failure.busy }
+        try requireNativeLocation(expected, owner: owner)
+    }
+
+    private static func requireNativeLocation(_ expected: AuthStorage$Codex, owner: DirectoryIdentity?) throws {
+        guard DirectoryIdentity.capture(expected.home) == owner,
+              homeKey(baseHome) == expected.home.path else { throw Failure.busy }
     }
 
     /// Вход, что сейчас в `~/.codex`, — обратно владельцу.

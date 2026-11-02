@@ -173,6 +173,16 @@ actor Renewal$Codex {
             recordAttempt(nil, for: grant)
             return .unavailable
         }
+        do {
+            guard try AuthSwap$Codex.canSubmit(renewal, home: home) else {
+                return recordAttempt(nil, for: grant) ? .skipped : .unavailable
+            }
+        } catch {
+            // No POST was sent. A refused admission must not quarantine an
+            // unspent grant; normal termination still drains a refused cleanup.
+            recordAttempt(nil, for: grant)
+            return .unavailable
+        }
         attempts[grant] = Attempt(result: .unavailable, identity: identity)
         inFlight.insert(renewal.id)
         defer { inFlight.remove(renewal.id) }
