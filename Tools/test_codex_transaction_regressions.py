@@ -17,6 +17,13 @@ class CodexTransactionRegressions(unittest.TestCase):
         # Add callbacks only to the existing OS fakes. Production and previous
         # assertions remain unchanged when comparing the exact same fixture.
         boundaries = {
+            "func SecItemCopyMatching(_ query: CFDictionary, _ result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus {":
+                """func SecItemCopyMatching(_ query: CFDictionary, _ result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus {
+    if (query as NSDictionary)[kSecAttrService as String] as? String == "Codex Auth",
+       (query as NSDictionary)[kSecReturnData as String] as? Bool == true,
+       let key = (query as NSDictionary)[kSecAttrAccount as String] as? String {
+        TransactionSignals.read?(key)
+    }""",
             "let exists = super.fileExists(atPath: configPath(path))":
                 "let exists = super.fileExists(atPath: configPath(path))\n        TransactionSignals.io?(path)",
             "if Fixture.failCodexFileWrite && URL(fileURLWithPath: path).lastPathComponent.hasPrefix":
@@ -58,6 +65,9 @@ for change in changes:
 for mode in modes:
     for change in ("login", "owner", "identical", "stable", "metadata"):
         scenarios.append(f"rollback:{mode}:{change}")
-assert len(scenarios) == len(set(scenarios)) == 170
+        scenarios.append(f"rollback:{mode}:{change}:capture")
+for change in ("login", "rotation", "stable", "metadata"):
+    scenarios.append(f"rollback:file:{change}:prepare")
+assert len(scenarios) == len(set(scenarios)) == 194
 for scenario in scenarios:
     setattr(CodexTransactionRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"), scenario_test(scenario))
