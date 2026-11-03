@@ -180,12 +180,15 @@ enum AccountRemoval {
                         throw Failure.busy
                     }
                     let keyring = try storage.beginRemoval()
+                    // The first mutation has reserved the original namespace.
+                    // Staged deletion no longer addresses the logical profile.
+                    let staged = storage.validatingMutation(nil)
                     var retainsOriginalFile = true
                     do {
                         try withProfileDirectory(managed ? directory : nil, root: root, expectedOwner: account.codexHomeOwner,
                                                  rollbackFile: { retainsOriginalFile = $0 },
                                                  restoredFileOwner: AuthSwap$Codex.recordRestoredFileOwner) { directory in
-                            try storage.delete(fileHome: directory, keyring: keyring?.storage)
+                            try staged.delete(fileHome: directory, keyring: keyring?.storage)
                         }
                         keyring?.finish()
                     } catch {
