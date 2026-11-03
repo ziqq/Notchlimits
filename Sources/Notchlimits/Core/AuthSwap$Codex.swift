@@ -642,7 +642,14 @@ enum AuthSwap$Codex {
                 } else if authIdentity(record.data) == authIdentity(renewal.record.data),
                           let data = renewedAuth(record.data, usedRefreshToken: usedRefreshToken,
                                                  tokens: tokens, now: Date()) {
-                    try destination.save(data, backend: record.backend)
+                    try destination.save(data, backend: record.backend, validating: {
+                        if let recovery {
+                            guard try ownsDirectory(recovery.removal.owner, at: destination.home) else { throw Failure.busy }
+                        }
+                        guard try matchesPinnedRecord(record, storage: destination, key: destinationKey) else {
+                            throw Failure.busy
+                        }
+                    })
                     updated = data
                 }
             }
@@ -904,14 +911,19 @@ enum AuthSwap$Codex {
             // Existing shared-fallback checks still govern auto cleanup below.
             guard target.mode == .keyring || target.mode == .auto else { throw error }
         }
-        func validateRemoval() throws {
+        func validateRemoval(at location: URL) throws {
             guard verifiesLogin else {
-                try requireStorage(target, home: home, owner: targetOwner)
+                try requireStorage(target, home: location, owner: targetOwner)
                 return
             }
-            guard try checkedRecord(removalRecord, storage: target, home: home, owner: targetOwner).matches else {
+            guard try checkedRecord(removalRecord, storage: target, home: location, owner: targetOwner).matches else {
                 throw Failure.busy
             }
+        }
+        // Managed removal pins its physical entry before recovery I/O. A root
+        // alias change must neither redirect deletion nor retire the old owner.
+        let validateMutation = {
+            try validateRemoval(at: columnID == defaultColumnID ? home : target.home)
         }
         if requireIncomplete {
             var owners = [target]
@@ -987,11 +999,11 @@ enum AuthSwap$Codex {
                     removalRecord = current
                     verifiesLogin = true
                 }
-                try validateRemoval()
+                try validateRemoval(at: home)
                 try backup.delete()
                 removedBackup = primary
-                try validateRemoval()
-                try operation(columnID == defaultColumnID ? target.validatingMutation(validateRemoval) : target)
+                try validateRemoval(at: home)
+                try operation(target.validatingMutation(validateMutation))
             } catch {
                 if let primary = removedBackup { try restoreBackup(primary, to: backup) }
                 if rollbackAuthorized,
@@ -1017,8 +1029,8 @@ enum AuthSwap$Codex {
                 rememberNativeGrant(nil, home: base.home.path)
             }
         } else {
-            try validateRemoval()
-            try operation(target)
+            try validateRemoval(at: home)
+            try operation(target.validatingMutation(validateMutation))
         }
         generations[key] = UUID()
         if !preservesSharedFile, let fileOwner { generations[fileOwner] = UUID() }
@@ -1218,13 +1230,26 @@ enum AuthSwap$Codex {
                                       sourceKey: key, generation: generations[key])
     }
 
+    /// Pending rotations retain their captured backend even after config edits.
+    /// Check credentials after blocking preparation, then their physical binding.
+    private static func matchesPinnedRecord(_ record: AuthStorage$Codex.Record,
+                                            storage: AuthStorage$Codex, key: String) throws -> Bool {
+        guard let current = try storage.load(backend: record.backend),
+              authIdentity(current.data) == authIdentity(record.data) else { return false }
+        return try record.backend == .file
+            ? availableFileOwnerKey(storage.home) == key : homeKey(storage.home) == key
+    }
+
     private static func persist(_ copy: SessionCopy, data: Data) throws {
         guard try ownsCopy(copy) else { return }
         guard let current = try copy.storage.load(backend: copy.record.backend) else { return }
         var stored = current.data
         if authIdentity(current.data) == authIdentity(copy.record.data) {
             guard let merged = sessionUpdate(from: data, in: current.data) else { throw Failure.busy }
-            try copy.storage.save(merged, backend: current.backend)
+            try copy.storage.save(merged, backend: current.backend, validating: {
+                guard try matchesPinnedRecord(current, storage: copy.storage, key: copy.sourceKey),
+                      try ownsCopy(copy) else { throw Failure.busy }
+            })
             stored = merged
         } else if authIdentity(current.data) != authIdentity(data) { return }
         knownCopies[copy.sourceKey] = SessionCopy(storage: copy.storage,

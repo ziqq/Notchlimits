@@ -474,7 +474,24 @@ enum AuthStorage$Claude {
             }
             do {
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
-                try data.write(to: file, options: .atomic)
+                let prepared = file.deletingLastPathComponent()
+                    .appendingPathComponent(".credentials-" + UUID().uuidString + ".json")
+                guard FileManager.default.createFile(atPath: prepared.path, contents: nil,
+                                                     attributes: [.posixPermissions: 0o600]) else {
+                    throw CocoaError(.fileWriteUnknown)
+                }
+                defer { try? FileManager.default.removeItem(at: prepared) }
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: prepared.path)
+                try data.write(to: prepared)
+                // A suspended process can lose native leases during file I/O.
+                // Publish only after preparation and a final owner/lease check.
+                guard directory.matches(file.deletingLastPathComponent()),
+                      storageLock.isHeld, renewalLock?.isHeld != false else {
+                    throw StorageLock$Claude.Failure.lost
+                }
+                guard rename(prepared.path, file.path) == 0 else {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
                 advanceRetirement(unchanged: false)
                 return true
             } catch {

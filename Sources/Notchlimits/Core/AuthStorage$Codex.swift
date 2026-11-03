@@ -60,7 +60,7 @@ struct AuthStorage$Codex {
     }
 
     /// Carry a removal's proof through its callback to the first mutation.
-    func validatingMutation(_ validation: @escaping () throws -> Void) -> Self {
+    func validatingMutation(_ validation: (() throws -> Void)?) -> Self {
         var copy = self
         copy.mutationValidation = validation
         return copy
@@ -162,7 +162,7 @@ struct AuthStorage$Codex {
     /// Reserve the old Keychain item before its profile name becomes available.
     /// Later deletion addresses only this unique namespace, never a re-added login.
     func beginRemoval() throws -> RemovalKeyring? {
-        if mode == .file { return nil }
+        if mode == .file { try mutationValidation?(); return nil }
         guard mode != .ephemeral else { throw Failure.ephemeral }
         let originalFile = FileManager.default.fileExists(atPath: file.path) ? try Data(contentsOf: file) : nil
         let recovery = ProfileDirectories.codexRoot
@@ -174,6 +174,9 @@ struct AuthStorage$Codex {
                 .write(to: recovery.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
             let storage = try AuthStorage$Codex(home: recovery, mode: .keyring)
             guard let owner = DirectoryIdentity.capture(storage.home) else { throw Failure.settings }
+            // Recovery preparation can block while CLI replaces the login.
+            // Reserve only the credentials authorized by the removal caller.
+            try mutationValidation?()
             let status = AuthStorage$Claude.access(interactive: false) {
                 SecItemUpdate(query as CFDictionary,
                               [kSecAttrAccount as String: storage.account] as CFDictionary)
