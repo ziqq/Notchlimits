@@ -50,12 +50,20 @@ struct AuthStorage$Codex {
 
     let home: URL
     let mode: Mode
+    private var mutationValidation: (() throws -> Void)?
     private var file: URL { home.appendingPathComponent("auth.json") }
     private let account: String
     private var query: [String: Any] {
         return [kSecClass as String: kSecClassGenericPassword,
                 kSecAttrService as String: "Codex Auth",
                 kSecAttrAccount as String: account]
+    }
+
+    /// Carry a removal's proof through its callback to the first mutation.
+    func validatingMutation(_ validation: @escaping () throws -> Void) -> Self {
+        var copy = self
+        copy.mutationValidation = validation
+        return copy
     }
 
     init(home: URL, mode: Mode? = nil) throws {
@@ -109,19 +117,25 @@ struct AuthStorage$Codex {
 
     /// Renewal persists back to the backend that supplied its current grant.
     /// A denied Keychain update must not hide rotated tokens behind a stale entry.
-    func save(_ data: Data, backend: Backend? = nil) throws {
+    func save(_ data: Data, backend: Backend? = nil, validating: (() throws -> Void)? = nil) throws {
         guard mode != .ephemeral else { throw Failure.ephemeral }
+        let validate = {
+            try mutationValidation?()
+            try validating?()
+        }
         if backend == .file || backend == nil && mode == .file {
-            try saveFile(data)
+            try saveFile(data, validating: validate)
             return
         }
         do {
+            try validate()
             var status = AuthStorage$Claude.access(interactive: false) {
                 SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
             }
             if status == errSecItemNotFound {
                 var item = query
                 item[kSecValueData as String] = data
+                try validate()
                 status = AuthStorage$Claude.access(interactive: false) { SecItemAdd(item as CFDictionary, nil) }
             }
             guard status == errSecSuccess else { throw Failure.keychain(status) }
@@ -132,7 +146,7 @@ struct AuthStorage$Codex {
                !AuthSwap$Codex.fileIsShared(home: home, fileHome: home) { try? removeFile() }
         } catch {
             guard backend == nil, mode == .auto, keyringStatus() == errSecItemNotFound else { throw error }
-            try saveFile(data)
+            try saveFile(data, validating: validate)
         }
     }
 
@@ -172,14 +186,20 @@ struct AuthStorage$Codex {
         }
     }
 
-    func delete(fileHome: URL? = nil, keyring: AuthStorage$Codex? = nil) throws {
+    func delete(fileHome: URL? = nil, keyring: AuthStorage$Codex? = nil,
+                validating: (() throws -> Void)? = nil) throws {
         guard mode != .ephemeral else { throw Failure.ephemeral }
+        let validate = {
+            try mutationValidation?()
+            try validating?()
+        }
         let file = (fileHome ?? home).appendingPathComponent("auth.json")
-        if mode == .file { try removeFile(at: file); return }
+        if mode == .file { try removeFile(at: file, validating: validate); return }
         let shared = AuthSwap$Codex.fileIsShared(home: home, fileHome: file.deletingLastPathComponent())
         let backup = !shared && FileManager.default.fileExists(atPath: file.path) ? try Data(contentsOf: file) : nil
-        if !shared { try removeFile(at: file) }
+        if !shared { try removeFile(at: file, validating: validate) }
         do {
+            if backup == nil { try validate() }
             let status = AuthStorage$Claude.access(interactive: false) {
                 SecItemDelete((keyring?.query ?? query) as CFDictionary)
             }
@@ -240,7 +260,7 @@ struct AuthStorage$Codex {
         return AuthStorage$Claude.access(interactive: false) { SecItemCopyMatching(request as CFDictionary, nil) }
     }
 
-    private func saveFile(_ data: Data) throws {
+    private func saveFile(_ data: Data, validating: (() throws -> Void)? = nil) throws {
         let prepared = home.appendingPathComponent(".auth-" + UUID().uuidString + ".json")
         guard FileManager.default.createFile(atPath: prepared.path, contents: nil,
                                               attributes: [.posixPermissions: 0o600]) else {
@@ -251,12 +271,16 @@ struct AuthStorage$Codex {
         // chmod failure must not change the login while its owner marker stays old.
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: prepared.path)
         try data.write(to: prepared)
+        try validating?()
         guard rename(prepared.path, file.path) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
     }
 
-    private func removeFile(at destination: URL? = nil) throws {
+    private func removeFile(at destination: URL? = nil, validating: (() throws -> Void)? = nil) throws {
         let file = destination ?? self.file
-        if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
+        if FileManager.default.fileExists(atPath: file.path) {
+            try validating?()
+            try FileManager.default.removeItem(at: file)
+        }
     }
 
     private static func configuredMode(home: URL) throws -> Mode {
