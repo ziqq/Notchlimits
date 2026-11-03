@@ -2,6 +2,7 @@ private enum TransactionSignals {
     static var io: ((String) -> Void)?
     static var attributes: ((String) -> Void)?
     static var removed: ((URL) -> Void)?
+    static var read: ((String) -> Void)?
 }
 
 @main
@@ -16,7 +17,7 @@ enum Transactions$Codex {
             case "publish": try publication(nativeMode: parts[1], sourceMode: parts[2], phase: parts[3], change: parts[4])
             case "copyback": try copyback(mode: parts[1], phase: parts[2], change: parts[3])
             case "primary": try primary(mode: parts[1], phase: parts[2], change: parts[3])
-            case "rollback": try rollback(mode: parts[1], change: parts[2])
+            case "rollback": try rollback(mode: parts[1], change: parts[2], phase: parts.count > 3 ? parts[3] : "backup")
             default: throw Failure(description: "Unknown Codex transaction scenario")
             }
         } catch { print("FAIL: \(error)"); exit(1) }
@@ -53,6 +54,14 @@ enum Transactions$Codex {
             try login(replacement, name: "replacement", mode: mode)
             try manager.createSymbolicLink(at: home, withDestinationURL: replacement)
         case "mode": try Fixture.codexMode(home, "ephemeral")
+        case "rotation":
+            let root = try JSONSerialization.jsonObject(with: original) as! [String: Any]
+            let grant = (root["tokens"] as! [String: Any])["refresh_token"] as! String
+            let data = AuthSwap$Codex.renewedAuth(original, usedRefreshToken: grant,
+                tokens: OAuth$Codex.Tokens(idToken: nil,
+                    accessToken: Fixture.accessToken(expiresAt: Date().addingTimeInterval(86400).timeIntervalSince1970),
+                    refreshToken: "synthetic-primary-rotation"), now: Date())!
+            try data.write(to: home.appendingPathComponent("auth.json"))
         case "metadata": try Data("preserve-settings".utf8).write(to: home.appendingPathComponent("settings-marker"))
         case "stable": break
         default: throw Failure(description: "Unknown transaction mutation")
@@ -202,7 +211,7 @@ enum Transactions$Codex {
         try expect(Fixture.refreshCalls == 0, "Primary removal issued a refresh POST")
     }
 
-    private static func rollback(mode: String, change: String) throws {
+    private static func rollback(mode: String, change: String, phase: String) throws {
         let native = AuthSwap$Codex.baseHome
         let selected = ProfileDirectories.codexRoot.appendingPathComponent("selected")
         try login(native, name: "primary", mode: mode)
@@ -213,16 +222,48 @@ enum Transactions$Codex {
             profileName: "main", source: .codexHome(native))
         var reached = false
         var replacement: Data?
-        TransactionSignals.io = { path in
-            guard path == AuthSwap$Codex.stashHome.appendingPathComponent("auth.json").path,
-                  !AuthSwap$Codex.isSwapped else { return }
+        // The Keychain read boundary already holds production's interaction
+        // lock. Observe synthetic bytes directly instead of re-entering that API.
+        let nativeBytes = { () -> Data? in
+            Fixture.codexKeychain[Fixture.codexKey(native)]
+                ?? (try? Data(contentsOf: native.appendingPathComponent("auth.json")))
+        }
+        let mutation = {
             TransactionSignals.io = nil
+            TransactionSignals.read = nil
+            TransactionSignals.attributes = nil
             reached = true
-            let primary = try! AuthSwap$Codex.authData(home: native)!
+            let primary = nativeBytes()!
             try! mutate(native, mode: mode, change: change, original: primary)
-            replacement = try! AuthSwap$Codex.authData(home: native)
+            replacement = nativeBytes()
             Fixture.denyCodexDelete = true
             Fixture.denyCredentialFileRemovalPath = native.appendingPathComponent("auth.json").path
+        }
+        TransactionSignals.io = { path in
+            let capture = phase == "capture" && path == native.appendingPathComponent("auth.json").path
+            let backup = path == AuthSwap$Codex.stashHome.appendingPathComponent("auth.json").path
+            guard capture || backup, !AuthSwap$Codex.isSwapped else { return }
+            if phase == "prepare" {
+                TransactionSignals.io = nil
+                Fixture.denyCodexDelete = true
+                Fixture.denyCredentialFileRemovalPath = native.appendingPathComponent("auth.json").path
+                return
+            }
+            mutation()
+        }
+        if phase == "prepare" {
+            TransactionSignals.attributes = { path in
+                let file = URL(fileURLWithPath: path)
+                guard Fixture.denyCodexDelete, file.deletingLastPathComponent().path == native.path,
+                      file.lastPathComponent.hasPrefix(".auth-") else { return }
+                mutation()
+            }
+        }
+        if phase == "capture" {
+            TransactionSignals.read = { key in
+                guard key == Fixture.codexKey(native), !AuthSwap$Codex.isSwapped else { return }
+                mutation()
+            }
         }
         var refused = false
         do { try AccountRemoval.remove(account) } catch { refused = true }

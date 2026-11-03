@@ -153,10 +153,10 @@ struct AuthStorage$Codex {
     /// A switch can promote an auto file fallback into Keychain. Restore the
     /// owner through the preferred backend instead of leaving that item above
     /// a restored file. Never export an original Keychain record to a fallback.
-    func restore(_ record: Record?) throws {
-        guard let record else { try delete(); return }
+    func restore(_ record: Record?, validating: (() throws -> Void)? = nil) throws {
+        guard let record else { try delete(validating: validating); return }
         let backend: Backend? = mode == .auto && record.backend == .file ? nil : record.backend
-        try save(record.data, backend: backend)
+        try save(record.data, backend: backend, validating: validating)
     }
 
     /// Reserve the old Keychain item before its profile name becomes available.

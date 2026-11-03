@@ -425,9 +425,20 @@ enum AuthSwap$Codex {
         if columnID == defaultColumnID {
             // Do not forget a refused backup cleanup or report a completed switch.
             if !keepBackup {
-                do { try source.delete() } catch {
-                    try base.restore(previous)
-                    rememberNativeGrant(previous?.data, home: base.home.path)
+                do {
+                    try source.delete(validating: {
+                        guard try ownsPublication(payload, storage: base, owner: baseOwner) else { throw Failure.busy }
+                        try validatePublication()
+                    })
+                } catch {
+                    // A refused switch keeps its routing and backup. Restore
+                    // only our publication, never a subsequent native CLI login.
+                    if (try? ownsPublication(payload, storage: base, owner: baseOwner)) == true {
+                        try base.restore(previous, validating: {
+                            guard try ownsPublication(payload, storage: base, owner: baseOwner) else { throw Failure.busy }
+                        })
+                        rememberNativeGrant(previous?.data, home: base.home.path)
+                    }
                     throw error
                 }
             }
@@ -711,6 +722,16 @@ enum AuthSwap$Codex {
               homeKey(baseHome) == expected.home.path else { throw Failure.busy }
     }
 
+    /// Publication can change an auto backend. Its intended credentials, not
+    /// an unverified read after the write, authorize cleanup and rollback.
+    private static func ownsPublication(_ data: Data?, storage: AuthStorage$Codex,
+                                        owner: DirectoryIdentity?) throws -> Bool {
+        try requireNative(storage, owner: owner)
+        let current = try storage.load(verifyingOwner: true)
+        try requireNativeLocation(storage, owner: owner)
+        return current.flatMap { authIdentity($0.data) } == data.flatMap(authIdentity)
+    }
+
     /// Вход, что сейчас в `~/.codex`, — обратно владельцу.
     private static func giveBackCurrent(_ expected: AuthStorage$Codex? = nil) throws -> AuthStorage$Codex.Record? {
         let live = try expected ?? storage(at: baseHome)
@@ -948,10 +969,18 @@ enum AuthSwap$Codex {
             if restore && targetOwner == nil && target.home == base.home { targetOwner = baseOwner }
             var removedBackup: AuthStorage$Codex.Record?
             var restoredNative: AuthStorage$Codex.Record?
+            var rollbackAuthorized = false
             do {
-                if restore { restoredNative = try base.load(verifyingOwner: true) }
+                let native = restore ? try base.load(verifyingOwner: true) : nil
                 let primary = try backup.load(verifyingOwner: true)
                 if restore {
+                    // A post-activation read can already belong to a new CLI
+                    // login. Only the restored primary may authorize rollback.
+                    guard native.flatMap({ authIdentity($0.data) }) == primary.flatMap({ authIdentity($0.data) }) else {
+                        throw Failure.busy
+                    }
+                    restoredNative = native
+                    rollbackAuthorized = true
                     let current = try target.load(verifyingOwner: true)
                     let expected = target.home == base.home ? primary?.data : removalRecord.map { forwarded($0.data) }
                     guard current.flatMap({ authIdentity($0.data) }) == expected.flatMap(authIdentity) else { throw Failure.busy }
@@ -965,8 +994,13 @@ enum AuthSwap$Codex {
                 try operation(columnID == defaultColumnID ? target.validatingMutation(validateRemoval) : target)
             } catch {
                 if let primary = removedBackup { try restoreBackup(primary, to: backup) }
-                if restore, (try? checkedRecord(restoredNative, storage: base, home: baseHome, owner: baseOwner).matches) == true {
-                    try base.restore(selected)
+                if rollbackAuthorized,
+                   (try? checkedRecord(restoredNative, storage: base, home: baseHome, owner: baseOwner).matches) == true {
+                    try base.restore(selected, validating: {
+                        guard try checkedRecord(restoredNative, storage: base, home: baseHome, owner: baseOwner).matches else {
+                            throw Failure.busy
+                        }
+                    })
                     rememberNativeGrant(selected?.data, home: base.home.path)
                     for (name, value) in zip(keys, saved) {
                         if let value { UserDefaults.standard.set(value, forKey: name) }
@@ -1008,16 +1042,26 @@ enum AuthSwap$Codex {
     /// Keep primary durable before restoring the selected native account. A
     /// refusal at the old backup path must not discard it or skip native rollback.
     private static func restoreBackup(_ record: AuthStorage$Codex.Record, to backup: AuthStorage$Codex) throws {
-        do { try backup.save(record.data, backend: record.backend) }
+        do {
+            guard try backup.load(verifyingOwner: true) == nil else { throw Failure.busy }
+            try backup.save(record.data, backend: record.backend, validating: {
+                guard try backup.load(verifyingOwner: true) == nil else { throw Failure.busy }
+            })
+        }
         catch {
-            let recovery = DesktopApp.supportDirectory.appendingPathComponent("codex-app/recovery-" + UUID().uuidString, isDirectory: true)
+            // Preserve a new primary's credentials and route. Its former login
+            // remains discoverable in a separate managed recovery namespace.
+            let replaced = (try? backup.load(verifyingOwner: true)) != nil
+            let recovery = replaced
+                ? ProfileDirectories.codexRoot.appendingPathComponent("recovered-" + UUID().uuidString, isDirectory: true)
+                : DesktopApp.supportDirectory.appendingPathComponent("codex-app/recovery-" + UUID().uuidString, isDirectory: true)
             try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: true,
                                                     attributes: [.posixPermissions: 0o700])
             try ("cli_auth_credentials_store = \"" + backup.mode.rawValue + "\"\n")
                 .write(to: recovery.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
             try AuthStorage$Codex(home: recovery, mode: backup.mode).save(record.data, backend: record.backend)
             // Discovery, renewal and CLI re-login use the recovered primary too.
-            UserDefaults.standard.set(recovery.path, forKey: stashHomeKey)
+            if !replaced { UserDefaults.standard.set(recovery.path, forKey: stashHomeKey) }
         }
     }
 
