@@ -96,7 +96,9 @@ struct AuthStorage$Codex {
                         removedFile = true
                         try validate(.fileRemoved)
                     })
-                try validate(.removed)
+                // An unreadable secret cannot be reconstructed. All admission
+                // checks precede its deletion; successful deletion commits it.
+                if keyring?.verifiesRecord != false { try validate(.removed) }
             } catch {
                 if removedFile, let file, DirectoryIdentity.capture(location)?.isSameDirectory(as: owner) == true {
                     try original.restoreFile(file, at: location.appendingPathComponent("auth.json"))

@@ -213,6 +213,8 @@ enum AccountRemoval {
                                              restoredFileOwner: ((Int32, Int32) -> Void)? = nil,
                                              operation: (URL?) throws -> Void) throws {
         let manager = FileManager.default
+        let originalOwner = directory.flatMap { DirectoryIdentity.capture($0) }
+        let parentOwner = directory.flatMap { DirectoryIdentity.capture($0.deletingLastPathComponent()) }
         if let directory, let expectedOwner {
             guard let current = DirectoryIdentity.capture(directory),
                   current.isSameDirectory(as: expectedOwner) else { throw Failure.busy }
@@ -235,8 +237,22 @@ enum AccountRemoval {
                 try move(removed, directory)
                 rollbackFile?(true)
             } catch let rollback as NSError {
-                guard rollback.domain == NSCocoaErrorDomain,
-                      rollback.code == CocoaError.fileWriteFileExists.rawValue else { throw rollback }
+                let lostLease = rollback is StorageLock$Claude.Failure
+                let occupied = rollback.domain == NSCocoaErrorDomain
+                    && rollback.code == CocoaError.fileWriteFileExists.rawValue
+                guard lostLease || occupied else { throw rollback }
+                if lostLease {
+                    // Lost leases cannot authorize a reverse directory move.
+                    // Merge into a verified parent without moving native locks.
+                    guard let originalOwner, let moved = DirectoryIdentity.capture(removed),
+                          moved.isSameDirectory(as: originalOwner),
+                          parentOwner?.matches(directory.deletingLastPathComponent()) == true else { throw rollback }
+                    if mkdir(directory.path, 0o700) != 0, errno != EEXIST {
+                        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                    }
+                    guard parentOwner?.matches(directory.deletingLastPathComponent()) == true,
+                          DirectoryIdentity.capture(removed)?.isSameDirectory(as: originalOwner) == true else { throw rollback }
+                }
                 // A client may bootstrap the original directory while waiting
                 // for OAuth locks. Restore missing entries atomically, keeping
                 // replacement credentials and all native lock owners untouched.

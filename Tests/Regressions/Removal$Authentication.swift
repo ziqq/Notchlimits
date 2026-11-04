@@ -9,12 +9,16 @@ private enum AuditSignals {
     do {
       Fixture.keychainExists = false
       let parts = CommandLine.arguments[1].split(separator: ":").map(String.init)
-      if parts[0] == "claude" {
+      if parts[0] == "managed" {
+        try managed(takeover: parts[1] == "lost", bootstrap: parts[2])
+      } else if parts[0] == "claude" {
         try claude(takeover: parts[1] == "takeover", denied: parts[2] == "denied")
       } else if parts[0] == "metadata" {
-        try metadata(mode: parts[1], failure: parts[2] != "stable", replacement: parts[2] == "readd")
-      } else if parts[0] == "unlink" {
-        try unlink(mode: parts[1], failure: parts[2] == "fail")
+        try metadata(
+          mode: parts[1], failure: parts.last != "stable",
+          replacement: parts.contains("readd"), unreadable: parts.contains("unreadable"))
+      } else if parts[0] == "unlink" || parts[0] == "opaque" {
+        try unlink(mode: parts[1], failure: parts[2] == "fail", unreadable: parts[0] == "opaque")
       } else {
         try await shared(target: parts[1], phase: parts[2])
       }
@@ -86,16 +90,98 @@ private enum AuditSignals {
       try expect(success != denied, "stable Claude removal control failed")
     }
   }
-  static func metadata(mode: String, failure: Bool, replacement: Bool = false) throws {
+  static func managed(takeover: Bool, bootstrap: String) throws {
+    let home = ProfileDirectories.claudeRoot.appendingPathComponent("account")
+    try manager.createDirectory(at: home, withIntermediateDirectories: true)
+    let file = home.appendingPathComponent(".credentials.json")
+    let original = try JSONSerialization.data(
+      withJSONObject: Fixture.claudeLogin("original", expired: false))
+    try original.write(to: file)
+    let service =
+      AuthStorage$Claude.baseService + "-"
+      + SHA256.hash(data: Data(home.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(
+        8)
+    let account = DiscoveredAccount(
+      id: "claude:" + service, provider: .claude, profileName: "account",
+      source: .claudeKeychain(service: service, configDir: home))
+    var reached = false
+    CleanupSignals.moved = { from, to in
+      guard from == home, to.lastPathComponent.hasPrefix(".removed-") else { return }
+      CleanupSignals.moved = nil
+      reached = true
+      if takeover {
+        for path in [
+          to.appendingPathComponent(".storage-write.lock"),
+          to.appendingPathComponent(".oauth_refresh.lock"),
+          URL(fileURLWithPath: home.path + ".lock"),
+        ] {
+          try! manager.moveItem(at: path, to: path.appendingPathExtension("retired"))
+          try! manager.createDirectory(at: path, withIntermediateDirectories: false)
+        }
+      }
+      if bootstrap == "retarget" {
+        let root = ProfileDirectories.claudeRoot
+        try! manager.moveItem(at: root, to: root.appendingPathExtension("retired"))
+        try! manager.createDirectory(at: root, withIntermediateDirectories: false)
+      }
+      if bootstrap != "absent" {
+        try! manager.createDirectory(at: home, withIntermediateDirectories: true)
+      }
+      if bootstrap == "login" || bootstrap == "retarget" {
+        try! JSONSerialization.data(
+          withJSONObject: Fixture.claudeLogin("replacement", expired: false)
+        ).write(to: file)
+      }
+    }
+    var success = false
+    do {
+      try AccountRemoval.remove(account)
+      success = true
+    } catch { print("Refused: \(error)") }
+    let retained = try? Data(contentsOf: file)
+    let discovered = Discovery$Real().discover().contains { $0.id == account.id }
+    print(
+      "MANAGED lost=\(takeover) bootstrap=\(bootstrap) reached=\(reached) success=\(success) file=\(retained==original) discovered=\(discovered)"
+    )
+    try expect(reached, "staging not reached")
+    if takeover {
+      let expected =
+        bootstrap == "login" || bootstrap == "retarget"
+        ? try JSONSerialization.data(
+          withJSONObject: Fixture.claudeLogin("replacement", expired: false)) : original
+      // Compare tokens rather than generated expiry timestamps.
+      let expectedLogin = try JSONSerialization.jsonObject(with: expected) as! [String: Any]
+      let currentLogin = retained.flatMap {
+        try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+      }
+      let token = (currentLogin?["claudeAiOauth"] as? [String: Any])?["refreshToken"] as? String
+      let expectedToken =
+        (expectedLogin["claudeAiOauth"] as! [String: Any])["refreshToken"] as? String
+      try expect(
+        !success && token == expectedToken && discovered,
+        "refused managed Claude removal hid or replaced its file login")
+    } else {
+      try expect(success, "stable managed removal failed")
+    }
+  }
+  static func metadata(
+    mode: String, failure: Bool, replacement: Bool = false, unreadable: Bool = false
+  ) throws {
     let home = ProfileDirectories.codexRoot.appendingPathComponent("account")
     try Cleanup$Authentication.login(home, name: "original", mode: mode)
     let original = try Cleanup$Authentication.bytes(home, mode: mode)!
     let account = DiscoveredAccount(
       id: "codex:account", provider: .codex, profileName: "account", source: .codexHome(home))
+    Fixture.denyCodexRead = unreadable
+    var fresh: Data?
     var reached = false
     AuditSignals.deleted = { key in
       AuditSignals.deleted = nil
       reached = true
+      if replacement {
+        try! Cleanup$Authentication.login(home, name: "replacement", mode: "file")
+        fresh = try! Cleanup$Authentication.bytes(home, mode: "file")
+      }
       if failure { AuditSignals.blockedKey = key }
     }
     var success = false
@@ -103,6 +189,7 @@ private enum AuditSignals {
       try AccountRemoval.remove(account)
       success = true
     } catch { print("Refused: \(error)") }
+    Fixture.denyCodexRead = false
     AuditSignals.blockedKey = nil
     let retained = Fixture.codexKeychain.values.contains(original)
     let discovered = Discovery$Real().discover().contains { $0.id == account.id }
@@ -110,17 +197,35 @@ private enum AuditSignals {
       "METADATA mode=\(mode) failure=\(failure) reached=\(reached) success=\(success) retained=\(retained) discovered=\(discovered)"
     )
     try expect(reached, "post-delete Keychain boundary not reached")
+    if replacement {
+      let current = try AuthSwap$Codex.authData(home: home)
+      let visibleRecovery = Discovery$Real().discover().contains { account in
+        guard case .codexHome(let directory) = account.source,
+          let data = try? AuthSwap$Codex.authData(columnID: account.id, home: directory)
+        else { return false }
+        return data == original
+      }
+      try expect(
+        fresh != nil && current == fresh && discovered,
+        "rollback replaced or hid the re-added file login")
+      try expect(
+        retained && visibleRecovery, "rollback hid the former login after file re-addition")
+    }
+    if !failure {
+      try expect(success && !retained && !discovered, "explicit removal did not commit")
+    }
     try expect(
       success || retained,
       "a failed final metadata check discarded the reserved credential without rollback")
   }
-  static func unlink(mode: String, failure: Bool) throws {
+  static func unlink(mode: String, failure: Bool, unreadable: Bool = false) throws {
     let home = ProfileDirectories.codexRoot.appendingPathComponent("account")
     try Cleanup$Authentication.login(home, name: "original", mode: mode)
     let original = try Cleanup$Authentication.bytes(home, mode: mode)!
     if mode != "file" { try original.write(to: home.appendingPathComponent("auth.json")) }
     let account = DiscoveredAccount(
       id: "codex:account", provider: .codex, profileName: "account", source: .codexHome(home))
+    Fixture.denyCodexRead = unreadable
     var reached = false
     CleanupSignals.removed = { url in
       guard url.lastPathComponent == "auth.json",
@@ -140,6 +245,7 @@ private enum AuditSignals {
       success = true
     } catch { print("Refused: \(error)") }
     Fixture.managedCodex = [:]
+    Fixture.denyCodexRead = false
     let retained =
       (try? Cleanup$Authentication.bytes(home, mode: mode)) == original
       || Fixture.codexKeychain.values.contains(original)
@@ -147,6 +253,12 @@ private enum AuditSignals {
       "UNLINK mode=\(mode) failure=\(failure) reached=\(reached) success=\(success) retained=\(retained)"
     )
     try expect(reached, "unlink boundary not reached")
+    if unreadable {
+      try expect(success != failure, "opaque removal crossed its pre-commit refusal")
+      try expect(
+        Fixture.codexKeychain.values.contains(original) == failure,
+        "opaque pre-commit refusal deleted the reserved Keychain login")
+    }
     try expect(
       success || retained, "failed post-unlink validation did not restore the deleted file login")
   }
