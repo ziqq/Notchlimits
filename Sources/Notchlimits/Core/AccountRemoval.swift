@@ -68,7 +68,7 @@ enum AccountRemoval {
         guard directory.path.hasPrefix(ProfileDirectories.claudeRoot.path + "/"),
               !ProfileDirectories.containsNativeHome(directory) else { throw Failure.busy }
         do {
-            try AuthStorage$Claude.withRemovalLock(directory: directory) { move in
+            try AuthStorage$Claude.withRemovalLock(directory: directory, validating: { move, validate in
                 guard !FileManager.default.fileExists(atPath: directory.appendingPathComponent(".credentials.json").path) else {
                     throw Failure.busy
                 }
@@ -81,13 +81,13 @@ enum AccountRemoval {
                 // Logout removes Keychain metadata but leaves the profile and
                 // its Desktop session. Retire every supported path spelling.
                 let desktopServices = Set(services + AuthStorage$Claude.profileServices(in: directory))
-                try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot, move: move) { _ in
-                    for service in services { try deleteKeychainEntry(service: service) }
+                try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot, move: { try move($0, $1) }) { _ in
+                    for service in services { try deleteKeychainEntry(service: service, validating: { try validate() }) }
                 }
                 for service in desktopServices {
                     AppSwitcher$Claude.accountRemoved(columnID: "claude:" + service)
                 }
-            }
+            })
         } catch is StorageLock$Claude.Failure {
             throw Failure.busy
         }
@@ -101,7 +101,7 @@ enum AccountRemoval {
             let owner = directory ?? (service == AuthStorage$Claude.baseService
                 ? ProfileDirectories.home.appendingPathComponent(".claude") : nil)
             do {
-                try AuthStorage$Claude.withRemovalLock(service: service, configDir: directory) { move in
+                try AuthStorage$Claude.withRemovalLock(service: service, configDir: directory, validating: { move, validate in
                     // A stale logical path must not authorize the replacement
                     // directory after the managed root has been redirected.
                     let current = service == AuthStorage$Claude.baseService
@@ -125,18 +125,18 @@ enum AccountRemoval {
                             guard let identity = DirectoryIdentity.capture(owner) else { throw Failure.busy }
                             retainedFile = identity
                         }
-                        try deleteKeychainEntry(service: service)
+                        try deleteKeychainEntry(service: service, validating: { try validate() })
                         if service == AuthStorage$Claude.baseService {
                             AuthStorage$Claude.recordSharedPrimaryRemoval()
                         }
                     } else {
-                        try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot, move: move) { moved in
-                            try deleteClaudeCredentials(service: service, configDir: moved)
+                        try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot, move: { try move($0, $1) }) { moved in
+                            try deleteClaudeCredentials(service: service, configDir: moved, validating: { try validate() })
                         }
                     }
                     AppSwitcher$Claude.accountRemoved(columnID: account.id)
                     claudeRemoval?(ClaudeRemoval(service: service, retainedFile: retainedFile))
-                }
+                })
             } catch is StorageLock$Claude.Failure {
                 throw Failure.busy
             }
@@ -300,28 +300,45 @@ enum AccountRemoval {
         }
     }
 
-    private static func deleteClaudeCredentials(service: String, configDir: URL?) throws {
+    private static func deleteClaudeCredentials(service: String, configDir: URL?, validating validate: () throws -> Void) throws {
         let file = configDir?.appendingPathComponent(".credentials.json") ?? AuthStorage$Claude.credentialFile(service: service)
         let backup = try file.flatMap { FileManager.default.fileExists(atPath: $0.path) ? try Data(contentsOf: $0) : nil }
         // An unlink failure must leave Keychain and pending grants untouched.
-        if let file, backup != nil { try FileManager.default.removeItem(at: file) }
+        if let file, backup != nil { try validate(); try FileManager.default.removeItem(at: file) }
         do {
-            try deleteKeychainEntry(service: service)
+            try deleteKeychainEntry(service: service, validating: { try validate() })
         } catch {
-            if let file, let backup,
-               !FileManager.default.createFile(atPath: file.path, contents: backup, attributes: [.posixPermissions: 0o600]) {
-                throw CocoaError(.fileWriteUnknown)
-            }
+            if let file, let backup { try restoreCredentialFile(backup, at: file) }
             throw error
         }
     }
 
-    private static func deleteKeychainEntry(service: String) throws {
+    /// Publish a complete private backup only when no replacement file exists.
+    private static func restoreCredentialFile(_ data: Data, at file: URL) throws {
+        var template = Array(file.deletingLastPathComponent().appendingPathComponent(".credentials-restore-XXXXXX").path.utf8CString)
+        let descriptor = mkstemp(&template)
+        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        let prepared = String(cString: template)
+        defer { _ = unlink(prepared) }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        try handle.write(contentsOf: data)
+        try handle.close()
+        guard renameatx_np(AT_FDCWD, prepared, AT_FDCWD, file.path, UInt32(RENAME_EXCL)) == 0 else {
+            if errno == EEXIST { return }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+    }
+
+    private static func deleteKeychainEntry(service: String, validating validate: () throws -> Void) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service
         ]
-        let status = AuthStorage$Claude.access { SecItemDelete(query as CFDictionary) }
+        try validate()
+        let status = AuthStorage$Claude.access {
+            do { try validate() } catch { return errSecInteractionNotAllowed }
+            return SecItemDelete(query as CFDictionary)
+        }
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw Failure.keychain(status)
         }
