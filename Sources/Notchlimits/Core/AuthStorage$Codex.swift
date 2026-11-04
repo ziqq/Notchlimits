@@ -46,6 +46,13 @@ struct AuthStorage$Codex {
                               [kSecAttrAccount as String: original.account] as CFDictionary)
             }
             guard status == errSecSuccess || status == errSecItemNotFound else { return false }
+            if status == errSecItemNotFound, let record {
+                let available = original.keyringStatus() == errSecItemNotFound
+                var item = available ? original.query : storage.query
+                item[kSecValueData as String] = record.data
+                let restored = AuthStorage$Claude.access(interactive: false) { SecItemAdd(item as CFDictionary, nil) }
+                guard restored == errSecSuccess, available else { return false }
+            }
             finish()
             return true
         }
@@ -81,9 +88,20 @@ struct AuthStorage$Codex {
                       DirectoryIdentity.capture(location)?.isSameDirectory(as: owner) == true,
                       AuthStorage$Codex.canonicalPath(location) == current.home.path else { throw Failure.settings }
             }
-            try original.validatingMutation(nil).delete(fileHome: location, keyring: keyring?.storage,
-                validating: { try validate(.staged) }, afterFileRemoval: { try validate(.fileRemoved) })
-            try validate(.removed)
+            var removedFile = false
+            do {
+                try original.validatingMutation(nil).delete(fileHome: location, keyring: keyring?.storage,
+                    validating: { try validate(.staged) }, afterFileRemoval: {
+                        removedFile = true
+                        try validate(.fileRemoved)
+                    })
+                try validate(.removed)
+            } catch {
+                if removedFile, let file, DirectoryIdentity.capture(location)?.isSameDirectory(as: owner) == true {
+                    try original.restoreFile(file, at: location.appendingPathComponent("auth.json"))
+                }
+                throw error
+            }
         }
     }
     enum Failure: LocalizedError {
@@ -194,13 +212,16 @@ struct AuthStorage$Codex {
             if let fallback, let fallbackOwner,
                !AuthSwap$Codex.fileIsShared(home: home, fileHome: home) {
                 try? removeFile(validating: {
+                    let inventory = try Self.profileRevision()
+                    guard !AuthSwap$Codex.fileIsShared(home: home, fileHome: home) else { throw Failure.settings }
                     let published = try loadKeyring()
                     let current = try Self.configuredMode(home: home)
                     let file = try loadFile()
                     guard current == .keyring || current == .auto,
                           Self.sameCredentials(published?.data, data),
                           Self.sameCredentials(file?.data, fallback.data),
-                          fallbackOwner.matches(home) else { throw Failure.settings }
+                          fallbackOwner.matches(home),
+                          try inventory == Self.profileRevision() else { throw Failure.settings }
                 })
             }
         } catch {
@@ -303,6 +324,18 @@ struct AuthStorage$Codex {
             if let backup { try restoreFile(backup, at: file) }
             throw error
         }
+    }
+
+    /// Detect aliases added or retargeted during the final credential reads.
+    private static func profileRevision() throws -> [Int64] {
+        let root = canonicalPath(ProfileDirectories.codexRoot)
+        var info = stat()
+        guard lstat(root, &info) == 0 else {
+            guard errno == ENOENT else { throw Failure.settings }
+            return []
+        }
+        return [Int64(info.st_dev), Int64(info.st_ino), Int64(info.st_mtimespec.tv_sec),
+                Int64(info.st_mtimespec.tv_nsec), Int64(info.st_ctimespec.tv_sec), Int64(info.st_ctimespec.tv_nsec)]
     }
 
     private static func sameCredentials(_ first: Data?, _ second: Data?) -> Bool {

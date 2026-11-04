@@ -525,21 +525,37 @@ enum AuthStorage$Claude {
     }
 
     static func withRemovalLock(service: String, configDir: URL?,
-                                operation: (_ move: (URL, URL) throws -> Void) throws -> Void) throws {
-        // Never delete outside the native protocol when the directory is unknown.
-        guard let directory = configDir ?? storageDirectory(service: service) else {
-            throw UnknownRemovalDirectory()
-        }
-        try withRemovalLock(directory: directory, createParent: service == baseService, operation: operation)
+                                operation: (_ move: @escaping (URL, URL) throws -> Void) throws -> Void) throws {
+        try withRemovalLock(service: service, configDir: configDir, validating: { move, _ in
+            try operation(move)
+        })
+    }
+
+    static func withRemovalLock(service: String, configDir: URL?,
+                                validating operation: (_ move: @escaping (URL, URL) throws -> Void,
+                                                       _ validate: @escaping () throws -> Void) throws -> Void) throws {
+        guard let directory = configDir ?? storageDirectory(service: service) else { throw UnknownRemovalDirectory() }
+        try withRemovalLock(directory: directory, createParent: service == baseService, validating: operation)
     }
 
     static func withRemovalLock(directory: URL, createParent: Bool = false,
-                                operation: (_ move: (URL, URL) throws -> Void) throws -> Void) throws {
+                                operation: (_ move: @escaping (URL, URL) throws -> Void) throws -> Void) throws {
+        try withRemovalLock(directory: directory, createParent: createParent, validating: { move, _ in
+            try operation(move)
+        })
+    }
+
+    static func withRemovalLock(directory: URL, createParent: Bool = false,
+                                validating operation: (_ move: @escaping (URL, URL) throws -> Void,
+                                                       _ validate: @escaping () throws -> Void) throws -> Void) throws {
         try RefreshLock$Claude.withRemovalLock(directory: directory, createParent: createParent) { lease in
             let storage = try StorageLock$Claude(directory: directory, createParent: false)
             defer { storage.release() }
-            guard lease.isHeld, storage.isHeld else { throw StorageLock$Claude.Failure.lost }
-            try operation { from, to in try lease.moveDirectory(from: from, to: to, storage: storage) }
+            let validate = {
+                guard lease.isHeld, storage.isHeld else { throw StorageLock$Claude.Failure.lost }
+            }
+            try validate()
+            try operation({ from, to in try lease.moveDirectory(from: from, to: to, storage: storage) }, validate)
         }
     }
 
