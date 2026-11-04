@@ -12,7 +12,7 @@ private enum AuditSignals {
       if parts[0] == "claude" {
         try claude(takeover: parts[1] == "takeover", denied: parts[2] == "denied")
       } else if parts[0] == "metadata" {
-        try metadata(mode: parts[1], failure: parts[2] == "fail")
+        try metadata(mode: parts[1], failure: parts[2] != "stable", replacement: parts[2] == "readd")
       } else if parts[0] == "unlink" {
         try unlink(mode: parts[1], failure: parts[2] == "fail")
       } else {
@@ -86,7 +86,7 @@ private enum AuditSignals {
       try expect(success != denied, "stable Claude removal control failed")
     }
   }
-  static func metadata(mode: String, failure: Bool) throws {
+  static func metadata(mode: String, failure: Bool, replacement: Bool = false) throws {
     let home = ProfileDirectories.codexRoot.appendingPathComponent("account")
     try Cleanup$Authentication.login(home, name: "original", mode: mode)
     let original = try Cleanup$Authentication.bytes(home, mode: mode)!

@@ -41,6 +41,6 @@ def scenario_test(scenario):
     return test
 
 
-scenarios=['claude:stable:ok','claude:takeover:ok','claude:stable:denied','claude:takeover:denied','metadata:keyring:stable','metadata:keyring:fail','metadata:auto:stable','metadata:auto:fail','unlink:file:stable','unlink:file:fail','unlink:auto-file:fail','unlink:keyring:fail','unlink:auto:fail','shared:source:early','shared:source:late','shared:copy:early','shared:copy:late','shared:source:read','shared:copy:read']
+scenarios=['claude:stable:ok','claude:takeover:ok','claude:stable:denied','claude:takeover:denied','metadata:keyring:stable','metadata:keyring:fail','metadata:auto:stable','metadata:auto:fail','unlink:file:stable','unlink:file:fail','unlink:auto-file:fail','unlink:keyring:fail','unlink:auto:fail','shared:source:early','shared:source:late','shared:copy:early','shared:copy:late','shared:source:read','shared:copy:read','metadata:keyring:readd','metadata:auto:readd']
 for scenario in scenarios:
     setattr(AuthenticationRemovalRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"), scenario_test(scenario))

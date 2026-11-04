@@ -36,6 +36,14 @@ struct AuthStorage$Codex {
         /// A refused restoration remains a normal, discoverable Keychain profile.
         func restore(retainsOriginalFile: Bool) -> Bool {
             guard owner.matches(storage.home) else { return false }
+            // Keep the snapshot discoverable before any rollback refusal. The
+            // native add is exclusive and preserves a later reserved login too.
+            if storage.keyringStatus() != errSecSuccess, let record {
+                var item = storage.query
+                item[kSecValueData as String] = record.data
+                let status = AuthStorage$Claude.access(interactive: false) { SecItemAdd(item as CFDictionary, nil) }
+                guard status == errSecSuccess || status == errSecDuplicateItem else { return false }
+            }
             var info = stat()
             if lstat(original.file.path, &info) == 0 {
                 guard retainsOriginalFile, let current = try? Data(contentsOf: original.file),
@@ -46,13 +54,6 @@ struct AuthStorage$Codex {
                               [kSecAttrAccount as String: original.account] as CFDictionary)
             }
             guard status == errSecSuccess || status == errSecItemNotFound else { return false }
-            if status == errSecItemNotFound, let record {
-                let available = original.keyringStatus() == errSecItemNotFound
-                var item = available ? original.query : storage.query
-                item[kSecValueData as String] = record.data
-                let restored = AuthStorage$Claude.access(interactive: false) { SecItemAdd(item as CFDictionary, nil) }
-                guard restored == errSecSuccess, available else { return false }
-            }
             finish()
             return true
         }
