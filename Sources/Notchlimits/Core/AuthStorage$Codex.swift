@@ -14,6 +14,19 @@ struct AuthStorage$Codex {
         let originalFile: Data?
         let storage: AuthStorage$Codex
         let owner: DirectoryIdentity
+        let record: Record?
+        let verifiesRecord: Bool
+
+        func validate(removed: Bool = false) throws {
+            if removed {
+                guard storage.keyringStatus() == errSecItemNotFound else { throw Failure.settings }
+            } else if verifiesRecord {
+                guard AuthStorage$Codex.sameCredentials(try storage.loadKeyring()?.data, record?.data) else {
+                    throw Failure.settings
+                }
+            }
+            guard owner.matches(storage.home) else { throw Failure.settings }
+        }
 
         func finish() {
             if owner.matches(storage.home) { try? FileManager.default.removeItem(at: storage.home) }
@@ -35,6 +48,42 @@ struct AuthStorage$Codex {
             guard status == errSecSuccess || status == errSecItemNotFound else { return false }
             finish()
             return true
+        }
+    }
+
+    /// Admission follows the physical profile through staging, not its freed name.
+    struct Removal {
+        let original: AuthStorage$Codex
+        let owner: DirectoryIdentity
+        let file: Data?
+        let keyring: RemovalKeyring?
+
+        private enum Phase { case staged, fileRemoved, removed }
+
+        func delete(fileHome: URL?) throws {
+            let location = fileHome ?? original.home
+            func validate(_ phase: Phase) throws {
+                if let keyring {
+                    try keyring.validate(removed: phase == .removed)
+                    if original.keyringStatus() != errSecItemNotFound {
+                        // A re-addition owns a new directory. A login completed
+                        // in the staged owner still needs its original name back.
+                        guard let replacement = DirectoryIdentity.capture(original.home),
+                              !replacement.isSameDirectory(as: owner) else { throw Failure.settings }
+                    }
+                }
+                let shared = original.mode != .file
+                    && AuthSwap$Codex.fileIsShared(home: original.home, fileHome: location)
+                let current = try AuthStorage$Codex(home: location)
+                let data = shared ? nil : try current.loadFile()?.data
+                guard current.mode == original.mode,
+                      shared || AuthStorage$Codex.sameCredentials(data, phase == .staged ? file : nil),
+                      DirectoryIdentity.capture(location)?.isSameDirectory(as: owner) == true,
+                      AuthStorage$Codex.canonicalPath(location) == current.home.path else { throw Failure.settings }
+            }
+            try original.validatingMutation(nil).delete(fileHome: location, keyring: keyring?.storage,
+                validating: { try validate(.staged) }, afterFileRemoval: { try validate(.fileRemoved) })
+            try validate(.removed)
         }
     }
     enum Failure: LocalizedError {
@@ -127,6 +176,9 @@ struct AuthStorage$Codex {
             try saveFile(data, validating: validate)
             return
         }
+        // Cleanup may remove only the fallback observed before publication.
+        let fallbackOwner = DirectoryIdentity.capture(home)
+        let fallback = try? loadFile()
         do {
             try validate()
             var status = AuthStorage$Claude.access(interactive: false) {
@@ -139,11 +191,18 @@ struct AuthStorage$Codex {
                 status = AuthStorage$Claude.access(interactive: false) { SecItemAdd(item as CFDictionary, nil) }
             }
             guard status == errSecSuccess else { throw Failure.keychain(status) }
-            // A pending write still belongs to its original backend, but the
-            // current configuration may now select a different file login.
-            if let current = try? Self.configuredMode(home: home),
-               current == .keyring || current == .auto,
-               !AuthSwap$Codex.fileIsShared(home: home, fileHome: home) { try? removeFile() }
+            if let fallback, let fallbackOwner,
+               !AuthSwap$Codex.fileIsShared(home: home, fileHome: home) {
+                try? removeFile(validating: {
+                    let published = try loadKeyring()
+                    let current = try Self.configuredMode(home: home)
+                    let file = try loadFile()
+                    guard current == .keyring || current == .auto,
+                          Self.sameCredentials(published?.data, data),
+                          Self.sameCredentials(file?.data, fallback.data),
+                          fallbackOwner.matches(home) else { throw Failure.settings }
+                })
+            }
         } catch {
             guard backend == nil, mode == .auto, keyringStatus() == errSecItemNotFound else { throw error }
             try saveFile(data, validating: validate)
@@ -161,10 +220,18 @@ struct AuthStorage$Codex {
 
     /// Reserve the old Keychain item before its profile name becomes available.
     /// Later deletion addresses only this unique namespace, never a re-added login.
-    func beginRemoval() throws -> RemovalKeyring? {
-        if mode == .file { try mutationValidation?(); return nil }
+    func beginRemoval() throws -> Removal {
         guard mode != .ephemeral else { throw Failure.ephemeral }
-        let originalFile = FileManager.default.fileExists(atPath: file.path) ? try Data(contentsOf: file) : nil
+        guard let profileOwner = DirectoryIdentity.capture(home) else { throw Failure.settings }
+        let originalFile = try loadFile()?.data
+        if mode == .file {
+            try mutationValidation?()
+            return Removal(original: self, owner: profileOwner, file: originalFile, keyring: nil)
+        }
+        var record: Record?
+        var verifiesRecord = false
+        do { record = try loadKeyring(); verifiesRecord = true }
+        catch { /* Explicit namespace removal does not require secret-read access. */ }
         let recovery = ProfileDirectories.codexRoot
             .appendingPathComponent("recovered-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: true,
@@ -182,7 +249,9 @@ struct AuthStorage$Codex {
                               [kSecAttrAccount as String: storage.account] as CFDictionary)
             }
             guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.keychain(status) }
-            return RemovalKeyring(original: self, originalFile: originalFile, storage: storage, owner: owner)
+            let keyring = RemovalKeyring(original: self, originalFile: originalFile, storage: storage, owner: owner,
+                                         record: record, verifiesRecord: verifiesRecord)
+            return Removal(original: self, owner: profileOwner, file: originalFile, keyring: keyring)
         } catch {
             try? FileManager.default.removeItem(at: recovery)
             throw error
@@ -190,19 +259,42 @@ struct AuthStorage$Codex {
     }
 
     func delete(fileHome: URL? = nil, keyring: AuthStorage$Codex? = nil,
-                validating: (() throws -> Void)? = nil) throws {
+                validating: (() throws -> Void)? = nil,
+                afterFileRemoval: (() throws -> Void)? = nil) throws {
         guard mode != .ephemeral else { throw Failure.ephemeral }
         let validate = {
             try mutationValidation?()
             try validating?()
         }
         let file = (fileHome ?? home).appendingPathComponent("auth.json")
-        if mode == .file { try removeFile(at: file, validating: validate); return }
+        if mode == .file {
+            try removeFile(at: file, validating: validate)
+            try afterFileRemoval?()
+            return
+        }
+        let destination = keyring ?? self
+        var record: Record?
+        var verifiesRecord = false
+        do { record = try destination.loadKeyring(); verifiesRecord = true }
+        catch { /* Preserve explicit removal of an unreadable namespace. */ }
         let shared = AuthSwap$Codex.fileIsShared(home: home, fileHome: file.deletingLastPathComponent())
         let backup = !shared && FileManager.default.fileExists(atPath: file.path) ? try Data(contentsOf: file) : nil
-        if !shared { try removeFile(at: file, validating: validate) }
+        if !shared {
+            try removeFile(at: file, validating: {
+                guard !AuthSwap$Codex.fileIsShared(home: home, fileHome: file.deletingLastPathComponent()) else {
+                    throw Failure.settings
+                }
+                try validate()
+            })
+        }
         do {
             if backup == nil { try validate() }
+            else {
+                try afterFileRemoval?()
+                // The file unlink can block while another client logs in.
+                if verifiesRecord,
+                   !Self.sameCredentials(try destination.loadKeyring()?.data, record?.data) { throw Failure.settings }
+            }
             let status = AuthStorage$Claude.access(interactive: false) {
                 SecItemDelete((keyring?.query ?? query) as CFDictionary)
             }
@@ -211,6 +303,13 @@ struct AuthStorage$Codex {
             if let backup { try restoreFile(backup, at: file) }
             throw error
         }
+    }
+
+    private static func sameCredentials(_ first: Data?, _ second: Data?) -> Bool {
+        if let first, let second, let identity = AuthSwap$Codex.authIdentity(first) {
+            return identity == AuthSwap$Codex.authIdentity(second)
+        }
+        return first == second
     }
 
     private func restoreFile(_ data: Data, at file: URL) throws {

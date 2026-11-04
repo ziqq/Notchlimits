@@ -962,6 +962,7 @@ enum AuthSwap$Codex {
             let base = try storage(at: baseHome)
             var baseOwner = DirectoryIdentity.capture(base.home)
             let backup = try storage(at: stashHome)
+            let backupOwner = DirectoryIdentity.capture(backup.home)
             try requireRemovalOwners(backup)
             try requireIdle(base)
             try requireIdle(backup)
@@ -1000,12 +1001,25 @@ enum AuthSwap$Codex {
                     verifiesLogin = true
                 }
                 try validateRemoval(at: home)
-                try backup.delete()
                 removedBackup = primary
+                try backup.delete(validating: {
+                    try validateRemoval(at: home)
+                    guard try checkedRecord(primary, storage: backup, home: stashHome, owner: backupOwner).matches else {
+                        throw Failure.busy
+                    }
+                }, afterFileRemoval: {
+                    let remaining = primary?.backend == .file ? nil : primary
+                    guard try checkedRecord(remaining, storage: backup, home: stashHome, owner: backupOwner).matches else {
+                        throw Failure.busy
+                    }
+                })
+                guard try checkedRecord(nil, storage: backup, home: stashHome, owner: backupOwner).matches else {
+                    throw Failure.busy
+                }
                 try validateRemoval(at: home)
                 try operation(target.validatingMutation(validateMutation))
             } catch {
-                if let primary = removedBackup { try restoreBackup(primary, to: backup) }
+                if let primary = removedBackup { try restoreBackup(primary, to: backup, owner: backupOwner) }
                 if rollbackAuthorized,
                    (try? checkedRecord(restoredNative, storage: base, home: baseHome, owner: baseOwner).matches) == true {
                     try base.restore(selected, validating: {
@@ -1053,11 +1067,17 @@ enum AuthSwap$Codex {
 
     /// Keep primary durable before restoring the selected native account. A
     /// refusal at the old backup path must not discard it or skip native rollback.
-    private static func restoreBackup(_ record: AuthStorage$Codex.Record, to backup: AuthStorage$Codex) throws {
+    private static func restoreBackup(_ record: AuthStorage$Codex.Record, to backup: AuthStorage$Codex,
+                                       owner: DirectoryIdentity?) throws {
         do {
-            guard try backup.load(verifyingOwner: true) == nil else { throw Failure.busy }
+            if let current = try backup.load(verifyingOwner: true) {
+                if authIdentity(current.data) == authIdentity(record.data),
+                   homeKey(stashHome) == backup.home.path, homeKey(backup.home) == backup.home.path { return }
+                throw Failure.busy
+            }
+            guard try checkedRecord(nil, storage: backup, home: stashHome, owner: owner).matches else { throw Failure.busy }
             try backup.save(record.data, backend: record.backend, validating: {
-                guard try backup.load(verifyingOwner: true) == nil else { throw Failure.busy }
+                guard try checkedRecord(nil, storage: backup, home: stashHome, owner: owner).matches else { throw Failure.busy }
             })
         }
         catch {
