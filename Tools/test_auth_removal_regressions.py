@@ -22,6 +22,8 @@ class AuthenticationRemovalRegressions(unittest.TestCase):
         '        try super.removeItem(at: url)':'        try super.removeItem(at: url)\n        CleanupSignals.removed?(url)',
         '        Fixture.codexKeychain[key] = (attributes as NSDictionary)[kSecValueData as String] as? Data':'        Fixture.codexKeychain[key] = (attributes as NSDictionary)[kSecValueData as String] as? Data\n        CleanupSignals.written?(key)',
         }
+        replacements['try super.moveItem(at: srcURL, to: dstURL)'] = (
+            'try super.moveItem(at: srcURL, to: dstURL)\n        CleanupSignals.moved?(srcURL, dstURL)')
         for before, after in replacements.items():
             assert support.count(before) in (1, 2), before
             support = support.replace(before, after)
@@ -42,5 +44,11 @@ def scenario_test(scenario):
 
 
 scenarios=['claude:stable:ok','claude:takeover:ok','claude:stable:denied','claude:takeover:denied','metadata:keyring:stable','metadata:keyring:fail','metadata:auto:stable','metadata:auto:fail','unlink:file:stable','unlink:file:fail','unlink:auto-file:fail','unlink:keyring:fail','unlink:auto:fail','shared:source:early','shared:source:late','shared:copy:early','shared:copy:late','shared:source:read','shared:copy:read','metadata:keyring:readd','metadata:auto:readd']
+scenarios += ["managed:stable:absent", "managed:stable:bootstrap", "managed:lost:absent",
+              "managed:lost:bootstrap", "managed:lost:login", "managed:lost:retarget"]
+for mode in ("keyring", "auto"):
+    scenarios += [f"metadata:{mode}:unreadable:stable", f"metadata:{mode}:unreadable:fail",
+                  f"opaque:{mode}:stable", f"opaque:{mode}:fail"]
+assert len(scenarios) == len(set(scenarios)) == 35
 for scenario in scenarios:
     setattr(AuthenticationRemovalRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"), scenario_test(scenario))
