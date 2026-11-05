@@ -6,6 +6,7 @@ import TOMLDecoder
 
 /// The native Codex auth payload, stored under the selected CODEX_HOME.
 struct AuthStorage$Codex {
+    private static let recoveryConfiguration = "cli_auth_credentials_store = \"keyring\"\n"
     enum Mode: String { case file, keyring, auto, ephemeral }
     enum Backend { case file, keyring }
     struct Record { let data: Data; let backend: Backend }
@@ -18,6 +19,7 @@ struct AuthStorage$Codex {
         let verifiesRecord: Bool
 
         func validate(removed: Bool = false) throws {
+            guard try storage.loadFile() == nil else { throw Failure.settings }
             if removed {
                 guard storage.keyringStatus() == errSecItemNotFound else { throw Failure.settings }
             } else if verifiesRecord {
@@ -29,12 +31,23 @@ struct AuthStorage$Codex {
         }
 
         func finish() {
-            if owner.matches(storage.home) { try? FileManager.default.removeItem(at: storage.home) }
+            let config = storage.home.appendingPathComponent("config.toml")
+            do {
+                guard (try? String(contentsOf: config, encoding: .utf8)) == AuthStorage$Codex.recoveryConfiguration,
+                      try storage.loadFile() == nil,
+                      storage.keyringStatus() == errSecItemNotFound,
+                      owner.matches(storage.home) else { return }
+                // Remove only our configuration and an empty directory. A new
+                // file login must survive even if it appears during cleanup.
+                guard unlink(config.path) == 0 else { return }
+                _ = rmdir(storage.home.path)
+            } catch { return }
         }
 
         /// Moving an item back must not overwrite a login created during removal.
         /// A refused restoration remains a normal, discoverable Keychain profile.
-        func restore(retainsOriginalFile: Bool) -> Bool {
+        mutating func restore(retainsOriginalFile: Bool) -> Bool {
+            do { self = try preservingSnapshot() } catch { return false }
             guard owner.matches(storage.home) else { return false }
             // Keep the snapshot discoverable before any rollback refusal. The
             // native add is exclusive and preserves a later reserved login too.
@@ -49,13 +62,59 @@ struct AuthStorage$Codex {
                 guard retainsOriginalFile, let current = try? Data(contentsOf: original.file),
                       current == originalFile else { return false }
             } else if errno != ENOENT { return false }
+            // File admission can block while the reserved namespace receives
+            // another login. Keep that login and restore our own snapshot.
+            do { self = try preservingSnapshot() } catch { return false }
             let status = AuthStorage$Claude.access(interactive: false) {
-                SecItemUpdate(storage.query as CFDictionary,
-                              [kSecAttrAccount as String: original.account] as CFDictionary)
+                guard owner.matches(storage.home) else { return errSecInteractionNotAllowed }
+                return SecItemUpdate(storage.query as CFDictionary,
+                                     [kSecAttrAccount as String: original.account] as CFDictionary)
             }
             guard status == errSecSuccess || status == errSecItemNotFound else { return false }
             finish()
             return true
+        }
+
+        /// A replacement owns its recovery namespace. Keep the captured login
+        /// separately before a rollback can refuse or move any Keychain item.
+        private func preservingSnapshot() throws -> Self {
+            guard verifiesRecord, let record else { return self }
+            do {
+                if try storage.loadFile() == nil {
+                    if let current = try storage.loadKeyring(),
+                       AuthStorage$Codex.sameCredentials(current.data, record.data),
+                       owner.matches(storage.home) { return self }
+                    if storage.keyringStatus() == errSecItemNotFound, owner.matches(storage.home) { return self }
+                }
+            } catch { /* An unavailable owner does not authorize moving its item. */ }
+            // A public recovery can be claimed by CLI during preparation.
+            // Retry a fresh namespace without changing that login's config.
+            for _ in 0..<3 {
+                let home = ProfileDirectories.codexRoot
+                    .appendingPathComponent("recovered-" + UUID().uuidString, isDirectory: true)
+                try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true,
+                                                        attributes: [.posixPermissions: 0o700])
+                let destination = try AuthStorage$Codex(home: home, mode: .keyring)
+                guard let destinationOwner = DirectoryIdentity.capture(destination.home) else { throw Failure.settings }
+                guard try FileManager.default.contentsOfDirectory(atPath: destination.home.path).isEmpty,
+                      destinationOwner.matches(destination.home) else { continue }
+                do {
+                    try Data(AuthStorage$Codex.recoveryConfiguration.utf8)
+                        .write(to: destination.home.appendingPathComponent("config.toml"), options: .withoutOverwriting)
+                } catch let error as CocoaError where error.code == .fileWriteFileExists { continue }
+                var item = destination.query
+                item[kSecValueData as String] = record.data
+                let status = AuthStorage$Claude.access(interactive: false) {
+                    guard destinationOwner.matches(destination.home),
+                          AuthStorage$Codex.canonicalPath(home) == destination.home.path else { return errSecInteractionNotAllowed }
+                    return SecItemAdd(item as CFDictionary, nil)
+                }
+                if status == errSecDuplicateItem { continue }
+                guard status == errSecSuccess else { throw Failure.keychain(status) }
+                return Self(original: original, originalFile: originalFile, storage: destination,
+                            owner: destinationOwner, record: record, verifiesRecord: true)
+            }
+            throw Failure.settings
         }
     }
 
@@ -261,7 +320,7 @@ struct AuthStorage$Codex {
         try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
         do {
-            try "cli_auth_credentials_store = \"keyring\"\n"
+            try Self.recoveryConfiguration
                 .write(to: recovery.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
             let storage = try AuthStorage$Codex(home: recovery, mode: .keyring)
             guard let owner = DirectoryIdentity.capture(storage.home) else { throw Failure.settings }

@@ -190,7 +190,7 @@ enum AccountRemoval {
                         }
                         keyring?.finish()
                     } catch {
-                        if let keyring, !keyring.restore(retainsOriginalFile: retainsOriginalFile) {
+                        if var keyring, !keyring.restore(retainsOriginalFile: retainsOriginalFile) {
                             AuthSwap$Codex.retainRemovalRecovery(keyring)
                         }
                         throw error
