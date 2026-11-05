@@ -151,6 +151,11 @@ private enum BackupSignals {
     Fixture.denyCodexWrite = false
     let backup = AuthSwap$Codex.stashHome
     let exported = (try? Data(contentsOf: backup.appendingPathComponent("auth.json"))) == original
+    if success && mode == "auto" {
+      try expect(
+        try AuthStorage$Codex(home: backup).mode == .auto,
+        "a Keychain-backed auto primary lost shared-fallback ownership checks")
+    }
     print(
       "STASH mode=\(mode) denied=\(denied) success=\(success) keychainExportedToFile=\(exported)")
     try expect(

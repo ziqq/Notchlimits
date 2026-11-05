@@ -754,7 +754,7 @@ enum AuthSwap$Codex {
             try advancePrimaryCopies()
             if let payload { trackCopies(of: payload) }
             try FileManager.default.createDirectory(at: stashHome, withIntermediateDirectories: true)
-            let stashMode = record.map { $0.backend == .keyring ? AuthStorage$Codex.Mode.keyring : .file } ?? live.mode
+            let stashMode = record?.backend == .file ? AuthStorage$Codex.Mode.file : live.mode
             let stash = try AuthStorage$Codex(home: stashHome, mode: stashMode)
             let stashOwner = DirectoryIdentity.capture(stash.home)
             try requireIdle(stash)
@@ -849,7 +849,7 @@ enum AuthSwap$Codex {
             // Retain an unexpected native login without exporting a Keychain login to plaintext.
             let orphan = stashHome.deletingLastPathComponent().appendingPathComponent("orphaned-" + UUID().uuidString)
             try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
-            let orphanMode = record.map { $0.backend == .keyring ? AuthStorage$Codex.Mode.keyring : .file } ?? live.mode
+            let orphanMode = record?.backend == .file ? AuthStorage$Codex.Mode.file : live.mode
             try ("cli_auth_credentials_store = \"" + orphanMode.rawValue + "\"\n")
                 .write(to: orphan.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
             try AuthStorage$Codex(home: orphan, mode: orphanMode).save(payload, backend: record?.backend)
