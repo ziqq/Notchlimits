@@ -68,6 +68,8 @@
 "menu.hotKey.standard" = "Domyślny (⌘P)";
 "menu.hotKey.disable" = "Wyłącz";
 "menu.loginItem" = "Uruchamiaj przy logowaniu";
+"menu.switchCLI" = "Przełączaj CLI";
+"menu.switchCLI.help" = "Przełączaj też Claude Code. Po pierwszej zmianie otwórz nowy terminal. Uruchomione sesje CLI zachowują swoje konto.";
 "menu.about" = "O programie Notchlimits";
 "menu.quit" = "Zakończ Notchlimits";
 "menu.telemetry" = "Pokaż telemetrię";
@@ -78,6 +80,7 @@
 "remove.body" = "Dane logowania konta zostaną trwale usunięte. Zaloguj się ponownie przez claude lub codex, aby je przywrócić.";
 "remove.delete" = "Usuń";
 "remove.failed.title" = "Nie udało się usunąć konta";
+"remove.busy" = "To konto jest aktualizowane. Poczekaj na zakończenie i spróbuj ponownie.";
 "remove.incomplete" = "%@ — niezalogowany";
 
 // Обновления
@@ -154,12 +157,17 @@
 
 // Ошибки в колонке
 "error.network" = "błąd sieci";
+"error.codexStorage" = "Nie można odczytać ustawień przechowywania Codex lub ten typ magazynu nie jest obsługiwany.";
+"error.codexEphemeral" = "Codex przechowuje to logowanie tylko w swoim procesie. Wybierz file, keyring lub auto w Codex, aby używać trwałych kont.";
 "error.keychainWrite" = "brak zapisu do pęku kluczy";
+"error.pendingCredentials" = "Dane logowania są nadal zapisywane. Odblokuj pęk kluczy i spróbuj ponownie zamknąć aplikację.";
 "error.timeout" = "przekroczono czas";
 "error.noHTTP" = "brak odpowiedzi HTTP";
 "error.http" = "HTTP %d";
 "error.parse" = "nieczytelna odpowiedź";
 "error.unknownSource" = "nieznane źródło";
+"error.cliProfile" = "Nie można ustalić folderu profilu CLI.";
+"error.cliShell" = "Przełączanie CLI obsługuje zsh i bash. Po pierwszej zmianie otwórz nowy terminal.";
 "error.noProvider" = "brak dostawcy";
 "error.unreachable" = "sieć niedostępna";
 
@@ -172,4 +180,5 @@
 "appswitch.error.title" = "Nie udało się przełączyć konta";
 "appswitch.error.notInstalled" = "%@ nie jest zainstalowany.";
 "appswitch.error.didNotQuit" = "%@ się nie zamknął — zamknij go i spróbuj ponownie.";
-"appswitch.error.noAuth" = "To konto nie ma logowania do Codex (auth.json). Zaloguj się ponownie.";
+"appswitch.error.noAuth" = "To konto nie ma logowania do Codex. Zaloguj się ponownie.";
+"appswitch.error.inProgress" = "Przełączanie konta już trwa.";

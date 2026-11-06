@@ -48,6 +48,19 @@ enum DesktopApp {
         NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
     }
 
+    nonisolated static func isRunning(bundleID: String) -> Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
+    }
+
+    /// Credential removal needs the same exit barrier as switching, without a launch.
+    static func stop(bundleID: String, appName: String,
+                     completion: @escaping (Result<Void, Error>) -> Void) {
+        running(bundleID).forEach { $0.terminate() }
+        waitForExit(bundleID: bundleID, attempts: 50) { exited in
+            completion(exited ? .success(()) : .failure(Failure.didNotQuit(appName)))
+        }
+    }
+
     /// `prepare` выполняется, только когда приложение точно закрыто: до этого
     /// оно может ещё писать свои файлы (у Codex — тот самый auth.json).
     static func restart(bundleID: String,
@@ -58,12 +71,8 @@ enum DesktopApp {
             completion(.failure(Failure.notInstalled(appName)))
             return
         }
-        running(bundleID).forEach { $0.terminate() }
-        waitForExit(bundleID: bundleID, attempts: 50) { exited in   // ~15с максимум
-            guard exited else {
-                completion(.failure(Failure.didNotQuit(appName)))
-                return
-            }
+        stop(bundleID: bundleID, appName: appName) { result in
+            if case .failure = result { completion(result); return }
             let config: NSWorkspace.OpenConfiguration
             do { config = try prepare() } catch {
                 completion(.failure(error))

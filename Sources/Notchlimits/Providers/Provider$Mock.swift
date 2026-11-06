@@ -1,7 +1,7 @@
 import Foundation
 
 /// Макет данных для отладки геометрии и вёрстки: NOTCHLIMITS_MOCK=1.
-struct MockDiscovery: AccountDiscovery {
+struct Discovery$Mock: AccountDiscovery {
     func discover() -> [DiscoveredAccount] {
         [
             DiscoveredAccount(id: "claude:main", provider: .claude,
@@ -14,7 +14,7 @@ struct MockDiscovery: AccountDiscovery {
     }
 }
 
-struct MockProvider: UsageProvider {
+struct Provider$Mock: UsageProvider {
     func fetch(_ account: DiscoveredAccount) async -> FetchOutcome {
         guard case .mock(let seed) = account.source else {
             return .failure("mock: неизвестный источник")

@@ -76,7 +76,7 @@ enum SelfTest {
           "nested": {"no_utilization": 1}
         }
         """
-        guard let windows = ClaudeProvider.parse(Data(payload.utf8)) else {
+        guard let windows = Provider$Claude.parse(Data(payload.utf8)) else {
             expect("ответ разобран", false)
             return
         }
@@ -86,15 +86,15 @@ enum SelfTest {
         expect("инертное неизвестное окно (0 % без сброса) скрыто",
                !windows.contains { $0.key == "nimbus_quill" })
         expect("окно 0 % с датой сброса остаётся",
-               ClaudeProvider.parse(Data(#"{"five_hour":{"utilization":0,"resets_at":"2026-08-26T00:00:00Z"}}"#.utf8))?.count == 1)
+               Provider$Claude.parse(Data(#"{"five_hour":{"utilization":0,"resets_at":"2026-08-26T00:00:00Z"}}"#.utf8))?.count == 1)
         // Основное окно сразу после сброса приходит как 0 % без даты — прятать
         // его нельзя, иначе оно «исчезает» из колонки до обращения к Claude.
         expect("five_hour 0 % без сброса НЕ прячется",
-               ClaudeProvider.parse(Data(#"{"five_hour":{"utilization":0,"resets_at":null}}"#.utf8))?.count == 1)
+               Provider$Claude.parse(Data(#"{"five_hour":{"utilization":0,"resets_at":null}}"#.utf8))?.count == 1)
         expect("seven_day 0 % без сброса НЕ прячется",
-               ClaudeProvider.parse(Data(#"{"seven_day":{"utilization":0}}"#.utf8))?.count == 1)
+               Provider$Claude.parse(Data(#"{"seven_day":{"utilization":0}}"#.utf8))?.count == 1)
         expect("если все окна инертны — показываем как есть",
-               ClaudeProvider.parse(Data(#"{"nimbus_quill":{"utilization":0}}"#.utf8))?.count == 1)
+               Provider$Claude.parse(Data(#"{"nimbus_quill":{"utilization":0}}"#.utf8))?.count == 1)
         expect("five_hour первым", windows.first?.key == "five_hour")
         expect("seven_day вторым", windows.dropFirst().first?.key == "seven_day")
         expect("дробный процент сохранён", windows.first?.utilization == 12.5)
@@ -103,16 +103,16 @@ enum SelfTest {
                windows.first { $0.key == "seven_day_opus" }?.resetsAt != nil)
         expect("неизвестный ключ показан словами",
                windows.first { $0.key == "brand_new_window" }?.title == "Brand New Window")
-        expect("кодовое имя модели читаемо", ClaudeProvider.humanized("nimbus_quill") == "Nimbus Quill")
+        expect("кодовое имя модели читаемо", Provider$Claude.humanized("nimbus_quill") == "Nimbus Quill")
         expect("известный префикс развёрнут",
                windows.first { $0.key == "seven_day_opus" }?.title == L.t("window.week") + " · Opus")
         expect("порядок: пять часов, неделя, производные",
                windows.map(\.key) == ["five_hour", "seven_day", "seven_day_opus", "brand_new_window"],
                windows.map(\.key).joined(separator: ","))
-        expect("пустой ответ не ломает", ClaudeProvider.parse(Data("{}".utf8))?.isEmpty == true)
-        expect("мусор не ломает", ClaudeProvider.parse(Data("не json".utf8)) == nil)
+        expect("пустой ответ не ломает", Provider$Claude.parse(Data("{}".utf8))?.isEmpty == true)
+        expect("мусор не ломает", Provider$Claude.parse(Data("не json".utf8)) == nil)
 
-        let stats = ClaudeProvider.stats(Data(payload.utf8))
+        let stats = Provider$Claude.stats(Data(payload.utf8))
         expect("включённый extra_usage ушёл в статистику", stats.first?.key == "extraUsage")
         // Сумма минорная: 10308 при decimal_places=2 — это 103.08, а не 10308.
         expect("минорные единицы превращены в сумму",
@@ -120,36 +120,36 @@ enum SelfTest {
                stats.first?.value ?? "нет строки")
         // Выключенная доплата — исторический остаток, не «расход сейчас»: не шумим.
         expect("выключенный extra_usage не показываем",
-               ClaudeProvider.stats(Data(#"{"extra_usage":{"is_enabled":false,"used_credits":10308,"decimal_places":2}}"#.utf8)).isEmpty)
+               Provider$Claude.stats(Data(#"{"extra_usage":{"is_enabled":false,"used_credits":10308,"decimal_places":2}}"#.utf8)).isEmpty)
         expect("нулевой extra_usage не показываем",
-               ClaudeProvider.stats(Data(#"{"extra_usage":{"is_enabled":true,"used_credits":0}}"#.utf8)).isEmpty)
+               Provider$Claude.stats(Data(#"{"extra_usage":{"is_enabled":true,"used_credits":0}}"#.utf8)).isEmpty)
         expect("без extra_usage статистики нет",
-               ClaudeProvider.stats(Data("{}".utf8)).isEmpty)
+               Provider$Claude.stats(Data("{}".utf8)).isEmpty)
         expect("месячный потолок даёт «потрачено / потолок»",
-               ClaudeProvider.stats(Data(#"{"extra_usage":{"is_enabled":true,"used_credits":500,"monthly_limit":2000,"decimal_places":2}}"#.utf8))
+               Provider$Claude.stats(Data(#"{"extra_usage":{"is_enabled":true,"used_credits":500,"monthly_limit":2000,"decimal_places":2}}"#.utf8))
                    .first?.value.contains("/") == true)
         expect("нулевой decimal_places оставляет целое",
                Format.money(minor: 42, places: 0, currency: "USD").contains("42"))
 
         // Подпись как у Codex: план и почта через разделитель, части опциональны.
         expect("подпись — план и почта",
-               ClaudeProvider.subtitle(plan: "pro", email: "u@e.com") == "Pro · u@e.com")
+               Provider$Claude.subtitle(plan: "pro", email: "u@e.com") == "Pro · u@e.com")
         expect("без почты остаётся план",
-               ClaudeProvider.subtitle(plan: "max", email: nil) == "Max")
+               Provider$Claude.subtitle(plan: "max", email: nil) == "Max")
         expect("без плана остаётся почта",
-               ClaudeProvider.subtitle(plan: nil, email: "u@e.com") == "u@e.com")
+               Provider$Claude.subtitle(plan: nil, email: "u@e.com") == "u@e.com")
         expect("без обоих подписи нет",
-               ClaudeProvider.subtitle(plan: nil, email: nil) == nil)
+               Provider$Claude.subtitle(plan: nil, email: nil) == nil)
 
         // Почта из конфига ~/.claude.json (oauthAccount.emailAddress).
         expect("почта из конфига вынута",
-               ClaudeProvider.parseEmail(fromConfig: Data(#"{"oauthAccount":{"emailAddress":"u@e.com"}}"#.utf8)) == "u@e.com")
+               Provider$Claude.parseEmail(fromConfig: Data(#"{"oauthAccount":{"emailAddress":"u@e.com"}}"#.utf8)) == "u@e.com")
         expect("без oauthAccount почты нет",
-               ClaudeProvider.parseEmail(fromConfig: Data(#"{"other":1}"#.utf8)) == nil)
+               Provider$Claude.parseEmail(fromConfig: Data(#"{"other":1}"#.utf8)) == nil)
         expect("пустая почта — nil",
-               ClaudeProvider.parseEmail(fromConfig: Data(#"{"oauthAccount":{"emailAddress":""}}"#.utf8)) == nil)
+               Provider$Claude.parseEmail(fromConfig: Data(#"{"oauthAccount":{"emailAddress":""}}"#.utf8)) == nil)
         expect("мусор не ломает разбор почты",
-               ClaudeProvider.parseEmail(fromConfig: Data("не json".utf8)) == nil)
+               Provider$Claude.parseEmail(fromConfig: Data("не json".utf8)) == nil)
 
         // Версия Claude — из пути, без запуска бинаря (иначе диалог Keychain).
         expect("версия из каталога расширения VS Code",
@@ -186,7 +186,7 @@ enum SelfTest {
           ]
         }
         """
-        guard let windows = CodexProvider.parse(Data(payload.utf8)) else {
+        guard let windows = Provider$Codex.parse(Data(payload.utf8)) else {
             expect("ответ разобран", false)
             return
         }
@@ -199,19 +199,19 @@ enum SelfTest {
                windows.first?.resetsAt == Date(timeIntervalSince1970: 1_788_149_680))
         expect("reset_after_seconds тоже даёт дату",
                windows.last?.resetsAt != nil)
-        expect("e-mail вынут", CodexProvider.email(from: Data(payload.utf8)) == "user@example.com")
-        expect("мусор не ломает", CodexProvider.parse(Data("[]".utf8)) == nil)
+        expect("e-mail вынут", Provider$Codex.email(from: Data(payload.utf8)) == "user@example.com")
+        expect("мусор не ломает", Provider$Codex.parse(Data("[]".utf8)) == nil)
 
         expect("подпись — план и почта",
-               CodexProvider.subtitle(from: Data(payload.utf8), email: "user@example.com")
+               Provider$Codex.subtitle(from: Data(payload.utf8), email: "user@example.com")
                    == "Pro · user@example.com")
         expect("без плана остаётся почта",
-               CodexProvider.subtitle(from: Data("{}".utf8), email: "user@example.com")
+               Provider$Codex.subtitle(from: Data("{}".utf8), email: "user@example.com")
                    == "user@example.com")
         expect("без обоих подписи нет",
-               CodexProvider.subtitle(from: Data("{}".utf8), email: nil) == nil)
+               Provider$Codex.subtitle(from: Data("{}".utf8), email: nil) == nil)
 
-        let stats = CodexProvider.stats(from: Data(payload.utf8))
+        let stats = Provider$Codex.stats(from: Data(payload.utf8))
         expect("статистики ровно 2", stats.count == 2, "получено \(stats.count)")
         expect("баланс строкой разобран",
                stats.first { $0.key == "credits" }?.value == "42")
@@ -219,27 +219,27 @@ enum SelfTest {
         expect("досрочные сбросы = available_count",
                stats.first { $0.key == "resetCredits" }?.value == "1")
         expect("applicable_available_count игнорируем",
-               CodexProvider.stats(from: Data(#"{"rate_limit_reset_credits":{"available_count":3,"applicable_available_count":0}}"#.utf8))
+               Provider$Codex.stats(from: Data(#"{"rate_limit_reset_credits":{"available_count":3,"applicable_available_count":0}}"#.utf8))
                    .first { $0.key == "resetCredits" }?.value == "3")
         expect("ноль доступных — строки нет",
-               CodexProvider.stats(from: Data(#"{"rate_limit_reset_credits":{"available_count":0}}"#.utf8))
+               Provider$Codex.stats(from: Data(#"{"rate_limit_reset_credits":{"available_count":0}}"#.utf8))
                    .first { $0.key == "resetCredits" } == nil)
         expect("нулевой баланс не показываем",
-               CodexProvider.stats(from: Data(#"{"credits":{"balance":"0"}}"#.utf8)).isEmpty)
+               Provider$Codex.stats(from: Data(#"{"credits":{"balance":"0"}}"#.utf8)).isEmpty)
         expect("безлимит показываем словом",
-               CodexProvider.stats(from: Data(#"{"credits":{"unlimited":true}}"#.utf8))
+               Provider$Codex.stats(from: Data(#"{"credits":{"unlimited":true}}"#.utf8))
                    .first?.value == L.t("stat.unlimited"))
         expect("мусор не ломает статистику",
-               CodexProvider.stats(from: Data("[]".utf8)).isEmpty)
+               Provider$Codex.stats(from: Data("[]".utf8)).isEmpty)
     }
 
     private static func checkWindowTitles() {
         section("Названия окон по длительности")
-        expect("18000 с → 5-часовое", CodexProvider.title(forWindowSeconds: 18_000) == L.t("window.fiveHour"))
-        expect("604800 с → недельное", CodexProvider.title(forWindowSeconds: 604_800) == L.t("window.week"))
-        expect("259200 с → 3-дневное", CodexProvider.title(forWindowSeconds: 259_200) == L.t("window.days", 3))
-        expect("10800 с → 3-часовое", CodexProvider.title(forWindowSeconds: 10_800) == L.t("window.hours", 3))
-        expect("nil → общее название", CodexProvider.title(forWindowSeconds: nil) == L.t("window.generic"))
+        expect("18000 с → 5-часовое", Provider$Codex.title(forWindowSeconds: 18_000) == L.t("window.fiveHour"))
+        expect("604800 с → недельное", Provider$Codex.title(forWindowSeconds: 604_800) == L.t("window.week"))
+        expect("259200 с → 3-дневное", Provider$Codex.title(forWindowSeconds: 259_200) == L.t("window.days", 3))
+        expect("10800 с → 3-часовое", Provider$Codex.title(forWindowSeconds: 10_800) == L.t("window.hours", 3))
+        expect("nil → общее название", Provider$Codex.title(forWindowSeconds: nil) == L.t("window.generic"))
     }
 
     private static func checkJWT() {
@@ -273,7 +273,7 @@ enum SelfTest {
                 "scopes": ["user:inference", "user:profile"]
             ]
         ]
-        guard let parsed = ClaudeKeychain.parse(item) else {
+        guard let parsed = AuthStorage$Claude.parse(item) else {
             expect("запись разобрана", false)
             return
         }
@@ -286,19 +286,19 @@ enum SelfTest {
         expect("живой refresh-токен годен к обновлению", parsed.isRefreshable)
 
         expect("запись без refresh-токена не обновляема",
-               ClaudeKeychain.parse(["claudeAiOauth": ["accessToken": "at"]])?.isRefreshable == false)
+               AuthStorage$Claude.parse(["claudeAiOauth": ["accessToken": "at"]])?.isRefreshable == false)
         expect("протухший refresh-токен не обновляем",
-               ClaudeKeychain.parse(["claudeAiOauth": [
+               AuthStorage$Claude.parse(["claudeAiOauth": [
                    "accessToken": "at", "refreshToken": "rt",
                    "refreshTokenExpiresAt": 1000 as NSNumber]])?.isRefreshable == false)
-        expect("чужой JSON не ломает", ClaudeKeychain.parse(["other": 1]) == nil)
+        expect("чужой JSON не ломает", AuthStorage$Claude.parse(["other": 1]) == nil)
 
         // Ответ на обновление: сроки относительные, в секундах.
         let response = """
         {"access_token":"new","refresh_token":"newrt","expires_in":3600,
          "refresh_token_expires_in":7200,"scope":"user:inference user:profile"}
         """
-        guard let tokens = ClaudeOAuth.parse(Data(response.utf8), now: now) else {
+        guard let tokens = OAuth$Claude.parse(Data(response.utf8), now: now) else {
             expect("ответ разобран", false)
             return
         }
@@ -312,36 +312,36 @@ enum SelfTest {
 
         // Без ротации сервер не присылает refresh_token — прежний остаётся годен,
         // и затирать его нулём нельзя.
-        let noRotation = ClaudeOAuth.parse(Data(#"{"access_token":"a","expires_in":60}"#.utf8), now: now)
+        let noRotation = OAuth$Claude.parse(Data(#"{"access_token":"a","expires_in":60}"#.utf8), now: now)
         expect("без ротации refresh-токен не трогаем", noRotation?.refreshToken == nil)
         expect("без ротации срок refresh-токена не трогаем", noRotation?.refreshTokenExpiresAt == nil)
 
         expect("ответ без токена отвергнут",
-               ClaudeOAuth.parse(Data(#"{"expires_in":60}"#.utf8), now: now) == nil)
+               OAuth$Claude.parse(Data(#"{"expires_in":60}"#.utf8), now: now) == nil)
         expect("ответ без срока отвергнут",
-               ClaudeOAuth.parse(Data(#"{"access_token":"a"}"#.utf8), now: now) == nil)
-        expect("мусор не ломает", ClaudeOAuth.parse(Data("не json".utf8), now: now) == nil)
+               OAuth$Claude.parse(Data(#"{"access_token":"a"}"#.utf8), now: now) == nil)
+        expect("мусор не ломает", OAuth$Claude.parse(Data("не json".utf8), now: now) == nil)
     }
 
     private static func checkCodexAuth() {
         section("Продление входа Codex")
-        let full = CodexOAuth.parse(Data(#"{"id_token":"i","access_token":"a","refresh_token":"r"}"#.utf8))
+        let full = OAuth$Codex.parse(Data(#"{"id_token":"i","access_token":"a","refresh_token":"r"}"#.utf8))
         expect("ответ разобран", full?.accessToken == "a" && full?.idToken == "i")
         expect("ротация подхвачена", full?.refreshToken == "r")
-        let bare = CodexOAuth.parse(Data(#"{"access_token":"a","refresh_token":""}"#.utf8))
+        let bare = OAuth$Codex.parse(Data(#"{"access_token":"a","refresh_token":""}"#.utf8))
         expect("пустой refresh-токен не затирает прежний", bare != nil && bare?.refreshToken == nil)
         expect("ответ без access-токена отвергнут",
-               CodexOAuth.parse(Data(#"{"refresh_token":"r"}"#.utf8)) == nil)
+               OAuth$Codex.parse(Data(#"{"refresh_token":"r"}"#.utf8)) == nil)
 
         // Окончательный отказ — только invalid_grant и коды про refresh-токен,
         // в каком бы поле они ни пришли. Прочие 400 — временная беда.
-        expect("invalid_grant строкой", CodexOAuth.isPermanent(Data(#"{"error":"invalid_grant"}"#.utf8)))
+        expect("invalid_grant строкой", OAuth$Codex.isPermanent(Data(#"{"error":"invalid_grant"}"#.utf8)))
         expect("код в error.code",
-               CodexOAuth.isPermanent(Data(#"{"error":{"code":"refresh_token_reused"}}"#.utf8)))
+               OAuth$Codex.isPermanent(Data(#"{"error":{"code":"refresh_token_reused"}}"#.utf8)))
         expect("код на верхнем уровне",
-               CodexOAuth.isPermanent(Data(#"{"code":"refresh_token_expired"}"#.utf8)))
-        expect("прочий 400 не приговор", !CodexOAuth.isPermanent(Data(#"{"error":"invalid_request"}"#.utf8)))
-        expect("мусор не приговор", !CodexOAuth.isPermanent(Data("не json".utf8)))
+               OAuth$Codex.isPermanent(Data(#"{"code":"refresh_token_expired"}"#.utf8)))
+        expect("прочий 400 не приговор", !OAuth$Codex.isPermanent(Data(#"{"error":"invalid_request"}"#.utf8)))
+        expect("мусор не приговор", !OAuth$Codex.isPermanent(Data("не json".utf8)))
     }
 
     private static func checkCodexRenewal() {
@@ -349,7 +349,7 @@ enum SelfTest {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let day: TimeInterval = 24 * 3600
         func renew(base: Bool = false, in seconds: TimeInterval?, force: Bool = false) -> Bool {
-            CodexRenewal.shouldRenew(isBaseHome: base,
+            Renewal$Codex.shouldRenew(isBaseHome: base,
                                      expiresAt: seconds.map { now.addingTimeInterval($0) },
                                      force: force, now: now)
         }
@@ -365,8 +365,8 @@ enum SelfTest {
         {"auth_mode":"chatgpt","OPENAI_API_KEY":null,"last_refresh":"2026-01-01T00:00:00Z",
          "tokens":{"id_token":"id0","access_token":"a0","refresh_token":"r0","account_id":"acc"}}
         """#
-        let rotated = CodexOAuth.Tokens(idToken: "id1", accessToken: "a1", refreshToken: "r1")
-        let merged = CodexAuthSwap.renewedAuth(Data(original.utf8), usedRefreshToken: "r0",
+        let rotated = OAuth$Codex.Tokens(idToken: "id1", accessToken: "a1", refreshToken: "r1")
+        let merged = AuthSwap$Codex.renewedAuth(Data(original.utf8), usedRefreshToken: "r0",
                                                tokens: rotated, now: now)
         let root = merged.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         let tokens = root?["tokens"] as? [String: Any]
@@ -382,50 +382,50 @@ enum SelfTest {
         expect("файл остаётся без экранированных слешей",
                merged.map { !String(decoding: $0, as: UTF8.self).contains("\\/") } ?? false)
 
-        let noRotation = CodexOAuth.Tokens(idToken: nil, accessToken: "a1", refreshToken: nil)
-        let kept = CodexAuthSwap.renewedAuth(Data(original.utf8), usedRefreshToken: "r0",
+        let noRotation = OAuth$Codex.Tokens(idToken: nil, accessToken: "a1", refreshToken: nil)
+        let kept = AuthSwap$Codex.renewedAuth(Data(original.utf8), usedRefreshToken: "r0",
                                              tokens: noRotation, now: now)
             .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["tokens"] as? [String: Any]
         expect("без ротации прежний refresh-токен на месте", kept?["refresh_token"] as? String == "r0")
         expect("без нового id_token прежний на месте", kept?["id_token"] as? String == "id0")
         expect("чужой refresh-токен в файле не затираем",
-               CodexAuthSwap.renewedAuth(Data(original.utf8), usedRefreshToken: "other",
+               AuthSwap$Codex.renewedAuth(Data(original.utf8), usedRefreshToken: "other",
                                          tokens: rotated, now: now) == nil)
         expect("мусор не ломает",
-               CodexAuthSwap.renewedAuth(Data("не json".utf8), usedRefreshToken: "r0",
+               AuthSwap$Codex.renewedAuth(Data("не json".utf8), usedRefreshToken: "r0",
                                          tokens: rotated, now: now) == nil)
     }
 
     private static func checkClaudeRenewal() {
         section("Продление Claude и обнулённые записи")
-        func credentials(refresh: String?, expiresIn: TimeInterval? = nil) -> ClaudeKeychain.Credentials {
-            ClaudeKeychain.Credentials(accessToken: "a", expiresAt: nil, plan: nil,
+        func credentials(refresh: String?, expiresIn: TimeInterval? = nil) -> AuthStorage$Claude.Credentials {
+            AuthStorage$Claude.Credentials(accessToken: "a", expiresAt: nil, plan: nil,
                                        refreshToken: refresh,
                                        refreshTokenExpiresAt: expiresIn.map { Date().addingTimeInterval($0) },
                                        scopes: [])
         }
-        let pending = ClaudeOAuth.Tokens(accessToken: "a1", expiresAt: Date(), refreshToken: "new",
+        let pending = OAuth$Claude.Tokens(accessToken: "a1", expiresAt: Date(), refreshToken: "new",
                                          refreshTokenExpiresAt: nil, scopes: nil)
         expect("недописанный токен главнее записи",
-               ClaudeProvider.refreshToken(pending: pending, stored: credentials(refresh: "old")) == "new")
+               Provider$Claude.refreshToken(pending: pending, stored: credentials(refresh: "old")) == "new")
         expect("без недописанного — из записи",
-               ClaudeProvider.refreshToken(pending: nil, stored: credentials(refresh: "old")) == "old")
-        let noRotation = ClaudeOAuth.Tokens(accessToken: "a1", expiresAt: Date(), refreshToken: nil,
+               Provider$Claude.refreshToken(pending: nil, stored: credentials(refresh: "old")) == "old")
+        let noRotation = OAuth$Claude.Tokens(accessToken: "a1", expiresAt: Date(), refreshToken: nil,
                                             refreshTokenExpiresAt: nil, scopes: nil)
         expect("недописанный без ротации не мешает записи",
-               ClaudeProvider.refreshToken(pending: noRotation, stored: credentials(refresh: "old")) == "old")
+               Provider$Claude.refreshToken(pending: noRotation, stored: credentials(refresh: "old")) == "old")
         expect("протухший refresh-токен не используем",
-               ClaudeProvider.refreshToken(pending: nil, stored: credentials(refresh: "old", expiresIn: -10)) == nil)
+               Provider$Claude.refreshToken(pending: nil, stored: credentials(refresh: "old", expiresIn: -10)) == nil)
 
         // Так Claude Code оставляет запись после invalid_grant: поля на месте, токены пустые.
         let wiped: [String: Any] = ["claudeAiOauth": [
             "accessToken": "", "refreshToken": "", "expiresAt": 0,
             "refreshTokenExpiresAt": 1_800_000_000_000, "scopes": ["user:inference"],
             "subscriptionType": "pro"]]
-        expect("обнулённая запись — не токен", ClaudeKeychain.parse(wiped) == nil)
-        expect("обнулённая запись — аккаунт, ему нужен вход", !ClaudeKeychain.isNoLogin(wiped))
+        expect("обнулённая запись — не токен", AuthStorage$Claude.parse(wiped) == nil)
+        expect("обнулённая запись — аккаунт, ему нужен вход", !AuthStorage$Claude.isNoLogin(wiped))
         expect("служебная запись без входа — не аккаунт",
-               ClaudeKeychain.isNoLogin(["trustedDeviceToken": "t"]))
+               AuthStorage$Claude.isNoLogin(["trustedDeviceToken": "t"]))
     }
 
     private static func checkReloginScripts() {
@@ -446,7 +446,7 @@ enum SelfTest {
         expect("статус после входа, а не до", statusLine > loginLine)
 
         let main = AccountSetup.claudeReloginScript(binary: claude, profileName: "main",
-                                                    service: ClaudeKeychain.baseService, configDir: nil)
+                                                    service: AuthStorage$Claude.baseService, configDir: nil)
         expect("основной — в стандартное место CLI", main.contains("unset CLAUDE_CONFIG_DIR"))
 
         let codex = AccountSetup.codexReloginScript(binary: URL(fileURLWithPath: "/usr/local/bin/codex"),

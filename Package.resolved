@@ -8,6 +8,15 @@
         "revision" : "eef1a539a373c1f1a320624b1130fc5de7b2e100",
         "version" : "2.10.0"
       }
+    },
+    {
+      "identity" : "tomldecoder",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/dduan/TOMLDecoder",
+      "state" : {
+        "revision" : "fa1103a62b1c08cc08eabc58dda8b55887ff1622",
+        "version" : "0.4.4"
+      }
     }
   ],
   "version" : 2
