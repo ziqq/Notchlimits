@@ -47,6 +47,13 @@ struct AuthStorage$Codex {
         /// Moving an item back must not overwrite a login created during removal.
         /// A refused restoration remains a normal, discoverable Keychain profile.
         mutating func restore(retainsOriginalFile: Bool) -> Bool {
+            // No item was reserved for an auto file fallback. A later Keychain
+            // login in recovery is independent and must never be moved back.
+            if verifiesRecord && record == nil {
+                do { try validate() } catch { return false }
+                finish()
+                return true
+            }
             do { self = try preservingSnapshot() } catch { return false }
             guard owner.matches(storage.home) else { return false }
             // Keep the snapshot discoverable before any rollback refusal. The
@@ -319,24 +326,42 @@ struct AuthStorage$Codex {
             .appendingPathComponent("recovered-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
+        let storage = try AuthStorage$Codex(home: recovery, mode: .keyring)
+        guard let owner = DirectoryIdentity.capture(storage.home) else { throw Failure.settings }
+        let keyring = RemovalKeyring(original: self, originalFile: originalFile, storage: storage, owner: owner,
+                                     record: record, verifiesRecord: verifiesRecord)
         do {
-            try Self.recoveryConfiguration
-                .write(to: recovery.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
-            let storage = try AuthStorage$Codex(home: recovery, mode: .keyring)
-            guard let owner = DirectoryIdentity.capture(storage.home) else { throw Failure.settings }
+            // A CLI login may claim the public directory during preparation.
+            // Never replace its configuration, even when reservation refuses.
+            guard try FileManager.default.contentsOfDirectory(atPath: storage.home.path).isEmpty,
+                  owner.matches(storage.home), Self.canonicalPath(recovery) == storage.home.path else {
+                throw Failure.settings
+            }
+            let config = storage.home.appendingPathComponent("config.toml")
+            try Data(Self.recoveryConfiguration.utf8).write(to: config, options: .withoutOverwriting)
             // Recovery preparation can block while CLI replaces the login.
             // Reserve only the credentials authorized by the removal caller.
             try mutationValidation?()
             let status = AuthStorage$Claude.access(interactive: false) {
-                SecItemUpdate(query as CFDictionary,
-                              [kSecAttrAccount as String: storage.account] as CFDictionary)
+                // The interaction gate can block after preparation. Native
+                // rename is exclusive for Keychain; also preserve file logins.
+                guard (try? String(contentsOf: config, encoding: .utf8)) == Self.recoveryConfiguration,
+                      (try? storage.loadFile() == nil) == true,
+                      owner.matches(storage.home), Self.canonicalPath(recovery) == storage.home.path else {
+                    return errSecInteractionNotAllowed
+                }
+                return SecItemUpdate(query as CFDictionary,
+                                     [kSecAttrAccount as String: storage.account] as CFDictionary)
             }
             guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.keychain(status) }
-            let keyring = RemovalKeyring(original: self, originalFile: originalFile, storage: storage, owner: owner,
-                                         record: record, verifiesRecord: verifiesRecord)
+            // An auto file owner has no item to move. A missing source must
+            // not authorize adopting a new login in the reserved namespace.
+            if status == errSecItemNotFound {
+                guard storage.keyringStatus() == errSecItemNotFound else { throw Failure.settings }
+            }
             return Removal(original: self, owner: profileOwner, file: originalFile, keyring: keyring)
         } catch {
-            try? FileManager.default.removeItem(at: recovery)
+            keyring.finish()
             throw error
         }
     }
