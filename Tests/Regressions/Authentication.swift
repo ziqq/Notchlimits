@@ -17,7 +17,16 @@ private enum Fixture {
     static let lock = NSLock()
     static var keychain: [String: Any] = [:]
     static var keychainWrites = 0
-    static var codexKeychain: [String: Data] = [:]
+    static var codexKeychain: [String: Data] = [:] {
+        didSet {
+            for key in Set(oldValue.keys).union(codexKeychain.keys) where oldValue[key] != codexKeychain[key] {
+                codexRevision += 1
+                codexModified[key] = codexKeychain[key].map { _ in Date(timeIntervalSince1970: codexRevision) }
+            }
+        }
+    }
+    private static var codexRevision: TimeInterval = 0
+    static var codexModified: [String: Date] = [:]
     static var denyCodexRead = false
     static var failDefaultsSynchronization = false
     static var denyClaudeMetadata = false
@@ -568,7 +577,13 @@ func SecItemCopyMatching(_ query: CFDictionary, _ result: UnsafeMutablePointer<C
             guard !Fixture.denyCodexRead else { return errSecInteractionNotAllowed }
             result?.pointee = data as CFData
         } else {
-            result?.pointee = [kSecAttrService as String: "Codex Auth", kSecAttrAccount as String: key] as NSDictionary
+            var attributes: [String: Any] = [kSecAttrService as String: "Codex Auth", kSecAttrAccount as String: key]
+            attributes[kSecAttrModificationDate as String] = Fixture.codexModified[key]
+            if (query as NSDictionary)[kSecReturnPersistentRef as String] as? Bool == true {
+                // Keep the reference stable when CLI updates an existing item.
+                attributes[kSecValuePersistentRef as String] = Data(key.utf8)
+            }
+            result?.pointee = attributes as NSDictionary
         }
         return errSecSuccess
     }

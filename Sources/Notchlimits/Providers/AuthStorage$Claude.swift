@@ -343,22 +343,33 @@ enum AuthStorage$Claude {
         return (json, errSecSuccess, .file, owner)
     }
 
-    private static let interactionLock = NSLock()
+    private static let interactionLock = NSRecursiveLock()
+    private static var interactionSuppressed = false
 
     /// Claude uses classic login Keychain items. LAContext's interaction flag
     /// does not govern their legacy ACL dialogs. Serialize the process-wide
     /// legacy interaction setting with all secret reads and restore it afterward.
     static func access(interactive: Bool = true, _ operation: () -> OSStatus) -> OSStatus {
+        access(interactive: interactive, unavailable: { errSecInteractionNotAllowed }, operation)
+    }
+
+    /// Admission can read other items while a mutation owns the interaction gate.
+    static func access<T>(interactive: Bool, unavailable: () throws -> T,
+                          _ operation: () throws -> T) rethrows -> T {
         interactionLock.lock()
         defer { interactionLock.unlock() }
-        guard !interactive else { return operation() }
+        guard !interactive, !interactionSuppressed else { return try operation() }
         var allowed: DarwinBoolean = false
         guard SecKeychainGetUserInteractionAllowed(&allowed) == errSecSuccess,
               SecKeychainSetUserInteractionAllowed(false) == errSecSuccess else {
-            return errSecInteractionNotAllowed
+            return try unavailable()
         }
-        defer { _ = SecKeychainSetUserInteractionAllowed(allowed.boolValue) }
-        return operation()
+        interactionSuppressed = true
+        defer {
+            interactionSuppressed = false
+            _ = SecKeychainSetUserInteractionAllowed(allowed.boolValue)
+        }
+        return try operation()
     }
 
     /// Разбор записи. Вынесен отдельно — так его покрывает самопроверка,

@@ -10,37 +10,65 @@ struct AuthStorage$Codex {
     enum Mode: String { case file, keyring, auto, ephemeral }
     enum Backend { case file, keyring }
     struct Record { let data: Data; let backend: Backend }
+
+    fileprivate struct KeyringRevision: Equatable {
+        let reference: Data
+        let modified: Date
+    }
+
+    fileprivate enum KeyringProof {
+        case readable(Record?)
+        case opaque(KeyringRevision)
+
+        var isOpaque: Bool {
+            if case .opaque = self { return true }
+            return false
+        }
+
+        func validate(_ storage: AuthStorage$Codex) throws {
+            switch self {
+            case .readable(let record):
+                guard AuthStorage$Codex.sameCredentials(try storage.loadKeyring()?.data, record?.data) else {
+                    throw Failure.settings
+                }
+            case .opaque(let revision):
+                guard try storage.keyringRevision() == revision else { throw Failure.settings }
+            }
+        }
+    }
+
     struct RemovalKeyring {
         let original: AuthStorage$Codex
         let originalFile: Data?
         let storage: AuthStorage$Codex
         let owner: DirectoryIdentity
-        let record: Record?
-        let verifiesRecord: Bool
+        fileprivate var proof: KeyringProof
 
         func validate(removed: Bool = false) throws {
-            guard try storage.loadFile() == nil else { throw Failure.settings }
             if removed {
                 guard storage.keyringStatus() == errSecItemNotFound else { throw Failure.settings }
-            } else if verifiesRecord {
-                guard AuthStorage$Codex.sameCredentials(try storage.loadKeyring()?.data, record?.data) else {
-                    throw Failure.settings
-                }
+            } else {
+                try proof.validate(storage)
             }
-            guard owner.matches(storage.home) else { throw Failure.settings }
+            guard try storage.loadFile() == nil, owner.matches(storage.home) else { throw Failure.settings }
         }
 
         func finish() {
             let config = storage.home.appendingPathComponent("config.toml")
-            do {
+            func ownsEmptyRecovery() throws -> Bool {
                 guard (try? String(contentsOf: config, encoding: .utf8)) == AuthStorage$Codex.recoveryConfiguration,
-                      try storage.loadFile() == nil,
-                      storage.keyringStatus() == errSecItemNotFound,
-                      owner.matches(storage.home) else { return }
-                // Remove only our configuration and an empty directory. A new
-                // file login must survive even if it appears during cleanup.
-                guard unlink(config.path) == 0 else { return }
-                _ = rmdir(storage.home.path)
+                      try storage.loadFile() == nil else { return false }
+                return owner.matches(storage.home)
+            }
+            do {
+                try AuthStorage$Codex.withKeychainAccess {
+                    guard try ownsEmptyRecovery(), storage.keyringStatus() == errSecItemNotFound,
+                          try ownsEmptyRecovery(), storage.keyringStatus() == errSecItemNotFound,
+                          try ownsEmptyRecovery() else { return }
+                    // Remove only our configuration and an empty directory.
+                    guard unlink(config.path) == 0 else { return }
+                    _ = rmdir(storage.home.path)
+                }
             } catch { return }
         }
 
@@ -49,33 +77,37 @@ struct AuthStorage$Codex {
         mutating func restore(retainsOriginalFile: Bool) -> Bool {
             // No item was reserved for an auto file fallback. A later Keychain
             // login in recovery is independent and must never be moved back.
-            if verifiesRecord && record == nil {
+            if case .readable(nil) = proof {
                 do { try validate() } catch { return false }
                 finish()
                 return true
             }
             do { self = try preservingSnapshot() } catch { return false }
-            guard owner.matches(storage.home) else { return false }
-            // Keep the snapshot discoverable before any rollback refusal. The
-            // native add is exclusive and preserves a later reserved login too.
-            if storage.keyringStatus() != errSecSuccess, let record {
-                var item = storage.query
-                item[kSecValueData as String] = record.data
-                let status = AuthStorage$Claude.access(interactive: false) { SecItemAdd(item as CFDictionary, nil) }
-                guard status == errSecSuccess || status == errSecDuplicateItem else { return false }
+            func validateOriginalFile(_ original: AuthStorage$Codex, _ originalFile: Data?) throws {
+                var info = stat()
+                if lstat(original.file.path, &info) == 0 {
+                    guard retainsOriginalFile, try Data(contentsOf: original.file) == originalFile else {
+                        throw Failure.settings
+                    }
+                } else if errno != ENOENT { throw Failure.settings }
             }
-            var info = stat()
-            if lstat(original.file.path, &info) == 0 {
-                guard retainsOriginalFile, let current = try? Data(contentsOf: original.file),
-                      current == originalFile else { return false }
-            } else if errno != ENOENT { return false }
-            // File admission can block while the reserved namespace receives
-            // another login. Keep that login and restore our own snapshot.
-            do { self = try preservingSnapshot() } catch { return false }
-            let status = AuthStorage$Claude.access(interactive: false) {
-                guard owner.matches(storage.home) else { return errSecInteractionNotAllowed }
-                return SecItemUpdate(storage.query as CFDictionary,
-                                     [kSecAttrAccount as String: original.account] as CFDictionary)
+            let status: OSStatus
+            do {
+                try validateOriginalFile(original, originalFile)
+                self = try preservingSnapshot()
+                status = try AuthStorage$Codex.withKeychainAccess {
+                    // Keep our original snapshot if another login claimed recovery
+                    // while waiting for the Keychain gate.
+                    self = try preservingSnapshot()
+                    try validateOriginalFile(original, originalFile)
+                    try validate()
+                    return SecItemUpdate(storage.query as CFDictionary,
+                                         [kSecAttrAccount as String: original.account] as CFDictionary)
+                }
+            } catch {
+                // A readable snapshot remains recoverable after a refused move.
+                if let retained = try? preservingSnapshot() { self = retained }
+                return false
             }
             guard status == errSecSuccess || status == errSecItemNotFound else { return false }
             finish()
@@ -85,14 +117,10 @@ struct AuthStorage$Codex {
         /// A replacement owns its recovery namespace. Keep the captured login
         /// separately before a rollback can refuse or move any Keychain item.
         private func preservingSnapshot() throws -> Self {
-            guard verifiesRecord, let record else { return self }
+            guard case .readable(let record?) = proof else { try validate(); return self }
             do {
-                if try storage.loadFile() == nil {
-                    if let current = try storage.loadKeyring(),
-                       AuthStorage$Codex.sameCredentials(current.data, record.data),
-                       owner.matches(storage.home) { return self }
-                    if storage.keyringStatus() == errSecItemNotFound, owner.matches(storage.home) { return self }
-                }
+                try validate()
+                return self
             } catch { /* An unavailable owner does not authorize moving its item. */ }
             // A public recovery can be claimed by CLI during preparation.
             // Retry a fresh namespace without changing that login's config.
@@ -111,15 +139,18 @@ struct AuthStorage$Codex {
                 } catch let error as CocoaError where error.code == .fileWriteFileExists { continue }
                 var item = destination.query
                 item[kSecValueData as String] = record.data
-                let status = AuthStorage$Claude.access(interactive: false) {
-                    guard destinationOwner.matches(destination.home),
-                          AuthStorage$Codex.canonicalPath(home) == destination.home.path else { return errSecInteractionNotAllowed }
+                let status = try AuthStorage$Codex.withKeychainAccess {
+                    guard try destination.loadFile() == nil,
+                          (try? String(contentsOf: destination.home.appendingPathComponent("config.toml"), encoding: .utf8))
+                            == AuthStorage$Codex.recoveryConfiguration,
+                          destinationOwner.matches(destination.home),
+                          AuthStorage$Codex.canonicalPath(home) == destination.home.path else { return errSecDuplicateItem }
                     return SecItemAdd(item as CFDictionary, nil)
                 }
                 if status == errSecDuplicateItem { continue }
                 guard status == errSecSuccess else { throw Failure.keychain(status) }
                 return Self(original: original, originalFile: originalFile, storage: destination,
-                            owner: destinationOwner, record: record, verifiesRecord: true)
+                            owner: destinationOwner, proof: .readable(record))
             }
             throw Failure.settings
         }
@@ -164,7 +195,7 @@ struct AuthStorage$Codex {
                     })
                 // An unreadable secret cannot be reconstructed. All admission
                 // checks precede its deletion; successful deletion commits it.
-                if keyring?.verifiesRecord != false { try validate(.removed) }
+                if keyring?.proof.isOpaque != true { try validate(.removed) }
             } catch {
                 if removedFile, let file, DirectoryIdentity.capture(location)?.isSameDirectory(as: owner) == true {
                     try original.restoreFile(file, at: location.appendingPathComponent("auth.json"))
@@ -318,18 +349,15 @@ struct AuthStorage$Codex {
             try mutationValidation?()
             return Removal(original: self, owner: profileOwner, file: originalFile, keyring: nil)
         }
-        var record: Record?
-        var verifiesRecord = false
-        do { record = try loadKeyring(); verifiesRecord = true }
-        catch { /* Explicit namespace removal does not require secret-read access. */ }
+        let sourceProof = try captureKeyringProof()
         let recovery = ProfileDirectories.codexRoot
             .appendingPathComponent("recovered-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
         let storage = try AuthStorage$Codex(home: recovery, mode: .keyring)
         guard let owner = DirectoryIdentity.capture(storage.home) else { throw Failure.settings }
-        let keyring = RemovalKeyring(original: self, originalFile: originalFile, storage: storage, owner: owner,
-                                     record: record, verifiesRecord: verifiesRecord)
+        var keyring = RemovalKeyring(original: self, originalFile: originalFile, storage: storage, owner: owner,
+                                     proof: sourceProof)
         do {
             // A CLI login may claim the public directory during preparation.
             // Never replace its configuration, even when reservation refuses.
@@ -342,22 +370,30 @@ struct AuthStorage$Codex {
             // Recovery preparation can block while CLI replaces the login.
             // Reserve only the credentials authorized by the removal caller.
             try mutationValidation?()
-            let status = AuthStorage$Claude.access(interactive: false) {
+            try Self.withKeychainAccess {
                 // The interaction gate can block after preparation. Native
                 // rename is exclusive for Keychain; also preserve file logins.
+                try mutationValidation?()
+                try sourceProof.validate(self)
                 guard (try? String(contentsOf: config, encoding: .utf8)) == Self.recoveryConfiguration,
-                      (try? storage.loadFile() == nil) == true,
+                      try storage.loadFile() == nil, profileOwner.matches(home),
                       owner.matches(storage.home), Self.canonicalPath(recovery) == storage.home.path else {
-                    return errSecInteractionNotAllowed
+                    throw Failure.settings
                 }
-                return SecItemUpdate(query as CFDictionary,
-                                     [kSecAttrAccount as String: storage.account] as CFDictionary)
-            }
-            guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.keychain(status) }
-            // An auto file owner has no item to move. A missing source must
-            // not authorize adopting a new login in the reserved namespace.
-            if status == errSecItemNotFound {
-                guard storage.keyringStatus() == errSecItemNotFound else { throw Failure.settings }
+                let status = SecItemUpdate(query as CFDictionary,
+                                           [kSecAttrAccount as String: storage.account] as CFDictionary)
+                if status == errSecItemNotFound, case .readable(nil) = sourceProof {
+                    // A missing source cannot adopt a login in the destination.
+                    guard storage.keyringStatus() == errSecItemNotFound else { throw Failure.settings }
+                    return
+                }
+                guard status == errSecSuccess else { throw Failure.keychain(status) }
+                if sourceProof.isOpaque {
+                    // Moving a classic item changes its metadata. Pin its new
+                    // revision in the reserved namespace without reading its secret.
+                    guard let revision = try storage.keyringRevision() else { throw Failure.settings }
+                    keyring.proof = .opaque(revision)
+                }
             }
             return Removal(original: self, owner: profileOwner, file: originalFile, keyring: keyring)
         } catch {
@@ -381,10 +417,7 @@ struct AuthStorage$Codex {
             return
         }
         let destination = keyring ?? self
-        var record: Record?
-        var verifiesRecord = false
-        do { record = try destination.loadKeyring(); verifiesRecord = true }
-        catch { /* Preserve explicit removal of an unreadable namespace. */ }
+        let proof = try destination.captureKeyringProof()
         let shared = AuthSwap$Codex.fileIsShared(home: home, fileHome: file.deletingLastPathComponent())
         let backup = !shared && FileManager.default.fileExists(atPath: file.path) ? try Data(contentsOf: file) : nil
         if !shared {
@@ -397,14 +430,11 @@ struct AuthStorage$Codex {
         }
         do {
             if backup == nil { try validate() }
-            else {
-                try afterFileRemoval?()
-                // The file unlink can block while another client logs in.
-                if verifiesRecord,
-                   !Self.sameCredentials(try destination.loadKeyring()?.data, record?.data) { throw Failure.settings }
-            }
-            let status = AuthStorage$Claude.access(interactive: false) {
-                SecItemDelete((keyring?.query ?? query) as CFDictionary)
+            let status = try Self.withKeychainAccess {
+                if backup == nil { try validate() }
+                else { try afterFileRemoval?() }
+                try proof.validate(destination)
+                return SecItemDelete(destination.query as CFDictionary)
             }
             guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.keychain(status) }
         } catch {
@@ -480,6 +510,36 @@ struct AuthStorage$Codex {
         request[kSecReturnAttributes as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
         return AuthStorage$Claude.access(interactive: false) { SecItemCopyMatching(request as CFDictionary, nil) }
+    }
+
+    private static func withKeychainAccess<T>(_ operation: () throws -> T) throws -> T {
+        try AuthStorage$Claude.access(interactive: false, unavailable: {
+            throw Failure.keychain(errSecInteractionNotAllowed)
+        }, operation)
+    }
+
+    private func captureKeyringProof() throws -> KeyringProof {
+        do { return .readable(try loadKeyring()) }
+        catch {
+            // Legacy ACLs can deny the payload while exposing item metadata.
+            guard let revision = try keyringRevision() else { return .readable(nil) }
+            return .opaque(revision)
+        }
+    }
+
+    private func keyringRevision() throws -> KeyringRevision? {
+        var request = query
+        request[kSecReturnAttributes as String] = true
+        request[kSecReturnPersistentRef as String] = true
+        request[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = AuthStorage$Claude.access(interactive: false) { SecItemCopyMatching(request as CFDictionary, &result) }
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw Failure.keychain(status) }
+        guard let attributes = result as? [String: Any],
+              let reference = attributes[kSecValuePersistentRef as String] as? Data,
+              let modified = attributes[kSecAttrModificationDate as String] as? Date else { throw Failure.settings }
+        return KeyringRevision(reference: reference, modified: modified)
     }
 
     private func saveFile(_ data: Data, validating: (() throws -> Void)? = nil) throws {
