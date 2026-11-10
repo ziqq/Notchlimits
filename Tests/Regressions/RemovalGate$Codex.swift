@@ -16,6 +16,7 @@ private enum RemovalSignals {
     static func run(_ args: [String]) throws {
         let mode = args[0], opaque = args[1] == "opaque", phase = args[2]
         let stable = args[3] == "stable"
+        let sameSecond = args[3] == "same-second"
         Fixture.keychainExists = false
         let home = ProfileDirectories.codexRoot.appendingPathComponent("original")
         let id = "codex:original"
@@ -33,12 +34,26 @@ private enum RemovalSignals {
         Fixture.denyCodexDelete = phase == "rollback-gate"
         var rollbackReads = 0, attempted = false
         var reached = false, deleteReached = false, deletedReplacement = false, missingAfterDelete = 0
+        var unchangedMetadata = false, changedDatabase = false
         var replacement: Data?, config: Data?, recovery: URL?, target: URL?
         func inject(_ url: URL, _ backend: String) {
             guard !reached else { return }
             reached = true
             if !stable {
+                let key = Fixture.codexKey(url)
+                let modified = Fixture.codexModified[key]
+                let database = sameSecond ? try! Fixture.classicKeychainDatabase() : nil
+                var before = stat(), after = stat()
+                if let database { precondition(lstat(database.path, &before) == 0) }
                 try! Cleanup$Authentication.login(url, name: "independent-login", mode: backend)
+                if let database {
+                    // Model an in-place item write in the same wall-clock second.
+                    // The persistent reference is fixed by account in the shim.
+                    precondition(modified != nil && lstat(database.path, &after) == 0)
+                    Fixture.codexModified[key] = modified
+                    unchangedMetadata = Fixture.codexModified[key] == modified
+                    changedDatabase = before.st_ino != after.st_ino
+                }
                 replacement = try! Cleanup$Authentication.bytes(url, mode: backend)!
                 config = try! Data(contentsOf: url.appendingPathComponent("config.toml"))
                 target = url
@@ -53,6 +68,12 @@ private enum RemovalSignals {
             if let recovery, key == Fixture.codexKey(recovery) { attempted = true }
         }
         RemovalSignals.present = { key in
+            if phase == "source-gate", opaque, recovery != nil, key == originalKey, !reached {
+                inject(home, mode)
+            }
+            if phase == "post-reservation", let recovery, key == Fixture.codexKey(recovery), !reached {
+                inject(recovery, "keyring")
+            }
             if phase == "rollback-gate", opaque, attempted, let recovery, key == Fixture.codexKey(recovery), !reached {
                 RemovalSignals.gate = { inject(recovery, "keyring") }
             }
@@ -100,6 +121,7 @@ private enum RemovalSignals {
         let currentConfig = target.flatMap { try? Data(contentsOf: $0.appendingPathComponent("config.toml")) }
         print("mode=\(mode) opaque=\(opaque) phase=\(phase) stable=\(stable) reached=\(reached) success=\(success) deleteReached=\(deleteReached) deletedReplacement=\(deletedReplacement) originalVisible=\(visible.contains(original)) replacementVisible=\(replacement.map { visible.contains($0) } ?? false) sameLogin=\(current == replacement) sourceOwnsReplacement=\(replacement != nil && Fixture.codexKeychain[originalKey] == replacement) recoveryOwnsReplacement=\(replacement != nil && recovery.flatMap { Fixture.codexKeychain[Fixture.codexKey($0)] } == replacement) sameConfig=\(currentConfig == config) metadataMissesAfterDelete=\(missingAfterDelete)")
         try expect(reached, "specified boundary not reached")
+        if sameSecond { try expect(unchangedMetadata && changedDatabase, "fixture did not isolate the database revision") }
         try expect(try Cleanup$Authentication.bytes(AuthSwap$Codex.baseHome, mode: "file") == native, "native login changed")
         if stable && phase == "rollback-gate" {
             try expect(attempted && !success && visible.contains(original), "ordinary rollback lost original login")

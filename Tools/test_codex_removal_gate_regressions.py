@@ -77,7 +77,12 @@ for mode in ("auto", "keyring"):
             replacements = ("stable", "replacement", "keyring") if phase == "finish" else ("stable", "replacement")
             for replacement in replacements:
                 scenarios.append(f"{mode}:{visibility}:{phase}:{replacement}")
-assert len(scenarios) == len(set(scenarios)) == 32
+for mode in ("auto", "keyring"):
+    scenarios.append(f"{mode}:opaque:source-gate:stable")
+    scenarios.append(f"{mode}:opaque:post-reservation:stable")
+    for phase in ("source-gate", "post-reservation", "delete-gate", "rollback-gate"):
+        scenarios.append(f"{mode}:opaque:{phase}:same-second")
+assert len(scenarios) == len(set(scenarios)) == 44
 for scenario in scenarios:
     setattr(CodexRemovalGateRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"),
             scenario_test(scenario))
