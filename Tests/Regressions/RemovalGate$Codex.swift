@@ -31,11 +31,16 @@ private enum RemovalSignals {
         store.setCustomName("Original name", for: id)
         store.setHidden(id, hidden: true)
         Fixture.denyCodexRead = opaque
-        Fixture.denyCodexDelete = phase == "rollback-gate"
-        var rollbackReads = 0, attempted = false
+        let isRollback = phase == "rollback-gate" || phase == "rollback-late"
+        Fixture.denyCodexDelete = isRollback
+        var rollbackReads = 0, originalAbsenceReads = 0, attempted = false
         var reached = false, deleteReached = false, deletedReplacement = false, missingAfterDelete = 0
         var unchangedMetadata = false, changedDatabase = false
-        var replacement: Data?, config: Data?, recovery: URL?, target: URL?
+        var replacement: Data?, config: Data?, recovery: URL?, target: URL?, readded: Data?
+        func publishFileFallback(_ url: URL, account: String) throws {
+            try Fixture.writeAuth(url, account: account, refresh: "independent", expired: false)
+            try Fixture.codexMode(url, "auto")
+        }
         func inject(_ url: URL, _ backend: String) {
             guard !reached else { return }
             reached = true
@@ -45,7 +50,12 @@ private enum RemovalSignals {
                 let database = sameSecond ? try! Fixture.classicKeychainDatabase() : nil
                 var before = stat(), after = stat()
                 if let database { precondition(lstat(database.path, &before) == 0) }
-                try! Cleanup$Authentication.login(url, name: "independent-login", mode: backend)
+                if backend == "auto-file" {
+                    // A file fallback does not commit any change to Keychain.
+                    try! publishFileFallback(url, account: "independent-login")
+                } else {
+                    try! Cleanup$Authentication.login(url, name: "independent-login", mode: backend)
+                }
                 if let database {
                     // Model an in-place item write in the same wall-clock second.
                     // The persistent reference is fixed by account in the shim.
@@ -57,6 +67,10 @@ private enum RemovalSignals {
                 replacement = try! Cleanup$Authentication.bytes(url, mode: backend)!
                 config = try! Data(contentsOf: url.appendingPathComponent("config.toml"))
                 target = url
+                if args[3] == "also-readded" {
+                    try! publishFileFallback(home, account: "readded-original")
+                    readded = try! Cleanup$Authentication.bytes(home, mode: "auto-file")
+                }
             }
         }
         RemovalSignals.created = { url in
@@ -67,7 +81,21 @@ private enum RemovalSignals {
         RemovalSignals.attempting = { key in
             if let recovery, key == Fixture.codexKey(recovery) { attempted = true }
         }
+        func checkLateRollback(_ key: String) {
+            guard phase == "rollback-late", attempted, !reached,
+                  let recovery, key == Fixture.codexKey(recovery) else { return }
+            rollbackReads += 1
+            if rollbackReads == 4 { inject(home, "auto-file") }
+        }
         RemovalSignals.present = { key in
+            if opaque { checkLateRollback(key) }
+            if phase == "post-file", !reached, let recovery, key == Fixture.codexKey(recovery) {
+                inject(recovery, "file")
+            }
+            if phase == "delete-late", originalAbsenceReads == 2, !reached,
+               let recovery, key == Fixture.codexKey(recovery) {
+                inject(recovery, "file")
+            }
             if phase == "source-gate", opaque, recovery != nil, key == originalKey, !reached {
                 inject(home, mode)
             }
@@ -79,6 +107,11 @@ private enum RemovalSignals {
             }
         }
         RemovalSignals.reading = { key in
+            if !opaque { checkLateRollback(key) }
+            if phase == "delete-late", originalAbsenceReads == 2, !reached,
+               let recovery, key == Fixture.codexKey(recovery) {
+                inject(recovery, "file")
+            }
             if phase == "rollback-gate", !opaque, attempted, let recovery, key == Fixture.codexKey(recovery), !reached {
                 rollbackReads += 1
                 if rollbackReads == 2 { RemovalSignals.gate = { inject(recovery, "keyring") } }
@@ -89,12 +122,19 @@ private enum RemovalSignals {
         }
         RemovalSignals.missing = { key in
             guard let recovery else { return }
+            if phase == "delete-late", RemovalSignals.staged, key == originalKey, !deleteReached {
+                originalAbsenceReads += 1
+            }
             if phase == "delete-gate", RemovalSignals.staged, key == originalKey, !deleteReached, !reached {
                 RemovalSignals.gate = { inject(recovery, "keyring") }
             }
-            if phase == "finish", deleteReached, key == Fixture.codexKey(recovery) {
+            if (phase == "finish" || phase == "finish-last-read"), deleteReached, key == Fixture.codexKey(recovery) {
                 missingAfterDelete += 1
-                if missingAfterDelete == (opaque ? 1 : 2) { inject(recovery, args[3] == "keyring" ? "keyring" : "file") }
+                let earlyRead = opaque ? 1 : 2
+                let trigger = phase == "finish-last-read" ? earlyRead + 1 : earlyRead
+                if missingAfterDelete == trigger {
+                    inject(recovery, phase == "finish-last-read" || args[3] == "keyring" ? "keyring" : "file")
+                }
             }
         }
         RemovalSignals.deleted = { key, bytes in
@@ -123,7 +163,7 @@ private enum RemovalSignals {
         try expect(reached, "specified boundary not reached")
         if sameSecond { try expect(unchangedMetadata && changedDatabase, "fixture did not isolate the database revision") }
         try expect(try Cleanup$Authentication.bytes(AuthSwap$Codex.baseHome, mode: "file") == native, "native login changed")
-        if stable && phase == "rollback-gate" {
+        if stable && isRollback {
             try expect(attempted && !success && visible.contains(original), "ordinary rollback lost original login")
             try expect(store.customNames[id] == "Original name" && store.hidden.contains(id), "ordinary rollback lost preferences")
         } else if stable {
@@ -133,14 +173,21 @@ private enum RemovalSignals {
             try expect(replacement != nil && current == replacement && visible.contains(replacement!),
                        "replacement login disappeared from its own profile")
             try expect(currentConfig == config, "cleanup removed replacement config.toml")
-            if phase == "finish" {
+            if phase == "finish" || phase == "finish-last-read" {
                 try expect(success && !visible.contains(original), "late cleanup undid the committed removal")
             } else {
                 try expect(!success, "removal accepted a changed owner")
+                if phase == "delete-late" {
+                    try expect(!deleteReached, "owner conflict reached native secret deletion")
+                }
                 try expect(store.customNames[id] == "Original name" && store.hidden.contains(id),
                            "a refused removal retired the original preferences")
-                if !opaque && phase != "source-gate" {
-                    try expect(visible.contains(original), "rollback lost the readable original snapshot")
+                if (!opaque && phase != "source-gate") || phase == "post-file" || phase == "delete-late" || phase == "rollback-late" {
+                    try expect(visible.contains(original), "refused removal hid the original login")
+                }
+                if let readded {
+                    try expect(try AuthSwap$Codex.authData(home: home) == readded,
+                               "salvage replaced the independently re-added original profile")
                 }
             }
         }
