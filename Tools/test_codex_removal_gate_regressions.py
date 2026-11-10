@@ -82,7 +82,15 @@ for mode in ("auto", "keyring"):
     scenarios.append(f"{mode}:opaque:post-reservation:stable")
     for phase in ("source-gate", "post-reservation", "delete-gate", "rollback-gate"):
         scenarios.append(f"{mode}:opaque:{phase}:same-second")
-assert len(scenarios) == len(set(scenarios)) == 44
+for mode in ("auto", "keyring"):
+    for phase, visibility in (("delete-late", "opaque"), ("post-file", "opaque"),
+                              ("finish-last-read", "opaque"), ("finish-last-read", "readable")):
+        scenarios.extend(f"{mode}:{visibility}:{phase}:{state}" for state in ("stable", "replacement"))
+    scenarios.append(f"{mode}:readable:delete-late:replacement")
+    scenarios.append(f"{mode}:opaque:post-file:also-readded")
+for visibility in ("readable", "opaque"):
+    scenarios.extend(f"auto:{visibility}:rollback-late:{state}" for state in ("stable", "replacement"))
+assert len(scenarios) == len(set(scenarios)) == 68
 for scenario in scenarios:
     setattr(CodexRemovalGateRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"),
             scenario_test(scenario))

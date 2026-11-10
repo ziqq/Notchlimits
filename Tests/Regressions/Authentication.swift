@@ -594,6 +594,12 @@ func SecKeychainItemCopyKeychain(_ item: SecKeychainItem, _ keychain: UnsafeMuta
     return errSecSuccess
 }
 
+func SecKeychainCopySearchList(_ result: UnsafeMutablePointer<CFArray?>) -> OSStatus {
+    let keychain = unsafeBitCast("fixture-keychain" as CFString, to: SecKeychain.self)
+    result.pointee = [keychain] as CFArray
+    return errSecSuccess
+}
+
 func SecKeychainGetPath(_ keychain: SecKeychain?, _ length: UnsafeMutablePointer<UInt32>,
                         _ path: UnsafeMutablePointer<CChar>) -> OSStatus {
     guard let database = try? Fixture.classicKeychainDatabase() else { return errSecNoSuchKeychain }

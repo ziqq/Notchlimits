@@ -183,6 +183,7 @@ enum AccountRemoval {
                     let keyring = removal.keyring
                     var retainsOriginalFile = true
                     do {
+                        try keyring?.validateFiles()
                         try withProfileDirectory(managed ? directory : nil, root: root, expectedOwner: account.codexHomeOwner,
                                                  rollbackFile: { retainsOriginalFile = $0 },
                                                  restoredFileOwner: AuthSwap$Codex.recordRestoredFileOwner) { directory in
