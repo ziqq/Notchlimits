@@ -19,14 +19,27 @@ private enum Fixture {
     static var keychainWrites = 0
     static var codexKeychain: [String: Data] = [:] {
         didSet {
+            let previousRevision = codexRevision
             for key in Set(oldValue.keys).union(codexKeychain.keys) where oldValue[key] != codexKeychain[key] {
                 codexRevision += 1
                 codexModified[key] = codexKeychain[key].map { _ in Date(timeIntervalSince1970: codexRevision) }
+            }
+            if previousRevision != codexRevision, let codexDatabase {
+                // Classic Keychain commits replace the physical database.
+                try! Data().write(to: codexDatabase, options: .atomic)
             }
         }
     }
     private static var codexRevision: TimeInterval = 0
     static var codexModified: [String: Date] = [:]
+    private(set) static var codexDatabase: URL?
+    static func classicKeychainDatabase() throws -> URL {
+        if let codexDatabase { return codexDatabase }
+        let path = root.appendingPathComponent("fixture-classic.keychain-db")
+        try Data().write(to: path, options: .withoutOverwriting)
+        codexDatabase = path
+        return path
+    }
     static var denyCodexRead = false
     static var failDefaultsSynchronization = false
     static var denyClaudeMetadata = false
@@ -566,6 +579,31 @@ func CFPreferencesCopyAppValue(_ key: CFString, _ applicationID: CFString) -> CF
 
 // Swift resolves these local declarations before the imported Security functions.
 // No test reads or writes the user's Keychain.
+func SecKeychainItemCopyFromPersistentReference(_ reference: CFData,
+                                                _ item: UnsafeMutablePointer<SecKeychainItem?>) -> OSStatus {
+    guard let key = String(data: reference as Data, encoding: .utf8), Fixture.codexKeychain[key] != nil else {
+        return errSecItemNotFound
+    }
+    // Opaque handles pass only between these Security shims.
+    item.pointee = unsafeBitCast("fixture-item" as CFString, to: SecKeychainItem.self)
+    return errSecSuccess
+}
+
+func SecKeychainItemCopyKeychain(_ item: SecKeychainItem, _ keychain: UnsafeMutablePointer<SecKeychain?>) -> OSStatus {
+    keychain.pointee = unsafeBitCast("fixture-keychain" as CFString, to: SecKeychain.self)
+    return errSecSuccess
+}
+
+func SecKeychainGetPath(_ keychain: SecKeychain?, _ length: UnsafeMutablePointer<UInt32>,
+                        _ path: UnsafeMutablePointer<CChar>) -> OSStatus {
+    guard let database = try? Fixture.classicKeychainDatabase() else { return errSecNoSuchKeychain }
+    let bytes = Array(database.path.utf8CString)
+    guard bytes.count <= length.pointee else { return errSecParam }
+    for (index, byte) in bytes.enumerated() { path[index] = byte }
+    length.pointee = UInt32(bytes.count - 1)
+    return errSecSuccess
+}
+
 func SecItemCopyMatching(_ query: CFDictionary, _ result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus {
     Fixture.lock.lock()
     defer { Fixture.lock.unlock() }

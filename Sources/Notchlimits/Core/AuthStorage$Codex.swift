@@ -11,9 +11,49 @@ struct AuthStorage$Codex {
     enum Backend { case file, keyring }
     struct Record { let data: Data; let backend: Backend }
 
+    /// Classic Keychain item dates have only second precision. The owning
+    /// database changes even when a native write leaves item metadata equal.
+    fileprivate struct KeyringDatabaseRevision: Equatable {
+        let path: String
+        private let generation: [Int64]
+        private let handle: FileHandle
+
+        init(path: String) throws {
+            let descriptor = open(path, O_EVTONLY | O_NOFOLLOW | O_CLOEXEC)
+            guard descriptor >= 0 else { throw Failure.settings }
+            let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+            var info = stat()
+            guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { throw Failure.settings }
+            self.path = path
+            self.generation = Self.generation(info)
+            self.handle = handle
+            guard isCurrent else { throw Failure.settings }
+        }
+
+        private static func generation(_ info: stat) -> [Int64] {
+            [Int64(info.st_dev), Int64(bitPattern: UInt64(info.st_ino)), Int64(info.st_size),
+             Int64(info.st_mtimespec.tv_sec), Int64(info.st_mtimespec.tv_nsec),
+             Int64(info.st_ctimespec.tv_sec), Int64(info.st_ctimespec.tv_nsec)]
+        }
+
+        var isCurrent: Bool {
+            // Retaining the descriptor prevents reuse of the captured inode.
+            withExtendedLifetime(handle) {
+                var info = stat()
+                return lstat(path, &info) == 0 && info.st_mode & S_IFMT == S_IFREG
+                    && Self.generation(info) == generation
+            }
+        }
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.path == rhs.path && lhs.generation == rhs.generation
+        }
+    }
+
     fileprivate struct KeyringRevision: Equatable {
         let reference: Data
         let modified: Date
+        let database: KeyringDatabaseRevision
     }
 
     fileprivate enum KeyringProof {
@@ -32,8 +72,13 @@ struct AuthStorage$Codex {
                     throw Failure.settings
                 }
             case .opaque(let revision):
-                guard try storage.keyringRevision() == revision else { throw Failure.settings }
+                guard revision.database.isCurrent, try storage.keyringRevision() == revision,
+                      revision.database.isCurrent else { throw Failure.settings }
             }
+        }
+
+        func validateDatabase() throws {
+            if case .opaque(let revision) = self, !revision.database.isCurrent { throw Failure.settings }
         }
     }
 
@@ -51,6 +96,7 @@ struct AuthStorage$Codex {
                 try proof.validate(storage)
             }
             guard try storage.loadFile() == nil, owner.matches(storage.home) else { throw Failure.settings }
+            if !removed { try proof.validateDatabase() }
         }
 
         func finish() {
@@ -185,6 +231,7 @@ struct AuthStorage$Codex {
                       shared || AuthStorage$Codex.sameCredentials(data, phase == .staged ? file : nil),
                       DirectoryIdentity.capture(location)?.isSameDirectory(as: owner) == true,
                       AuthStorage$Codex.canonicalPath(location) == current.home.path else { throw Failure.settings }
+                if phase != .removed { try keyring?.proof.validateDatabase() }
             }
             var removedFile = false
             do {
@@ -380,6 +427,7 @@ struct AuthStorage$Codex {
                       owner.matches(storage.home), Self.canonicalPath(recovery) == storage.home.path else {
                     throw Failure.settings
                 }
+                try sourceProof.validateDatabase()
                 let status = SecItemUpdate(query as CFDictionary,
                                            [kSecAttrAccount as String: storage.account] as CFDictionary)
                 if status == errSecItemNotFound, case .readable(nil) = sourceProof {
@@ -388,10 +436,12 @@ struct AuthStorage$Codex {
                     return
                 }
                 guard status == errSecSuccess else { throw Failure.keychain(status) }
-                if sourceProof.isOpaque {
-                    // Moving a classic item changes its metadata. Pin its new
-                    // revision in the reserved namespace without reading its secret.
-                    guard let revision = try storage.keyringRevision() else { throw Failure.settings }
+                if case .opaque(let originalRevision) = sourceProof {
+                    // The move changes the database. Capture that generation
+                    // before resolving the reserved item's new reference.
+                    let database = try KeyringDatabaseRevision(path: originalRevision.database.path)
+                    guard let revision = try storage.keyringRevision(),
+                          revision.database == database, database.isCurrent else { throw Failure.settings }
                     keyring.proof = .opaque(revision)
                 }
             }
@@ -532,14 +582,32 @@ struct AuthStorage$Codex {
         request[kSecReturnAttributes as String] = true
         request[kSecReturnPersistentRef as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        let status = AuthStorage$Claude.access(interactive: false) { SecItemCopyMatching(request as CFDictionary, &result) }
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess else { throw Failure.keychain(status) }
-        guard let attributes = result as? [String: Any],
-              let reference = attributes[kSecValuePersistentRef as String] as? Data,
-              let modified = attributes[kSecAttrModificationDate as String] as? Date else { throw Failure.settings }
-        return KeyringRevision(reference: reference, modified: modified)
+        return try Self.withKeychainAccess {
+            var result: CFTypeRef?
+            let status = SecItemCopyMatching(request as CFDictionary, &result)
+            if status == errSecItemNotFound { return nil }
+            guard status == errSecSuccess else { throw Failure.keychain(status) }
+            guard let attributes = result as? [String: Any],
+                  let reference = attributes[kSecValuePersistentRef as String] as? Data,
+                  let modified = attributes[kSecAttrModificationDate as String] as? Date else { throw Failure.settings }
+            return KeyringRevision(reference: reference, modified: modified,
+                                   database: try Self.keyringDatabaseRevision(reference: reference))
+        }
+    }
+
+    private static func keyringDatabaseRevision(reference: Data) throws -> KeyringDatabaseRevision {
+        var item: SecKeychainItem?
+        var keychain: SecKeychain?
+        var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        var length = UInt32(path.count)
+        // Resolve the item itself: a custom classic Keychain can own it.
+        guard SecKeychainItemCopyFromPersistentReference(reference as CFData, &item) == errSecSuccess,
+              let item, SecKeychainItemCopyKeychain(item, &keychain) == errSecSuccess, let keychain,
+              SecKeychainGetPath(keychain, &length, &path) == errSecSuccess,
+              length > 0, length < path.count else { throw Failure.settings }
+        path[Int(length)] = 0
+        let physical = canonicalPath(URL(fileURLWithPath: String(cString: path)))
+        return try KeyringDatabaseRevision(path: physical)
     }
 
     private func saveFile(_ data: Data, validating: (() throws -> Void)? = nil) throws {
