@@ -43,10 +43,11 @@ extension AppAccountSwitcher {
     }
 }
 
-func appAccountSwitcher(for provider: Provider) -> any AppAccountSwitcher {
+func appAccountSwitcher(for provider: Provider) -> (any AppAccountSwitcher)? {
     switch provider {
     case .claude: return ClaudeAppSwitcher()
     case .codex: return CodexAppSwitcher()
+    case .kimi, .grok: return nil
     }
 }
 

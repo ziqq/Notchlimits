@@ -49,6 +49,11 @@ struct BottomRoundedRectangle: Shape {
 }
 
 enum Format {
+    static func iso8601(_ value: String) -> Date? {
+        (try? Date.ISO8601FormatStyle().parse(value))
+            ?? (try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(value))
+    }
+
     /// Время до сброса окна. Единицы сокращённые — так строка не зависит
     /// от правил множественного числа ни в одном из поддерживаемых языков.
     static func reset(_ date: Date, now: Date = Date()) -> String {

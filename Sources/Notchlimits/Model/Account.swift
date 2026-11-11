@@ -6,6 +6,8 @@ enum AccountSource: Equatable {
     case claudeKeychain(service: String, configDir: URL?)
     /// Папка CODEX_HOME с auth.json внутри.
     case codexHome(URL)
+    case kimiHome(URL)
+    case grokAuth(URL)
     /// Только для отладки макета.
     case mock(seed: Int)
 }
