@@ -132,7 +132,9 @@ enum DebugProbe {
 
         let providers: [Provider: UsageProvider] = [
             .claude: ClaudeProvider(),
-            .codex: CodexProvider()
+            .codex: CodexProvider(),
+            .kimi: KimiProvider(),
+            .grok: GrokProvider()
         ]
 
         let group = DispatchGroup()

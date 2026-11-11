@@ -6,7 +6,56 @@ import Foundation
 struct RealDiscovery: AccountDiscovery {
 
     func discover() -> [DiscoveredAccount] {
-        claudeAccounts() + codexAccounts()
+        claudeAccounts() + codexAccounts() + kimiAccounts() + grokAccounts()
+    }
+
+    private func kimiAccounts() -> [DiscoveredAccount] {
+        let home = ProfileDirectories.home
+        let primary = environmentPath("KIMI_CODE_HOME") ?? home.appendingPathComponent(".kimi-code")
+        let profiles = profileDirectories(home.appendingPathComponent(".kimi-code-profiles"))
+        return cliAccounts(provider: .kimi, primary: primary, profiles: profiles,
+                           source: AccountSource.kimiHome) { directory in
+            let credentials = directory.appendingPathComponent("credentials")
+            let entries = try? FileManager.default.contentsOfDirectory(atPath: credentials.path)
+            return entries?.contains { $0 == "kimi-code.json" || ($0.hasPrefix("kimi-code-") && $0.hasSuffix(".json")) } ?? false
+        }
+    }
+
+    private func grokAccounts() -> [DiscoveredAccount] {
+        let home = ProfileDirectories.home
+        let grokHome = environmentPath("GROK_HOME") ?? home.appendingPathComponent(".grok")
+        let primary = environmentPath("GROK_AUTH_PATH") ?? grokHome.appendingPathComponent("auth.json")
+        let profiles = profileDirectories(home.appendingPathComponent(".grok-profiles"))
+            .map { ($0.name, $0.url.appendingPathComponent("auth.json")) }
+        return cliAccounts(provider: .grok, primary: primary, profiles: profiles,
+                           source: AccountSource.grokAuth) { auth in
+            (try? auth.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+        }
+    }
+
+    private func cliAccounts(provider: Provider, primary: URL, profiles: [(name: String, url: URL)],
+                             source: (URL) -> AccountSource, exists: (URL) -> Bool) -> [DiscoveredAccount] {
+        var seen: Set<URL> = []
+        return ([(ProfileDirectories.primaryName, primary)] + profiles).compactMap { name, url in
+            let path = url.standardizedFileURL
+            guard exists(path), seen.insert(path.resolvingSymlinksInPath()).inserted else { return nil }
+            return DiscoveredAccount(id: "\(provider.rawValue):\(path.path)", provider: provider,
+                                     profileName: name, source: source(path))
+        }
+    }
+
+    private func environmentPath(_ key: String) -> URL? {
+        guard let path = ProcessInfo.processInfo.environment[key], path.hasPrefix("/") else { return nil }
+        return URL(fileURLWithPath: path)
+    }
+
+    private func profileDirectories(_ root: URL) -> [(name: String, url: URL)] {
+        let entries = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey],
+                                                                    options: .skipsHiddenFiles)
+        return (entries ?? [])
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .map { ($0.lastPathComponent, $0) }
     }
 
     private func claudeAccounts() -> [DiscoveredAccount] {

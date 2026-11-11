@@ -15,6 +15,8 @@
 "window.hours" = "Janela de %d h";
 "window.days" = "Janela de %d d";
 "window.generic" = "Janela de limite";
+"window.monthTotal" = "Total mensal";
+"window.monthCode" = "Mês · Code";
 "format.percent" = "%d%%";
 
 // Колонка

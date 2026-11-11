@@ -2,7 +2,7 @@
 
 **English** · [Русский](README.ru.md)
 
-A panel that slides out of the MacBook notch with **Claude Code** and **Codex** (OpenAI) rate limits. Native macOS app in Swift/SwiftUI, built with one script — no Xcode project.
+A panel that slides out of the MacBook notch with **Claude Code**, **Codex** (OpenAI), **Kimi Code** and **Grok Build** rate limits. Native macOS app in Swift/SwiftUI, built with one script — no Xcode project.
 
 ![Expanded panel](docs/panel.png)
 
@@ -10,7 +10,7 @@ A panel that slides out of the MacBook notch with **Claude Code** and **Codex** 
 
 ## Features
 
-- One column per account — every Claude and Codex profile at once.
+- One column per account across the supported CLI profiles.
 - Limit windows aren't hardcoded: whatever the API returns is drawn, including windows that didn't exist yesterday.
 - Lives in the notch — the collapsed panel matches the cutout pixel-for-pixel and stays invisible.
 - Works without a notch too (external display, Mac mini, iMac).
@@ -34,7 +34,25 @@ A panel that slides out of the MacBook notch with **Claude Code** and **Codex** 
 
 - macOS 13+
 - Swift 5.9+ (Xcode Command Line Tools)
-- `claude` and/or `codex` CLI, logged in
+- At least one supported CLI (`claude`, `codex`, `kimi` or `grok`), logged in
+
+### Kimi Code and Grok Build profiles
+
+Sign in with `kimi login` or `grok login`. Notchlimits detects the default CLI profiles and uses the CLI for each
+refresh. Kimi returns the quota windows for your plan. Grok returns the billing period and, when available, the
+percentage of included credits used. A billing period without a percentage is shown as a date.
+
+To monitor another existing profile, use a separate Kimi home or Grok auth file in one of these locations. Sign in
+there with the provider's CLI if you have not already done so:
+
+```bash
+KIMI_CODE_HOME="$HOME/.kimi-code-profiles/work" kimi login
+mkdir -p "$HOME/.grok-profiles/work"
+GROK_AUTH_PATH="$HOME/.grok-profiles/work/auth.json" grok login
+```
+
+These profiles are managed by their CLIs. Use Notchlimits to view or hide their columns. The Desktop account
+switching menu is available for Claude and Codex.
 
 ## Build & run
 
@@ -211,7 +229,7 @@ User-Agent: codex_cli_rs/<version>
 
 ## Privacy
 
-The app makes no automatic request beyond the usage endpoints and token renewal described above. Update checks are manual: Sparkle fetches the signed `appcast.xml` from GitHub on click, and downloads the update archive only after you choose **Install Update**. Automatic checks and system profiling are disabled by default. Archive signatures are verified before extraction. Tokens are never logged and never written to a plain file; the only thing written back is the refreshed Claude token, into the same Keychain entry the CLI already owns. The `claude` binary is never run (running it makes the CLI read its credentials via `/usr/bin/security`, popping a Keychain prompt) — its version for the User-Agent comes from the install path, and the account email from the CLI's `~/.claude.json`. Only `codex --version` is executed, and Codex keeps its auth in a file, not the Keychain. Only settings and last percentages (with reset times) go to `UserDefaults`, without a single token. Usage requests use an ephemeral `URLSession`, with no cookies or disk cache.
+The app makes no automatic request beyond the usage endpoints and token renewal described above. Update checks are manual: Sparkle fetches the signed `appcast.xml` from GitHub on click, and downloads the update archive only after you choose **Install Update**. Automatic checks and system profiling are disabled by default. Archive signatures are verified before extraction. Tokens are never logged and never written to a plain file; the only thing written back is the refreshed Claude token, into the same Keychain entry the CLI already owns. The `claude` binary is never run (running it makes the CLI read its credentials via `/usr/bin/security`, popping a Keychain prompt) — its version for the User-Agent comes from the install path, and the account email from the CLI's `~/.claude.json`. Codex keeps its auth in a file. Kimi and Grok handle usage requests and renew their own credentials in temporary CLI processes. Only settings and last percentages (with reset times) go to `UserDefaults`, without a single token. Usage requests use an ephemeral `URLSession`, with no cookies or disk cache.
 
 ## CI & releases
 

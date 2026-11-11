@@ -10,7 +10,7 @@ import Security
 /// (запись Keychain / `auth.json`), не задевая остальной конфиг CLI.
 enum AccountRemoval {
 
-    enum Failure: Error { case keychain(OSStatus) }
+    enum Failure: Error { case keychain(OSStatus), unsupported }
 
     /// Доп. профиль (папку создавали мы) или основной аккаунт CLI.
     static func isExtraProfile(_ account: DiscoveredAccount) -> Bool {
@@ -19,7 +19,7 @@ enum AccountRemoval {
             return configDir != nil
         case .codexHome(let url):
             return url.path.hasPrefix(ProfileDirectories.codexRoot.path + "/")
-        case .mock:
+        case .kimiHome, .grokAuth, .mock:
             return false
         }
     }
@@ -52,6 +52,8 @@ enum AccountRemoval {
                 }
             }
 
+        case .kimiHome, .grokAuth:
+            throw Failure.unsupported
         case .mock:
             break
         }
