@@ -174,8 +174,8 @@ struct AuthStorage$Codex {
             } catch { return }
         }
 
-        /// Moving an item back must not overwrite a login created during removal.
-        /// A refused restoration remains a normal, discoverable Keychain profile.
+        /// Restore into the original namespace only while it still uses the
+        /// captured storage mode. Otherwise keep a discoverable recovery.
         mutating func restore(retainsOriginalFile: Bool) -> Bool {
             // No item was reserved for an auto file fallback. A later Keychain
             // login in recovery is independent and must never be moved back.
@@ -204,6 +204,8 @@ struct AuthStorage$Codex {
                     let files = try RemovalFileProof([original.home, storage.home])
                     try validate()
                     try validateOriginalFile(original, originalFile)
+                    guard try AuthStorage$Codex.configuredMode(home: original.home) == original.mode,
+                          AuthStorage$Codex.canonicalPath(original.home) == original.home.path else { throw Failure.settings }
                     try files.validate()
                     try proof.validateDatabase()
                     return SecItemUpdate(storage.query as CFDictionary,
@@ -443,15 +445,14 @@ struct AuthStorage$Codex {
         let fallbackOwner = DirectoryIdentity.capture(home)
         let fallback = try? loadFile()
         do {
-            try validate()
-            var status = AuthStorage$Claude.access(interactive: false) {
-                SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-            }
-            if status == errSecItemNotFound {
+            let status = try Self.withKeychainAccess {
+                try validate()
+                let updated = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+                guard updated == errSecItemNotFound else { return updated }
                 var item = query
                 item[kSecValueData as String] = data
                 try validate()
-                status = AuthStorage$Claude.access(interactive: false) { SecItemAdd(item as CFDictionary, nil) }
+                return SecItemAdd(item as CFDictionary, nil)
             }
             guard status == errSecSuccess else { throw Failure.keychain(status) }
             if let fallback, let fallbackOwner,

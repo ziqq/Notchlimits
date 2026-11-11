@@ -90,7 +90,12 @@ for mode in ("auto", "keyring"):
     scenarios.append(f"{mode}:opaque:post-file:also-readded")
 for visibility in ("readable", "opaque"):
     scenarios.extend(f"auto:{visibility}:rollback-late:{state}" for state in ("stable", "replacement"))
-assert len(scenarios) == len(set(scenarios)) == 68
+for mode in ("auto", "keyring"):
+    for state in ("stable", "replacement"):
+        scenarios.append(f"{mode}:readable:save-keyring:{state}")
+        for visibility in ("readable", "opaque"):
+            scenarios.append(f"{mode}:{visibility}:rollback-mode:{state}")
+assert len(scenarios) == len(set(scenarios)) == 80
 for scenario in scenarios:
     setattr(CodexRemovalGateRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"),
             scenario_test(scenario))

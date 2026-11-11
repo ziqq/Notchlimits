@@ -24,6 +24,10 @@ private enum RemovalSignals {
         let native = try Cleanup$Authentication.bytes(AuthSwap$Codex.baseHome, mode: "file")!
         try Cleanup$Authentication.login(home, name: "original", mode: mode)
         let original = try Cleanup$Authentication.bytes(home, mode: mode)!
+        if phase == "save-keyring" {
+            try checkKeyringSave(home: home, mode: mode, original: original, stable: stable)
+            return
+        }
         let originalKey = Fixture.codexKey(home)
         let store = UsageStore(providers: [:], discovery: Discovery$Real())
         store.rediscover(force: true)
@@ -31,7 +35,7 @@ private enum RemovalSignals {
         store.setCustomName("Original name", for: id)
         store.setHidden(id, hidden: true)
         Fixture.denyCodexRead = opaque
-        let isRollback = phase == "rollback-gate" || phase == "rollback-late"
+        let isRollback = phase == "rollback-gate" || phase == "rollback-late" || phase == "rollback-mode"
         Fixture.denyCodexDelete = isRollback
         var rollbackReads = 0, originalAbsenceReads = 0, attempted = false
         var reached = false, deleteReached = false, deletedReplacement = false, missingAfterDelete = 0
@@ -80,6 +84,14 @@ private enum RemovalSignals {
         }
         RemovalSignals.attempting = { key in
             if let recovery, key == Fixture.codexKey(recovery) { attempted = true }
+        }
+        if phase == "rollback-mode" {
+            Fixture.beforeDirectoryMove = { from, to in
+                guard from.lastPathComponent.hasPrefix(".removed-"), to.path == home.path else { return }
+                reached = true
+                // A CLI profile can publish its mode before the new login finishes.
+                if !stable { try Fixture.codexMode(home, "file") }
+            }
         }
         func checkLateRollback(_ key: String) {
             guard phase == "rollback-late", attempted, !reached,
@@ -153,6 +165,7 @@ private enum RemovalSignals {
         RemovalSignals.reading = nil
         RemovalSignals.missing = nil
         RemovalSignals.deleted = nil
+        Fixture.beforeDirectoryMove = nil
         let visible = Discovery$Real().discover().filter { $0.provider == .codex }.compactMap { account -> Data? in
             guard case .codexHome(let directory) = account.source else { return nil }
             return try? AuthSwap$Codex.authData(columnID: account.id, home: directory)
@@ -166,6 +179,12 @@ private enum RemovalSignals {
         if stable && isRollback {
             try expect(attempted && !success && visible.contains(original), "ordinary rollback lost original login")
             try expect(store.customNames[id] == "Original name" && store.hidden.contains(id), "ordinary rollback lost preferences")
+        } else if phase == "rollback-mode" {
+            try expect(attempted && !success, "rollback did not follow a refused deletion")
+            try expect(try AuthStorage$Codex(home: home).mode == .file, "rollback overwrote the new storage mode")
+            try expect(visible.contains(original), "rollback hid the original login behind the new file mode")
+            try expect(Fixture.codexKeychain[originalKey] == nil, "rollback moved the secret to a file-only namespace")
+            try expect(store.customNames[id] == "Original name" && store.hidden.contains(id), "a refused removal retired the original preferences")
         } else if stable {
             try expect(success && deleteReached && !visible.contains(original), "ordinary removal failed")
         } else {
@@ -190,6 +209,39 @@ private enum RemovalSignals {
                                "salvage replaced the independently re-added original profile")
                 }
             }
+        }
+    }
+
+    private static func checkKeyringSave(home: URL, mode: String, original: Data, stable: Bool) throws {
+        let other = ProfileDirectories.codexRoot.appendingPathComponent("other")
+        try Cleanup$Authentication.login(other, name: "replacement", mode: mode)
+        let replacement = try Cleanup$Authentication.bytes(other, mode: mode)!
+        let tokens = OAuth$Codex.Tokens(idToken: nil, accessToken: "rotated-access", refreshToken: "rotated-refresh")
+        let rotated = AuthSwap$Codex.renewedAuth(original, usedRefreshToken: "synthetic-refresh-original",
+                                               tokens: tokens, now: Date())!
+        let storage = try AuthStorage$Codex(home: home)
+        let key = Fixture.codexKey(home)
+        var reached = false
+        RemovalSignals.gate = {
+            reached = true
+            if !stable { Fixture.codexKeychain[key] = replacement }
+        }
+        var refused = false
+        do {
+            try storage.save(rotated, backend: .keyring, validating: {
+                // The injected native login waits for entry to the writer's
+                // gate, rather than for an incidental gate in the reader.
+                let gate = RemovalSignals.gate
+                RemovalSignals.gate = nil
+                defer { RemovalSignals.gate = gate }
+                guard try storage.load(backend: .keyring)?.data == original else { throw AuthStorage$Codex.Failure.settings }
+            })
+        } catch { refused = true }
+        try expect(reached, "Keychain write gate was not reached")
+        if stable {
+            try expect(!refused && Fixture.codexKeychain[key] == rotated, "ordinary Keychain save did not publish rotated tokens")
+        } else {
+            try expect(refused && Fixture.codexKeychain[key] == replacement, "Keychain save overwrote a newer login")
         }
     }
 }
