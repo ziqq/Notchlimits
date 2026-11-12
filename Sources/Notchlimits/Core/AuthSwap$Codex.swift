@@ -1097,7 +1097,9 @@ enum AuthSwap$Codex {
         let file = try backup.load(backend: .file)?.data
         let includesKeyring = backup.mode.usesKeyring || owners.contains { $0.mode.usesKeyring }
         func validate(_ remaining: AuthStorage$Codex.Record?, fileRemoved: Bool) throws {
-            try AuthStorage$Codex.validateMutation(homes: [stashHome] + owners.map { $0.home }, includesKeyring: includesKeyring) {
+            // History or project metadata can change without replacing either login.
+            try AuthStorage$Codex.validateMutation(homes: [stashHome] + owners.map { $0.home },
+                                                   includesKeyring: includesKeyring, tracksDirectoryContents: false) {
                 try publication()
                 guard try checkedRecord(remaining, storage: backup, home: stashHome, owner: owner).matches else {
                     throw Failure.busy
