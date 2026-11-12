@@ -280,28 +280,41 @@ enum AccountRemoval {
         let destinationFD = open(destination.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard destinationFD >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         defer { _ = close(destinationFD) }
-        var auth = stat()
-        let replacementAuth = isProfileRoot
-            && fstatat(destinationFD, "auth.json", &auth, AT_SYMLINK_NOFOLLOW) == 0
-        if isProfileRoot && !replacementAuth && errno != ENOENT {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
         // Recover access before unrelated profile metadata can fail to merge.
         let authFiles: Set<String> = ["auth.json", ".credentials.json", "config.toml"]
         let names = try FileManager.default.contentsOfDirectory(atPath: source.path).sorted {
             if authFiles.contains($0) != authFiles.contains($1) { return authFiles.contains($0) }
             return $0 < $1
         }
+        var restoredAuth: stat?
         for name in names {
             // A new CLI file login uses implicit file storage when it has no
             // config. Keep the old settings staged instead of hiding that login
             // behind its previous owner's Keychain record.
-            if replacementAuth && name == "config.toml" { continue }
+            if isProfileRoot && name == "config.toml" {
+                var current = stat()
+                if fstatat(destinationFD, "auth.json", &current, AT_SYMLINK_NOFOLLOW) == 0 {
+                    guard let restoredAuth, current.st_dev == restoredAuth.st_dev,
+                          current.st_ino == restoredAuth.st_ino, current.st_size == restoredAuth.st_size,
+                          current.st_mtimespec.tv_sec == restoredAuth.st_mtimespec.tv_sec,
+                          current.st_mtimespec.tv_nsec == restoredAuth.st_mtimespec.tv_nsec else { continue }
+                } else if errno != ENOENT {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+            }
             // Borrowed renewal leases still own these in the staged directory;
             // the adjacent legacy OAuth lock continues to fence native writers.
             if name.hasPrefix(".oauth_refresh.lock") || name.hasPrefix(".storage-write.lock") { continue }
+            var stagedAuth = stat()
+            if isProfileRoot && name == "auth.json",
+               fstatat(sourceFD, name, &stagedAuth, AT_SYMLINK_NOFOLLOW) != 0 {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
             if renameatx_np(sourceFD, name, destinationFD, name, UInt32(RENAME_EXCL)) == 0 {
-                if isProfileRoot && name == "auth.json" { authFileRestored?(sourceFD, destinationFD) }
+                if isProfileRoot && name == "auth.json" {
+                    restoredAuth = stagedAuth
+                    authFileRestored?(sourceFD, destinationFD)
+                }
                 if isProfileRoot && name == ".credentials.json" {
                     AuthStorage$Claude.recordRestoredFileOwner(from: source, to: destination)
                 }

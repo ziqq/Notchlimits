@@ -67,6 +67,15 @@ enum AuthStorage$Claude {
             || credentialFile(service: service).map { FileManager.default.fileExists(atPath: $0.path) } == true
     }
 
+    /// Unchanged selections can validate using metadata alone. Classic
+    /// Keychain database revisions also detect writes in the same second.
+    static func captureSelectionRevision(for service: String) -> () -> Bool {
+        let keychainIsCurrent = AuthStorage$Codex.captureClassicKeychainRevision()
+        let file = credentialFile(service: service)
+        let revision = file.flatMap(fallbackIdentity)
+        return { keychainIsCurrent() && file.flatMap(fallbackIdentity) == revision }
+    }
+
     private static let removedPrimaryFallbackKey = "claudeRemovedPrimaryFallback"
 
     /// Remember only the retained file's metadata while removal owns the native

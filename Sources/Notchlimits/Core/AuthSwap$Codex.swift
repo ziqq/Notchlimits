@@ -355,12 +355,13 @@ enum AuthSwap$Codex {
     }
 
     private static func activateLocked(columnID: String, home: URL,
-                                       keepBackup: Bool = false) throws -> AuthStorage$Codex.Record? {
+                                       keepBackup: Bool = false) throws
+        -> (previous: AuthStorage$Codex.Record?, published: AuthStorage$Codex.Record?) {
         let base = try storage(at: baseHome)
         var baseOwner = DirectoryIdentity.capture(base.home)
         guard base.mode != .ephemeral else { throw AuthStorage$Codex.Failure.ephemeral }
         guard columnID == defaultColumnID || !isBaseHome(home) else { throw Failure.busy }
-        guard columnID != activeColumnID else { return nil }
+        guard columnID != activeColumnID else { return (nil, nil) }
         guard !renewals.values.contains(where: {
             renewalRecoveries[$0.id] == nil
                 && ($0.key == homeKey(home) || $0.columnID == columnID || $0.columnID == activeColumnID)
@@ -461,7 +462,7 @@ enum AuthSwap$Codex {
             UserDefaults.standard.set(source.home.path, forKey: activePhysicalHomeKey)
             UserDefaults.standard.set(payload.flatMap(authIdentity), forKey: sourceAuthKey)
         }
-        return previous
+        return (previous, checked.record)
     }
 
     /// Вернуть основной аккаунт в `~/.codex` (перед удалением аккаунта и т.п.).
@@ -744,7 +745,7 @@ enum AuthSwap$Codex {
         try requireNative(storage, owner: owner)
         let current = try storage.load(verifyingOwner: true)
         try requireNativeLocation(storage, owner: owner)
-        return current.flatMap { authIdentity($0.data) } == data.flatMap(authIdentity)
+        return AuthStorage$Codex.sameCredentials(current?.data, data)
     }
 
     /// Вход, что сейчас в `~/.codex`, — обратно владельцу.
@@ -993,23 +994,31 @@ enum AuthSwap$Codex {
             let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
             // Restore primary credentials before removing their backup. A
             // refused cleanup must precede destructive profile deletion.
-            let selected = restore ? try activateLocked(columnID: defaultColumnID, home: baseHome, keepBackup: true) : nil
+            let activation = restore ? try activateLocked(columnID: defaultColumnID, home: baseHome, keepBackup: true) : nil
             if restore && baseOwner == nil { baseOwner = DirectoryIdentity.capture(base.home) }
             if restore && targetOwner == nil && target.home == base.home { targetOwner = baseOwner }
             var removedBackup: AuthStorage$Codex.Record?
-            var restoredNative: AuthStorage$Codex.Record?
-            var rollbackAuthorized = false
+            var validateNative: (() throws -> Void)?
             do {
                 let native = restore ? try base.load(verifyingOwner: true) : nil
-                let primary = try backup.load(verifyingOwner: true)
-                if restore {
-                    // A post-activation read can already belong to a new CLI
-                    // login. Only the restored primary may authorize rollback.
-                    guard native.flatMap({ authIdentity($0.data) }) == primary.flatMap({ authIdentity($0.data) }) else {
+                if let activation {
+                    // Either store may change after activation. Neither read can
+                    // establish what the transaction actually published.
+                    guard AuthStorage$Codex.sameCredentials(native?.data, activation.published?.data) else {
                         throw Failure.busy
                     }
-                    restoredNative = native
-                    rollbackAuthorized = true
+                    validateNative = {
+                        guard try checkedRecord(native, storage: base, home: baseHome, owner: baseOwner).matches else {
+                            throw Failure.busy
+                        }
+                    }
+                }
+                let primary = try backup.load(verifyingOwner: true)
+                if let activation {
+                    guard AuthStorage$Codex.sameCredentials(primary?.data, activation.published?.data),
+                          primary?.backend == activation.published?.backend else {
+                        throw Failure.busy
+                    }
                     let current = try target.load(verifyingOwner: true)
                     let expected = target.home == base.home ? primary?.data : removalRecord.map { forwarded($0.data) }
                     guard current.flatMap({ authIdentity($0.data) }) == expected.flatMap(authIdentity) else { throw Failure.busy }
@@ -1021,35 +1030,43 @@ enum AuthSwap$Codex {
                 try deleteBackup(primary, storage: backup, owner: backupOwner,
                                  protecting: [(baseHome, base.mode), (home, target.mode)], validating: {
                     try validateRemoval(at: home)
-                    if restore {
-                        guard try checkedRecord(restoredNative, storage: base, home: baseHome, owner: baseOwner).matches else {
-                            throw Failure.busy
-                        }
-                    }
+                    try validateNative?()
                 })
                 try validateRemoval(at: home)
                 try operation(target.validatingMutation(validateMutation))
             } catch {
                 if let primary = removedBackup { try restoreBackup(primary, to: backup, owner: backupOwner) }
-                if rollbackAuthorized {
-                    do {
-                        guard try checkedRecord(restoredNative, storage: base, home: baseHome, owner: baseOwner).matches else {
+                if let activation {
+                    let validateRollback = validateNative ?? {
+                        guard try ownsPublication(activation.published?.data, storage: base, owner: baseOwner) else {
                             throw Failure.busy
                         }
-                        try base.restore(selected, validating: {
-                            guard try checkedRecord(restoredNative, storage: base, home: baseHome, owner: baseOwner).matches else {
-                                throw Failure.busy
-                            }
-                        })
-                        rememberNativeGrant(selected?.data, home: base.home.path)
+                    }
+                    do {
+                        try validateRollback()
+                        try base.restore(activation.previous, validating: validateRollback)
+                        rememberNativeGrant(activation.previous?.data, home: base.home.path)
                         for (name, value) in zip(keys, saved) {
                             if let value { UserDefaults.standard.set(value, forKey: name) }
                             else { UserDefaults.standard.removeObject(forKey: name) }
                         }
                     } catch {
-                        if let primary = removedBackup {
+                        // An independent native login prevents restoring the
+                        // old route. Expose the backup under a managed profile.
+                        var retained = removedBackup ?? activation.published
+                        if removedBackup == nil {
+                            do {
+                                try requireStorage(backup, home: stashHome, owner: backupOwner)
+                                let observed = try backup.load(verifyingOwner: true)
+                                try requireStorage(backup, home: stashHome, owner: backupOwner)
+                                retained = observed
+                            } catch {
+                                // The publication still proves the earlier backup.
+                            }
+                        }
+                        if let primary = retained {
                             let current = try? storage(at: baseHome).load(verifyingOwner: true)
-                            if current.flatMap({ authIdentity($0.data) }) != authIdentity(primary.data) {
+                            if !AuthStorage$Codex.sameCredentials(current?.data, primary.data) {
                                 try restoreBackup(primary, to: backup, owner: backupOwner, discoverable: true)
                             }
                         }

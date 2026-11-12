@@ -1161,6 +1161,21 @@ final class NSMenuItem { var representedObject: Any? }
     def test_claude_desktop_only_switch_preserves_cli_selection(self):
         self.check_scenario("claude-switch-off")
 
+    def test_claude_switch_stub_extra_keeps_previous_cli_profile(self):
+        self.check_scenario("claude-switch-stub-extra")
+
+    def test_claude_switch_stub_primary_keeps_previous_cli_profile(self):
+        self.check_scenario("claude-switch-stub-primary")
+
+    def test_claude_switch_stub_desktop_only_still_succeeds(self):
+        self.check_scenario("claude-switch-stub-desktop-only")
+
+    def test_claude_switch_stub_when_cli_enabled_during_desktop_launch(self):
+        self.check_scenario("claude-switch-stub-toggle-on")
+
+    def test_claude_switch_unreadable_secret_uses_account_metadata(self):
+        self.check_scenario("claude-switch-unreadable-control")
+
     def test_claude_primary_cli_profile_does_not_set_an_explicit_config_path(self):
         self.check_scenario("claude-switch-main")
 
@@ -1946,6 +1961,21 @@ final class NSMenuItem { var representedObject: Any? }
 
     def test_codex_rollback_metadata_only_control(self):
         self.check_scenario("codex-rollback-metadata-only-control")
+
+    def test_codex_rollback_late_file_login_keyring(self):
+        self.check_scenario("codex-rollback-late-file-keyring")
+
+    def test_codex_rollback_late_file_login_auto(self):
+        self.check_scenario("codex-rollback-late-file-auto")
+
+    def test_codex_removal_recovery_keeps_primary_visible_after_native_login(self):
+        self.check_scenario("codex-removal-recovery-native-login")
+
+    def test_codex_removal_recovery_restores_route_after_backup_login(self):
+        self.check_scenario("codex-removal-recovery-backup-login")
+
+    def test_codex_removal_recovery_stable_control(self):
+        self.check_scenario("codex-removal-recovery-stable")
 
     def test_claude_primary_shared_preserves_fallback(self):
         self.check_scenario("claude-primary-shared-preserves-fallback")

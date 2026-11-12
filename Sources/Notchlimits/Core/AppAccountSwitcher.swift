@@ -85,6 +85,7 @@ func appAccountSwitcher(for provider: Provider) -> (any AppAccountSwitcher)? {
 /// свич на аккаунт открывает приложение в пустой папке — там нужно войти.
 final class AppSwitcher$Claude: AppAccountSwitcher {
     private var cliChange: CLISelection$Claude.Prepared?
+    private var cliRevisionIsCurrent: (() -> Bool)?
     private var preparedKey: String?
     let bundleID = "com.anthropic.claudefordesktop"
     let appName = "Claude"
@@ -129,6 +130,10 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
         let dir = Self.root.appendingPathComponent(key, isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         preparedKey = key
+        if case .claudeKeychain(let service, _) = account.source {
+            // The CLI setting can be enabled while Desktop is launching.
+            cliRevisionIsCurrent = AuthStorage$Claude.captureSelectionRevision(for: service)
+        }
         if CLISelection$Claude.isEnabled { cliChange = try CLISelection$Claude.stage(account) }
         let config = NSWorkspace.OpenConfiguration()
         config.arguments = ["--user-data-dir=\(dir.path)"]
@@ -145,13 +150,16 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
                 throw RetiredAccount()
             }
             let change = try cliChange ?? CLISelection$Claude.stage(account)
-            try change.commit()
+            try change.commit(revisionIsCurrent: cliRevisionIsCurrent)
         }
-        cliChange = nil
-        preparedKey = nil
+        cancel()
     }
 
-    func cancel() { cliChange = nil; preparedKey = nil }
+    func cancel() {
+        cliChange = nil
+        cliRevisionIsCurrent = nil
+        preparedKey = nil
+    }
 }
 
 // MARK: - Codex

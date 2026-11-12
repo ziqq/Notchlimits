@@ -107,13 +107,26 @@ struct AuthStorage$Codex {
             databases = try paths.map(KeyringDatabaseRevision.init(path:))
         }
 
+        private func matchesSearchList() throws -> Bool {
+            try AuthStorage$Codex.classicKeyringSearchList().map(AuthStorage$Codex.keyringPath) == paths
+        }
+
+        var isCurrent: Bool {
+            (try? matchesSearchList()) == true && databases.allSatisfy(\.isCurrent)
+        }
+
         func validate(files: CredentialFilesRevision) throws {
-            guard try AuthStorage$Codex.classicKeyringSearchList().map(AuthStorage$Codex.keyringPath) == paths else {
+            guard try matchesSearchList() else {
                 throw Failure.settings
             }
             try files.validate()
             guard databases.allSatisfy(\.isCurrent) else { throw Failure.settings }
         }
+    }
+
+    static func captureClassicKeychainRevision() -> () -> Bool {
+        let revision = try? KeyringSearchRevision()
+        return { revision?.isCurrent == true }
     }
 
     /// A later credential or configuration read can invalidate an earlier one.
@@ -651,7 +664,7 @@ struct AuthStorage$Codex {
                 Int64(info.st_mtimespec.tv_nsec), Int64(info.st_ctimespec.tv_sec), Int64(info.st_ctimespec.tv_nsec)]
     }
 
-    private static func sameCredentials(_ first: Data?, _ second: Data?) -> Bool {
+    static func sameCredentials(_ first: Data?, _ second: Data?) -> Bool {
         if let first, let second, let identity = AuthSwap$Codex.authIdentity(first) {
             return identity == AuthSwap$Codex.authIdentity(second)
         }
