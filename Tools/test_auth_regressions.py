@@ -1176,6 +1176,12 @@ final class NSMenuItem { var representedObject: Any? }
     def test_claude_switch_stub_while_desktop_is_stopping(self):
         self.check_scenario("claude-switch-stub-during-stop")
 
+    def test_claude_switch_stub_during_final_metadata_recheck(self):
+        self.check_scenario("claude-switch-stub-during-recheck")
+
+    def test_claude_switch_metadata_recheck_stable_login_control(self):
+        self.check_scenario("claude-switch-stub-recheck-control")
+
     def test_claude_switch_unreadable_secret_uses_account_metadata(self):
         self.check_scenario("claude-switch-unreadable-control")
 

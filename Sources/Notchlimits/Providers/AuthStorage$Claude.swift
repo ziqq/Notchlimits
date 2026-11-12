@@ -73,7 +73,7 @@ enum AuthStorage$Claude {
         let keychainIsCurrent = AuthStorage$Codex.captureClassicKeychainRevision()
         let file = credentialFile(service: service)
         let revision = file.flatMap(fallbackIdentity)
-        return { keychainIsCurrent() && file.flatMap(fallbackIdentity) == revision }
+        return { file.flatMap(fallbackIdentity) == revision && keychainIsCurrent() }
     }
 
     private static let removedPrimaryFallbackKey = "claudeRemovedPrimaryFallback"

@@ -28,8 +28,12 @@ enum Restoration$Codex {
     static func main() async {
         do {
             let parts = CommandLine.arguments[1].split(separator: ":").map(String.init)
-            if parts[0] == "compensate" { try compensation(mode: parts[1], phase: parts[2], change: parts[3]) }
-            else { try restoration(kind: parts[0], mode: parts[1], phase: parts[2], change: parts[3]) }
+            switch parts[0] {
+            case "compensate": try compensation(mode: parts[1], phase: parts[2], change: parts[3])
+            case "compensation-logins": try compensationLogins(both: parts[1] == "both")
+            case "routing": try routing(returning: parts[1] == "return", foreign: parts[2] == "foreign")
+            default: try restoration(kind: parts[0], mode: parts[1], phase: parts[2], change: parts[3])
+            }
         } catch { print("FAIL: \(error)"); exit(1) }
     }
 
@@ -242,5 +246,92 @@ enum Restoration$Codex {
         try expect(try AuthSwap$Codex.authData(home: native) == previous
                    && AuthSwap$Codex.activeColumnID == "codex:selected" && Fixture.refreshCalls == 0,
                    "Compensation lost the selected native login, its route, or issued a POST")
+    }
+
+    private static func routing(returning: Bool, foreign: Bool) throws {
+        Fixture.keychainExists = false
+        let native = AuthSwap$Codex.baseHome
+        let selected = ProfileDirectories.codexRoot.appendingPathComponent("selected")
+        let other = Fixture.root.appendingPathComponent("other-login")
+        try Fixture.codexLogin(native, account: "primary", mode: returning ? "keyring" : "auto")
+        try Fixture.codexLogin(selected, account: "selected", mode: "keyring")
+        try Fixture.codexLogin(other, account: "foreign", mode: "keyring")
+        let nativeKey = Fixture.codexKey(native)
+        let primary = Fixture.codexKeychain[nativeKey]!
+        let selectedBytes = Fixture.codexKeychain[Fixture.codexKey(selected)]!
+        let otherBytes = Fixture.codexKeychain[Fixture.codexKey(other)]!
+        if returning { try AuthSwap$Codex.activate(columnID: "codex:selected", home: selected) }
+        else { try primary.write(to: native.appendingPathComponent("auth.json")) }
+        let observationKey = returning ? Fixture.codexKey(AuthSwap$Codex.stashHome) : nativeKey
+        let published = returning ? primary : selectedBytes
+        var reached = false
+        Fixture.beforeCodexSecretRead = { key in
+            guard key == observationKey, Fixture.codexKeychain[nativeKey] == published else { return }
+            Fixture.beforeCodexSecretRead = nil
+            reached = true
+            if foreign { Fixture.codexKeychain[nativeKey] = otherBytes }
+        }
+        var success = false
+        do {
+            if returning { try AuthSwap$Codex.restoreDefault() }
+            else { try AuthSwap$Codex.activate(columnID: "codex:selected", home: selected) }
+            success = true
+        } catch { print("Codex switch returned \(error)") }
+        Fixture.beforeCodexSecretRead = nil
+        let routed = try AuthSwap$Codex.authData(columnID: "codex:selected", home: selected)
+        print("Codex returning=\(returning) reached=\(reached) foreign=\(foreign) success=\(success) active=\(AuthSwap$Codex.activeColumnID) foreign served as selected=\(routed == otherBytes)")
+        try expect(reached, "Fixture missed the Keychain read after native publication")
+        try expect(Fixture.codexKeychain[nativeKey] == (foreign ? otherBytes : published), "Native login was lost")
+        try expect(success == !foreign && routed == selectedBytes, "Selected Codex column was routed to an independent native login")
+        if foreign {
+            try expect(AuthSwap$Codex.activeColumnID == AuthSwap$Codex.defaultColumnID
+                       && (try visibleLogins()).contains(primary),
+                       "Refused switch hid the former primary or kept a false active route")
+        }
+    }
+
+    private static func compensationLogins(both: Bool) throws {
+        Fixture.keychainExists = false
+        let native = AuthSwap$Codex.baseHome
+        let selected = ProfileDirectories.codexRoot.appendingPathComponent("selected")
+        let nativeLogin = Fixture.root.appendingPathComponent("native-login")
+        let backupLogin = Fixture.root.appendingPathComponent("backup-login")
+        try Fixture.codexLogin(native, account: "primary", mode: "keyring")
+        try Fixture.codexLogin(selected, account: "selected", mode: "keyring")
+        try Fixture.codexLogin(nativeLogin, account: "new-native", mode: "keyring")
+        try Fixture.codexLogin(backupLogin, account: "new-primary", mode: "keyring")
+        let nativeKey = Fixture.codexKey(native)
+        let primary = Fixture.codexKeychain[nativeKey]!
+        let newNative = Fixture.codexKeychain[Fixture.codexKey(nativeLogin)]!
+        let newPrimary = Fixture.codexKeychain[Fixture.codexKey(backupLogin)]!
+        try AuthSwap$Codex.activate(columnID: "codex:selected", home: selected)
+        let selectedNative = Fixture.codexKeychain[nativeKey]!
+        let backupKey = Fixture.codexKey(AuthSwap$Codex.stashHome)
+        let account = Discovery$Real().discover().first { $0.id == "codex:selected" }!
+        var reached = false
+        RestorationSignals.beforeDelete = { key in
+            guard key != backupKey && key != nativeKey && Fixture.codexKeychain[backupKey] == nil else { return }
+            RestorationSignals.beforeDelete = nil
+            reached = true
+            Fixture.codexKeychain[backupKey] = newPrimary
+            if both { Fixture.codexKeychain[nativeKey] = newNative }
+            Fixture.denyCodexDelete = true
+        }
+        var refused = false
+        do { try AccountRemoval.remove(account) } catch { refused = true }
+        Fixture.denyCodexDelete = false
+        RestorationSignals.beforeDelete = nil
+        let visible = try visibleLogins()
+        print("Codex removal both=\(both) reached=\(reached) refused=\(refused) active=\(AuthSwap$Codex.activeColumnID) old primary copies=\(visible.filter { $0 == primary }.count) new backup visible=\(visible.contains(newPrimary)) backup still written=\(Fixture.codexKeychain[backupKey] == newPrimary)")
+        try expect(reached && refused && Fixture.codexKeychain[nativeKey] == (both ? newNative : selectedNative),
+                   "Fixture did not exercise a refused managed-profile deletion with native credentials intact")
+        try expect(visible.filter { $0 == primary }.count == 1 && visible.contains(newPrimary),
+                   "Compensation duplicated the former primary and hid the new login in the backup")
+    }
+    private static func visibleLogins() throws -> [Data] {
+        try Discovery$Real().discover().compactMap { account in
+            guard case .codexHome(let home) = account.source else { return nil }
+            return try AuthSwap$Codex.authData(columnID: account.id, home: home)
+        }
     }
 }

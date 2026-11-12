@@ -51,6 +51,8 @@ private enum Fixture {
     static var failCodexFileWrite = false
     static var beforeCredentialDelete: (() -> Void)?
     static var beforeCodexSecretRead: ((String) -> Void)?
+    static var afterClaudeSecretRead: ((String) -> Void)?
+    static var beforeClaudeAttributesRead: ((String) -> Void)?
     static var beforeDirectoryListing: ((String) -> Void)?
     static var rejectSpentRefresh = false
     static var pauseAuthReadPath: String?
@@ -651,7 +653,11 @@ func SecItemCopyMatching(_ query: CFDictionary, _ result: UnsafeMutablePointer<C
             if (query as NSDictionary)[kSecReturnData as String] as? Bool == true {
                 guard !Fixture.denyClaudeRead else { return errSecInteractionNotAllowed }
                 result?.pointee = try! JSONSerialization.data(withJSONObject: json) as CFData
-            } else { result?.pointee = [kSecAttrService as String: service] as NSDictionary }
+                Fixture.afterClaudeSecretRead?(service)
+            } else {
+                Fixture.beforeClaudeAttributesRead?(service)
+                result?.pointee = [kSecAttrService as String: service] as NSDictionary
+            }
         } else { result?.pointee = entries.keys.map { [kSecAttrService as String: $0] } as NSArray }
         return errSecSuccess
     }
@@ -1735,6 +1741,8 @@ enum Authentication {
             case "claude-switch-stub-desktop-only": try claudeSwitchStub(primary: false, enabled: false)
             case "claude-switch-stub-toggle-on": try claudeSwitchStub(primary: false, enabled: false, toggleOn: true)
             case "claude-switch-stub-during-stop": try claudeSwitchStub(primary: false, duringStop: true)
+            case "claude-switch-stub-during-recheck": try claudeSwitchStub(primary: false, stubDuringRecheck: true)
+            case "claude-switch-stub-recheck-control": try claudeSwitchStub(primary: false, stubDuringRecheck: false)
             case "claude-switch-unreadable-control": try claudeSwitchStub(primary: false, unreadable: true)
             case "claude-switch-off": try claudeSwitchCLI(enabled: false)
             case "claude-switch-main": try claudeSwitchCLI(enabled: true, primary: true)
@@ -5083,7 +5091,7 @@ enum Authentication {
     @MainActor
     private static func claudeSwitchStub(primary: Bool, enabled: Bool = true,
                                          unreadable: Bool = false, toggleOn: Bool = false,
-                                         duringStop: Bool = false) throws {
+                                         duringStop: Bool = false, stubDuringRecheck: Bool? = nil) throws {
         let profile = primary ? Fixture.storageDirectory : ProfileDirectories.claudeRoot.appendingPathComponent("work")
         try Foundation.FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
         let hash = SHA256.hash(data: Data(profile.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
@@ -5109,16 +5117,38 @@ enum Authentication {
         var result: Result<Void, Error>?
         AppSwitcher$Claude().switchTo(account) { result = $0 }
         try expect(result == nil && Fixture.desktopCompletion != nil, "Fixture did not hold the Desktop launch")
-        if !duringStop { try changeKeychain() }
+        var reachedRecheck = false
+        if let stubDuringRecheck {
+            // Another item dirties the Classic Keychain without replacing the
+            // selected OAuth entry. Replace that entry during the later lookup.
+            Fixture.claudeEntries?["other-item"] = ["trustedDeviceToken": "synthetic-other"]
+            try Data().write(to: Fixture.classicKeychainDatabase(), options: .atomic)
+            var readSecret = false
+            Fixture.afterClaudeSecretRead = { key in
+                if key == service { readSecret = true }
+            }
+            Fixture.beforeClaudeAttributesRead = { key in
+                guard key == service && readSecret else { return }
+                Fixture.beforeClaudeAttributesRead = nil
+                reachedRecheck = true
+                if stubDuringRecheck { try! changeKeychain() }
+            }
+        } else if !duringStop {
+            try changeKeychain()
+        }
         if toggleOn { CLISelection$Claude.isEnabled = true }
         Fixture.desktopCompletion?(.success(()))
+        Fixture.afterClaudeSecretRead = nil
+        Fixture.beforeClaudeAttributesRead = nil
+        try expect(stubDuringRecheck == nil || reachedRecheck, "Fixture missed the metadata check after reading OAuth")
         let refused: Bool
         if case .failure? = result { refused = true } else { refused = false }
         try expect(AppSwitcher$Claude().isOpenInApp(columnID: account.id) == true,
                    "The Desktop marker did not describe the completed launch")
         let cliEnabled = enabled || toggleOn
-        let expectedPointer = cliEnabled && unreadable ? profile.path + "\n" : previous
-        try expect(refused == (cliEnabled && !unreadable) && String(contentsOf: pointer) == expectedPointer,
+        let validLogin = unreadable || stubDuringRecheck == false
+        let expectedPointer = cliEnabled && validLogin ? profile.path + "\n" : previous
+        try expect(refused == (cliEnabled && !validLogin) && String(contentsOf: pointer) == expectedPointer,
                    "CLI published a non-login stub or rejected an existing login without read access")
     }
 

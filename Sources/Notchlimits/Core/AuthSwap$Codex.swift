@@ -414,6 +414,8 @@ enum AuthSwap$Codex {
         guard checked.matches else { throw Failure.busy }
         payload = checked.record?.data
         try requireNativeLocation(base, owner: baseOwner)
+        let backup = columnID == defaultColumnID ? source : try storage(at: stashHome)
+        let backupOwner = columnID == defaultColumnID ? sourceOwner : DirectoryIdentity.capture(backup.home)
         let validatePublication = {
             let includesKeyring = source.mode.usesKeyring || base.mode.usesKeyring
             try AuthStorage$Codex.validateMutation(homes: [incoming, baseHome], includesKeyring: includesKeyring) {
@@ -426,26 +428,36 @@ enum AuthSwap$Codex {
         if let payload { try base.save(payload, validating: validatePublication) }
         else { try base.delete(validating: validatePublication) }
         rememberNativeGrant(payload, home: base.home.path)
-        if columnID == defaultColumnID {
-            // Do not forget a refused backup cleanup or report a completed switch.
-            if !keepBackup {
-                do {
-                    try deleteBackup(incomingRecord, storage: source, owner: sourceOwner, protecting: [(baseHome, base.mode)], validating: {
-                        guard try ownsPublication(payload, storage: base, owner: baseOwner) else { throw Failure.busy }
-                    })
-                } catch {
-                    if let incomingRecord { try restoreBackup(incomingRecord, to: source, owner: sourceOwner) }
-                    // A refused switch keeps its routing and backup. Restore
-                    // only our publication, never a subsequent native CLI login.
-                    if (try? ownsPublication(payload, storage: base, owner: baseOwner)) == true {
-                        try base.restore(previous, validating: {
-                            guard try ownsPublication(payload, storage: base, owner: baseOwner) else { throw Failure.busy }
-                        })
-                        rememberNativeGrant(previous?.data, home: base.home.path)
-                    }
-                    throw error
-                }
+        let verifyPublication = { try requirePublication(payload, storage: base, owner: baseOwner) }
+        var removedBackup: AuthStorage$Codex.Record?
+        do {
+            try verifyPublication()
+            if columnID == defaultColumnID && !keepBackup {
+                removedBackup = checked.record
+                try deleteBackup(checked.record, storage: backup, owner: backupOwner,
+                                 protecting: [(baseHome, base.mode)], validating: {
+                    guard try ownsPublication(payload, storage: base, owner: baseOwner) else { throw Failure.busy }
+                })
+                try verifyPublication()
             }
+        } catch {
+            var recovered: AuthStorage$Codex.Record?
+            do {
+                try verifyPublication()
+                if let removedBackup, try restoreBackup(removedBackup, to: backup, owner: backupOwner) {
+                    recovered = removedBackup
+                }
+                try rollbackPublication(previous, storage: base, owner: baseOwner, validating: verifyPublication)
+            } catch {
+                clearActiveRouting()
+                try exposeUnroutedBackup(backup, owner: backupOwner, removed: removedBackup,
+                                         published: columnID == defaultColumnID ? checked.record : nil,
+                                         alreadyVisible: recovered)
+                throw error
+            }
+            throw error
+        }
+        if columnID == defaultColumnID {
             UserDefaults.standard.removeObject(forKey: activeIDKey)
             UserDefaults.standard.removeObject(forKey: activeHomeKey)
             UserDefaults.standard.removeObject(forKey: activePhysicalHomeKey)
@@ -748,6 +760,29 @@ enum AuthSwap$Codex {
         return AuthStorage$Codex.sameCredentials(current?.data, data)
     }
 
+    private static func requirePublication(_ data: Data?, storage: AuthStorage$Codex,
+                                           owner: DirectoryIdentity?) throws {
+        try AuthStorage$Codex.validateMutation(homes: [baseHome], includesKeyring: storage.mode.usesKeyring,
+                                               tracksDirectoryContents: false) {
+            guard try ownsPublication(data, storage: storage, owner: owner) else { throw Failure.busy }
+        }
+    }
+
+    private static func rollbackPublication(_ record: AuthStorage$Codex.Record?, storage: AuthStorage$Codex,
+                                            owner: DirectoryIdentity?, validating: @escaping () throws -> Void) throws {
+        try validating()
+        try storage.restore(record, validating: validating)
+        try requirePublication(record?.data, storage: storage, owner: owner)
+        rememberNativeGrant(record?.data, home: storage.home.path)
+    }
+
+    private static func clearActiveRouting() {
+        for key in [activeIDKey, activeHomeKey, activePhysicalHomeKey, sourceAuthKey] {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+        clearPrimarySession()
+    }
+
     /// Вход, что сейчас в `~/.codex`, — обратно владельцу.
     private static func giveBackCurrent(_ expected: AuthStorage$Codex? = nil) throws -> AuthStorage$Codex.Record? {
         let live = try expected ?? storage(at: baseHome)
@@ -1035,43 +1070,30 @@ enum AuthSwap$Codex {
                 try validateRemoval(at: home)
                 try operation(target.validatingMutation(validateMutation))
             } catch {
-                if let primary = removedBackup { try restoreBackup(primary, to: backup, owner: backupOwner) }
                 if let activation {
                     let validateRollback = validateNative ?? {
-                        guard try ownsPublication(activation.published?.data, storage: base, owner: baseOwner) else {
-                            throw Failure.busy
-                        }
+                        try requirePublication(activation.published?.data, storage: base, owner: baseOwner)
                     }
+                    var recovered: AuthStorage$Codex.Record?
                     do {
                         try validateRollback()
-                        try base.restore(activation.previous, validating: validateRollback)
-                        rememberNativeGrant(activation.previous?.data, home: base.home.path)
+                        if let removedBackup, try restoreBackup(removedBackup, to: backup, owner: backupOwner) {
+                            recovered = removedBackup
+                        }
+                        try rollbackPublication(activation.previous, storage: base, owner: baseOwner,
+                                                validating: validateRollback)
                         for (name, value) in zip(keys, saved) {
                             if let value { UserDefaults.standard.set(value, forKey: name) }
                             else { UserDefaults.standard.removeObject(forKey: name) }
                         }
                     } catch {
-                        // An independent native login prevents restoring the
-                        // old route. Expose the backup under a managed profile.
-                        var retained = removedBackup ?? activation.published
-                        if removedBackup == nil {
-                            do {
-                                try requireStorage(backup, home: stashHome, owner: backupOwner)
-                                let observed = try backup.load(verifyingOwner: true)
-                                try requireStorage(backup, home: stashHome, owner: backupOwner)
-                                retained = observed
-                            } catch {
-                                // The publication still proves the earlier backup.
-                            }
-                        }
-                        if let primary = retained {
-                            let current = try? storage(at: baseHome).load(verifyingOwner: true)
-                            if !AuthStorage$Codex.sameCredentials(current?.data, primary.data) {
-                                try restoreBackup(primary, to: backup, owner: backupOwner, discoverable: true)
-                            }
-                        }
+                        clearActiveRouting()
+                        try exposeUnroutedBackup(backup, owner: backupOwner, removed: removedBackup,
+                                                 published: activation.published, alreadyVisible: recovered)
                         throw error
                     }
+                } else if let removedBackup {
+                    try restoreBackup(removedBackup, to: backup, owner: backupOwner)
                 }
                 throw error
             }
@@ -1147,8 +1169,9 @@ enum AuthSwap$Codex {
 
     /// Keep primary durable before restoring the selected native account. A
     /// refusal at the old backup path must not discard it or skip native rollback.
+    @discardableResult
     private static func restoreBackup(_ record: AuthStorage$Codex.Record, to backup: AuthStorage$Codex,
-                                       owner: DirectoryIdentity?, discoverable: Bool = false) throws {
+                                       owner: DirectoryIdentity?) throws -> Bool {
         // A completed file-mode CLI login owns the primary route. Preserve its
         // former Keychain login separately before adopting that file backend.
         let configured = try? AuthStorage$Codex(home: backup.home)
@@ -1157,29 +1180,26 @@ enum AuthSwap$Codex {
         let independentFile = replacementFile.flatMap { authIdentity($0.data) }
             .map { $0 != authIdentity(record.data) } == true
         do {
-            if independentFile || discoverable { throw Failure.busy }
+            if independentFile { throw Failure.busy }
             if let current = try backup.load(verifyingOwner: true) {
                 if authIdentity(current.data) == authIdentity(record.data),
-                   homeKey(stashHome) == backup.home.path, homeKey(backup.home) == backup.home.path { return }
+                   homeKey(stashHome) == backup.home.path, homeKey(backup.home) == backup.home.path { return false }
                 throw Failure.busy
             }
             guard try checkedRecord(nil, storage: backup, home: stashHome, owner: owner).matches else { throw Failure.busy }
             try backup.save(record.data, backend: record.backend, validating: {
                 guard try checkedRecord(nil, storage: backup, home: stashHome, owner: owner).matches else { throw Failure.busy }
             })
+            return false
         }
         catch {
             // Preserve a new primary's credentials and route. Its former login
             // remains discoverable in a separate managed recovery namespace.
-            let replaced = discoverable || independentFile || (try? backup.load(verifyingOwner: true)) != nil
+            let replaced = independentFile || (try? backup.load(verifyingOwner: true)) != nil
             let recovery = replaced
                 ? ProfileDirectories.codexRoot.appendingPathComponent("recovered-" + UUID().uuidString, isDirectory: true)
                 : DesktopApp.supportDirectory.appendingPathComponent("codex-app/recovery-" + UUID().uuidString, isDirectory: true)
-            try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: true,
-                                                    attributes: [.posixPermissions: 0o700])
-            try ("cli_auth_credentials_store = \"" + backup.mode.rawValue + "\"\n")
-                .write(to: recovery.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
-            try AuthStorage$Codex(home: recovery, mode: backup.mode).save(record.data, backend: record.backend)
+            try saveRecoveredBackup(record, mode: backup.mode, at: recovery)
             // Discovery, renewal and CLI re-login use the recovered primary too.
             if independentFile, let configured, let replacementFile {
                 guard homeKey(stashHome) == backup.home.path,
@@ -1190,7 +1210,49 @@ enum AuthSwap$Codex {
                 }
                 UserDefaults.standard.set(AuthStorage$Codex.Mode.file.rawValue, forKey: stashStoreKey)
             } else if !replaced { UserDefaults.standard.set(recovery.path, forKey: stashHomeKey) }
+            return replaced
         }
+    }
+
+    /// Native routing now belongs to another login. Keep the removed snapshot
+    /// and any independent backup login discoverable, once each.
+    private static func exposeUnroutedBackup(_ backup: AuthStorage$Codex, owner: DirectoryIdentity?,
+                                             removed: AuthStorage$Codex.Record?,
+                                             published: AuthStorage$Codex.Record?,
+                                             alreadyVisible: AuthStorage$Codex.Record?) throws {
+        let observed: AuthStorage$Codex.Record?
+        do {
+            let current = try storage(at: stashHome)
+            guard current.home == backup.home else { throw Failure.busy }
+            try requireStorage(current, home: stashHome, owner: owner)
+            let record = try current.load(verifyingOwner: true)
+            try requireStorage(current, home: stashHome, owner: owner)
+            observed = record
+        } catch {
+            observed = published
+        }
+        let native = try? storage(at: baseHome)
+        let nativeOwner = native.flatMap { DirectoryIdentity.capture($0.home) }
+        var visible = [alreadyVisible].compactMap { $0?.data }
+        for record in [removed, observed].compactMap({ $0 }) {
+            guard !visible.contains(where: { AuthStorage$Codex.sameCredentials($0, record.data) }) else { continue }
+            if let native, (try? requirePublication(record.data, storage: native, owner: nativeOwner)) != nil {
+                continue
+            }
+            let recovery = ProfileDirectories.codexRoot
+                .appendingPathComponent("recovered-" + UUID().uuidString, isDirectory: true)
+            try saveRecoveredBackup(record, mode: record.backend == .file ? .file : .keyring, at: recovery)
+            visible.append(record.data)
+        }
+    }
+
+    private static func saveRecoveredBackup(_ record: AuthStorage$Codex.Record,
+                                            mode: AuthStorage$Codex.Mode, at recovery: URL) throws {
+        try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        try ("cli_auth_credentials_store = \"" + mode.rawValue + "\"\n")
+            .write(to: recovery.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+        try AuthStorage$Codex(home: recovery, mode: mode).save(record.data, backend: record.backend)
     }
 
     /// Logical columns can route to another physical owner, notably primary's
