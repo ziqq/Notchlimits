@@ -22,6 +22,7 @@
 // Колонка
 "column.updating" = "wird aktualisiert…";
 "column.stale" = "Daten von %@";
+"column.usageUnavailable" = "Verbrauch nicht verfügbar";
 "column.reauth" = "Neu anmelden";
 "column.reauth.help" = "Terminal öffnen und dieses Konto neu anmelden. Die laufende App bleibt unberührt.";
 
