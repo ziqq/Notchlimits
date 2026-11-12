@@ -56,34 +56,42 @@ struct AuthStorage$Codex {
     /// File and configuration reads can block too. Keep a metadata proof of
     /// the paths those reads admitted and recheck it at the mutation boundary.
     private struct CredentialFilesRevision {
-        private let entries: [(path: String, revision: [Int64])]
+        private let entries: [(path: String, tracksContents: Bool, revision: [Int64])]
 
-        init(_ homes: [URL]) throws {
+        init(_ homes: [URL], tracksDirectoryContents: Bool = true) throws {
             let paths = homes.flatMap { home in
-                [home.path, home.appendingPathComponent("config.toml").path,
-                 home.appendingPathComponent("auth.json").path]
+                [(home.path, tracksDirectoryContents), (home.appendingPathComponent("config.toml").path, true),
+                 (home.appendingPathComponent("auth.json").path, true)]
             }
-            entries = try paths.map { ($0, try Self.revision($0)) }
+            entries = try paths.map { path, tracksContents in
+                (path, tracksContents, try Self.revision(path, tracksContents: tracksContents))
+            }
         }
 
-        private static func revision(_ path: String) throws -> [Int64] {
+        private static func revision(_ path: String, tracksContents: Bool) throws -> [Int64] {
+            func generation(_ info: stat) -> [Int64] {
+                if tracksContents { return KeyringDatabaseRevision.generation(info) }
+                return [Int64(info.st_dev), Int64(bitPattern: UInt64(info.st_ino)), Int64(info.st_mode & S_IFMT)]
+            }
             var info = stat()
             guard lstat(path, &info) == 0 else {
                 guard errno == ENOENT else { throw Failure.settings }
                 return []
             }
-            let entry = KeyringDatabaseRevision.generation(info)
+            let entry = generation(info)
             guard info.st_mode & S_IFMT == S_IFLNK else { return entry }
             guard stat(path, &info) == 0 else {
                 guard errno == ENOENT else { throw Failure.settings }
                 return entry
             }
-            return entry + KeyringDatabaseRevision.generation(info)
+            return entry + generation(info)
         }
 
         func validate() throws {
             for entry in entries {
-                guard try Self.revision(entry.path) == entry.revision else { throw Failure.settings }
+                guard try Self.revision(entry.path, tracksContents: entry.tracksContents) == entry.revision else {
+                    throw Failure.settings
+                }
             }
         }
     }
@@ -110,9 +118,10 @@ struct AuthStorage$Codex {
 
     /// A later credential or configuration read can invalidate an earlier one.
     /// Verify both stores after all reads and immediately before publication.
-    static func validateMutation(homes: [URL], includesKeyring: Bool, checking: () throws -> Void) throws {
+    static func validateMutation(homes: [URL], includesKeyring: Bool, tracksDirectoryContents: Bool = true,
+                                 checking: () throws -> Void) throws {
         let keyring = includesKeyring ? try KeyringSearchRevision() : nil
-        let files = try CredentialFilesRevision(homes)
+        let files = try CredentialFilesRevision(homes, tracksDirectoryContents: tracksDirectoryContents)
         try checking()
         if let keyring { try keyring.validate(files: files) }
         else { try files.validate() }
