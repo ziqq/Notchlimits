@@ -3,6 +3,7 @@ private enum RecoverySignals {
     static var created: ((URL) -> Void)?
     static var gated: (() -> Void)?
     static var renaming: (() -> Void)?
+    static var absenceRead: ((String) -> Void)?
     static var staged: (() -> Void)?
 }
 @main @MainActor enum Reservation$Codex {
@@ -30,7 +31,7 @@ private enum RecoverySignals {
         var recoveryHome: URL?
         var replacementConfig: Data?
         var replacementOwner: DirectoryIdentity?
-        var deleted = false
+        var deleted = false, attemptedRename = false
         RecoverySignals.deleted = { _ in deleted = true }
         RecoverySignals.created = { url in
             guard url.lastPathComponent.hasPrefix("recovered-") else { return }
@@ -38,7 +39,8 @@ private enum RecoverySignals {
             recoveryHome = url
             let inject = {
                 RecoverySignals.gated = nil
-                RecoverySignals.renaming = nil
+                if phase != "absence" { RecoverySignals.renaming = nil }
+                RecoverySignals.absenceRead = nil
                 RecoverySignals.staged = nil
                 reached = true
                 guard replacementMode != "stable" else { return }
@@ -51,6 +53,12 @@ private enum RecoverySignals {
             case "created": inject()
             case "gate": RecoverySignals.gated = inject
             case "staged": RecoverySignals.staged = inject
+            case "absence":
+                // Publish after the last lookup has observed an empty destination.
+                // An absent source must never reach the native rename operation.
+                let key = Fixture.codexKey(url)
+                RecoverySignals.absenceRead = { if $0 == key { inject() } }
+                RecoverySignals.renaming = { attemptedRename = true }
             default: RecoverySignals.renaming = inject
             }
         }
@@ -60,6 +68,7 @@ private enum RecoverySignals {
         RecoverySignals.deleted = nil
         RecoverySignals.gated = nil
         RecoverySignals.renaming = nil
+        RecoverySignals.absenceRead = nil
         RecoverySignals.staged = nil
         let accounts = Discovery$Real().discover().filter { $0.provider == .codex }
         let visible = accounts.compactMap { account -> Data? in
@@ -73,6 +82,7 @@ private enum RecoverySignals {
         try expect(try Cleanup$Authentication.bytes(AuthSwap$Codex.baseHome, mode: "file") == native,
                    "reservation changed the native CLI login")
         try expect(reached, "initial recovery preparation boundary not reached")
+        if phase == "absence" { try expect(!attemptedRename, "an absent source reached the native rename operation") }
         if replacementMode == "stable" {
             try expect(success && (deleted || mode == "auto-file") && !visible.contains(original), "stable initial reservation failed")
         } else {

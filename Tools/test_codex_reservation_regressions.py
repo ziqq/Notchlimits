@@ -22,6 +22,11 @@ class CodexReservationRegressions(unittest.TestCase):
                 '    Fixture.interactionAllowed = state\n    if !state { RecoverySignals.gated?() }\n    return errSecSuccess',
             'func SecItemUpdate(_ query: CFDictionary, _ attributes: CFDictionary) -> OSStatus {\n    Fixture.lock.lock()':
                 'func SecItemUpdate(_ query: CFDictionary, _ attributes: CFDictionary) -> OSStatus {\n    if (attributes as NSDictionary)[kSecAttrAccount as String] != nil { RecoverySignals.renaming?() }\n    Fixture.lock.lock()',
+            '        guard let data = Fixture.codexKeychain[key] else { return errSecItemNotFound }':
+                '        guard let data = Fixture.codexKeychain[key] else {\n'
+                '            if (query as NSDictionary)[kSecReturnAttributes as String] as? Bool == true { RecoverySignals.absenceRead?(key) }\n'
+                '            return errSecItemNotFound\n'
+                '        }',
             '        try super.createDirectory(at: url, withIntermediateDirectories: createIntermediates, attributes: attributes)':
                 '        try super.createDirectory(at: url, withIntermediateDirectories: createIntermediates, attributes: attributes)\n        RecoverySignals.created?(url)',
             '        Fixture.codexKeychain[key] = nil\n        return errSecSuccess':
@@ -54,7 +59,8 @@ for mode in ("keyring", "auto", "auto-file"):
         for replacement in ("stable", "file", "keyring", "auto-file", "auto"):
             scenarios.append(f"{mode}:{replacement}:{phase}")
     for replacement in ("keyring", "auto"):
-        scenarios.append(f"{mode}:{replacement}:rename")
+        phase = "absence" if mode == "auto-file" else "rename"
+        scenarios.append(f"{mode}:{replacement}:{phase}")
 for replacement in ("stable", "file", "keyring", "auto-file", "auto"):
     scenarios.append(f"auto-file:{replacement}:staged")
 assert len(scenarios) == len(set(scenarios)) == 41
