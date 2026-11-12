@@ -1173,6 +1173,9 @@ final class NSMenuItem { var representedObject: Any? }
     def test_claude_switch_stub_when_cli_enabled_during_desktop_launch(self):
         self.check_scenario("claude-switch-stub-toggle-on")
 
+    def test_claude_switch_stub_while_desktop_is_stopping(self):
+        self.check_scenario("claude-switch-stub-during-stop")
+
     def test_claude_switch_unreadable_secret_uses_account_metadata(self):
         self.check_scenario("claude-switch-unreadable-control")
 

@@ -109,6 +109,7 @@ private enum Fixture {
     static var cliClearedRevokedGrant = false
     static var desktopFails = false
     static var holdDesktopCompletion = false
+    static var beforeDesktopPrepare: (() throws -> Void)?
     static var desktopCalls = 0
     static var desktopStops = 0
     static var desktopRunning = false
@@ -555,6 +556,7 @@ enum DesktopApp {
                                  completion: @escaping (Result<Void, Error>) -> Void) {
         Fixture.desktopCalls += 1
         do {
+            try Fixture.beforeDesktopPrepare?()
             Fixture.desktopArguments = try prepare().arguments
             if Fixture.holdDesktopCompletion {
                 Fixture.desktopCompletion = completion
@@ -1732,6 +1734,7 @@ enum Authentication {
             case "claude-switch-stub-primary": try claudeSwitchStub(primary: true)
             case "claude-switch-stub-desktop-only": try claudeSwitchStub(primary: false, enabled: false)
             case "claude-switch-stub-toggle-on": try claudeSwitchStub(primary: false, enabled: false, toggleOn: true)
+            case "claude-switch-stub-during-stop": try claudeSwitchStub(primary: false, duringStop: true)
             case "claude-switch-unreadable-control": try claudeSwitchStub(primary: false, unreadable: true)
             case "claude-switch-off": try claudeSwitchCLI(enabled: false)
             case "claude-switch-main": try claudeSwitchCLI(enabled: true, primary: true)
@@ -5079,7 +5082,8 @@ enum Authentication {
 
     @MainActor
     private static func claudeSwitchStub(primary: Bool, enabled: Bool = true,
-                                         unreadable: Bool = false, toggleOn: Bool = false) throws {
+                                         unreadable: Bool = false, toggleOn: Bool = false,
+                                         duringStop: Bool = false) throws {
         let profile = primary ? Fixture.storageDirectory : ProfileDirectories.claudeRoot.appendingPathComponent("work")
         try Foundation.FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
         let hash = SHA256.hash(data: Data(profile.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
@@ -5094,14 +5098,18 @@ enum Authentication {
         try Data(previous.utf8).write(to: pointer)
         CLISelection$Claude.isEnabled = enabled
         Fixture.holdDesktopCompletion = true
+        func changeKeychain() throws {
+            if unreadable { Fixture.denyClaudeRead = true }
+            else { Fixture.claudeEntries?[service] = ["trustedDeviceToken": "synthetic-stub"] }
+            // Classic Keychain commits can replace the database while leaving
+            // item metadata unchanged, including its second-resolution date.
+            try Data().write(to: Fixture.classicKeychainDatabase(), options: .atomic)
+        }
+        if duringStop { Fixture.beforeDesktopPrepare = changeKeychain }
         var result: Result<Void, Error>?
         AppSwitcher$Claude().switchTo(account) { result = $0 }
         try expect(result == nil && Fixture.desktopCompletion != nil, "Fixture did not hold the Desktop launch")
-        if unreadable { Fixture.denyClaudeRead = true }
-        else { Fixture.claudeEntries?[service] = ["trustedDeviceToken": "synthetic-stub"] }
-        // Classic Keychain commits can replace the database while leaving
-        // item metadata unchanged, including its second-resolution date.
-        try Data().write(to: Fixture.classicKeychainDatabase(), options: .atomic)
+        if !duringStop { try changeKeychain() }
         if toggleOn { CLISelection$Claude.isEnabled = true }
         Fixture.desktopCompletion?(.success(()))
         let refused: Bool
