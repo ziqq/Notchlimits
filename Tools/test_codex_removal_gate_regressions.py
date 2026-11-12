@@ -17,6 +17,14 @@ class CodexRemovalGateRegressions(unittest.TestCase):
         # Inject external logins from the Keychain and filesystem shims. The
         # removal transaction, discovery and storage selection are production.
         boundaries = {
+            "let exists = super.fileExists(atPath: configPath(path))":
+                "let exists = super.fileExists(atPath: configPath(path))\n        RemovalSignals.fileProbe?(path)",
+            "override func contents(atPath path: String) -> Data? { super.contents(atPath: configPath(path)) }":
+                "override func contents(atPath path: String) -> Data? {\n"
+                "        let data = super.contents(atPath: configPath(path))\n"
+                "        RemovalSignals.configRead?(path)\n"
+                "        return data\n"
+                "    }",
             "            var attributes: [String: Any] = [kSecAttrService as String: \"Codex Auth\", kSecAttrAccount as String: key]":
                 "            RemovalSignals.present?(key)\n"
                 "            var attributes: [String: Any] = [kSecAttrService as String: \"Codex Auth\", kSecAttrAccount as String: key]",
@@ -95,7 +103,12 @@ for mode in ("auto", "keyring"):
         scenarios.append(f"{mode}:readable:save-keyring:{state}")
         for visibility in ("readable", "opaque"):
             scenarios.append(f"{mode}:{visibility}:rollback-mode:{state}")
-assert len(scenarios) == len(set(scenarios)) == 80
+for phase, modes in (("reserve-late", ("auto-file", "auto", "keyring")),
+                     ("rollback-keychain-read", ("auto", "keyring")),
+                     ("switch-late", ("auto-file", "auto", "keyring", "file"))):
+    for mode in modes:
+        scenarios.extend(f"{mode}:readable:{phase}:{state}" for state in ("stable", "replacement"))
+assert len(scenarios) == len(set(scenarios)) == 98
 for scenario in scenarios:
     setattr(CodexRemovalGateRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"),
             scenario_test(scenario))
