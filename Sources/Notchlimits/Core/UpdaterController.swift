@@ -58,8 +58,12 @@ final class CompactUpdateUserDriver: SPUStandardUserDriver {
         let alert = NSAlert()
         alert.messageText = L.t("update.available", version)
         let label = NSTextField(wrappingLabelWithString: L.t("update.availableBody"))
-        label.preferredMaxLayoutWidth = 360
-        label.frame = NSRect(x: 0, y: 0, width: 360, height: 50)
+        let width: CGFloat = 260
+        label.alignment = .center
+        label.preferredMaxLayoutWidth = width
+        let bounds = NSRect(x: 0, y: 0, width: width, height: .greatestFiniteMagnitude)
+        let height = label.cell?.cellSize(forBounds: bounds).height ?? label.intrinsicContentSize.height
+        label.setFrameSize(NSSize(width: width, height: ceil(height)))
         alert.accessoryView = label
         let bundle = Bundle(for: SPUStandardUserDriver.self)
         alert.addButton(withTitle: bundle.localizedString(forKey: "Install Update", value: nil, table: "Sparkle"))
