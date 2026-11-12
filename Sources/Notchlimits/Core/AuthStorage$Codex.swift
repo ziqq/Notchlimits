@@ -7,7 +7,10 @@ import TOMLDecoder
 /// The native Codex auth payload, stored under the selected CODEX_HOME.
 struct AuthStorage$Codex {
     private static let recoveryConfiguration = "cli_auth_credentials_store = \"keyring\"\n"
-    enum Mode: String { case file, keyring, auto, ephemeral }
+    enum Mode: String {
+        case file, keyring, auto, ephemeral
+        var usesKeyring: Bool { self == .keyring || self == .auto }
+    }
     enum Backend { case file, keyring }
     struct Record { let data: Data; let backend: Backend }
 
@@ -175,7 +178,9 @@ struct AuthStorage$Codex {
         }
 
         func validateFiles() throws {
-            guard try storage.loadFile() == nil, owner.matches(storage.home) else { throw Failure.settings }
+            guard try storage.loadFile() == nil,
+                  try AuthStorage$Codex.configuredMode(home: storage.home).usesKeyring,
+                  owner.matches(storage.home) else { throw Failure.settings }
         }
 
         func finish() {
@@ -251,12 +256,14 @@ struct AuthStorage$Codex {
         private func preservingSnapshot() throws -> Self {
             if case .readable(nil) = proof { try validate(); return self }
             do {
+                let files = try CredentialFilesRevision([storage.home])
                 try validate()
+                try files.validate()
                 return self
             } catch {
                 if proof.isOpaque {
-                    // A file login can occupy recovery without replacing its
-                    // Keychain item. Salvage only the verified original item.
+                    // A file login or storage-mode change can hide the item.
+                    // Salvage only the verified original Keychain item.
                     try proof.validate(storage)
                     guard owner.matches(storage.home) else { throw Failure.settings }
                 }
@@ -278,20 +285,27 @@ struct AuthStorage$Codex {
                 } catch let error as CocoaError where error.code == .fileWriteFileExists { continue }
                 var destinationProof = proof
                 let status = try AuthStorage$Codex.withKeychainAccess {
-                    if proof.isOpaque { try proof.validate(storage) }
-                    guard try destination.loadFile() == nil,
-                          (try? String(contentsOf: destination.home.appendingPathComponent("config.toml"), encoding: .utf8))
-                            == AuthStorage$Codex.recoveryConfiguration,
-                          destinationOwner.matches(destination.home),
-                          AuthStorage$Codex.canonicalPath(home) == destination.home.path else { return errSecDuplicateItem }
+                    do {
+                        try AuthStorage$Codex.validateMutation(homes: [home, storage.home], includesKeyring: true) {
+                            if proof.isOpaque {
+                                try proof.validate(storage)
+                                guard owner.matches(storage.home) else { throw Failure.settings }
+                            }
+                            guard try destination.loadFile() == nil,
+                                  try AuthStorage$Codex.configuredMode(home: destination.home).usesKeyring,
+                                  (try? String(contentsOf: destination.home.appendingPathComponent("config.toml"), encoding: .utf8))
+                                    == AuthStorage$Codex.recoveryConfiguration,
+                                  destinationOwner.matches(destination.home),
+                                  AuthStorage$Codex.canonicalPath(home) == destination.home.path,
+                                  destination.keyringStatus() == errSecItemNotFound else { throw Failure.settings }
+                        }
+                    } catch Failure.settings { return errSecDuplicateItem }
                     switch proof {
                     case .readable(let record?):
                         var item = destination.query
                         item[kSecValueData as String] = record.data
                         return SecItemAdd(item as CFDictionary, nil)
                     case .opaque:
-                        guard owner.matches(storage.home) else { throw Failure.settings }
-                        try proof.validateDatabase()
                         let status = SecItemUpdate(storage.query as CFDictionary,
                                                    [kSecAttrAccount as String: destination.account] as CFDictionary)
                         if status == errSecSuccess { destinationProof = try proof.afterMove(to: destination) }
@@ -484,15 +498,17 @@ struct AuthStorage$Codex {
                !AuthSwap$Codex.fileIsShared(home: home, fileHome: home) {
                 try? removeFile(validating: {
                     let inventory = try Self.profileRevision()
-                    guard !AuthSwap$Codex.fileIsShared(home: home, fileHome: home) else { throw Failure.settings }
-                    let published = try loadKeyring()
-                    let current = try Self.configuredMode(home: home)
-                    let file = try loadFile()
-                    guard current == .keyring || current == .auto,
-                          Self.sameCredentials(published?.data, data),
-                          Self.sameCredentials(file?.data, fallback.data),
-                          fallbackOwner.matches(home),
-                          try inventory == Self.profileRevision() else { throw Failure.settings }
+                    try Self.validateMutation(homes: [home], includesKeyring: true) {
+                        guard !AuthSwap$Codex.fileIsShared(home: home, fileHome: home) else { throw Failure.settings }
+                        let published = try loadKeyring()
+                        let current = try Self.configuredMode(home: home)
+                        let file = try loadFile()
+                        guard current.usesKeyring,
+                              Self.sameCredentials(published?.data, data),
+                              Self.sameCredentials(file?.data, fallback.data),
+                              fallbackOwner.matches(home),
+                              try inventory == Self.profileRevision() else { throw Failure.settings }
+                    }
                 })
             }
         } catch {

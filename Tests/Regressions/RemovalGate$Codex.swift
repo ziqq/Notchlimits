@@ -18,12 +18,18 @@ private enum RemovalSignals {
     static func run(_ args: [String]) throws {
         let mode = args[0], opaque = args[1] == "opaque", phase = args[2]
         let stable = args[3] == "stable"
+        Fixture.keychainExists = false
+        switch phase {
+        case "backup-cleanup": try backupCleanup(mode: mode, stable: stable); return
+        case "renewal-cleanup": try renewalCleanup(stable: stable); return
+        case "rollback-config": try rollbackConfig(mode: mode, opaque: opaque, stable: stable); return
+        default: break
+        }
         if phase == "reserve-late" || phase == "rollback-keychain-read" || phase == "switch-late" {
             try checkLateMutation(mode: mode, phase: phase, stable: stable)
             return
         }
         let sameSecond = args[3] == "same-second"
-        Fixture.keychainExists = false
         let home = ProfileDirectories.codexRoot.appendingPathComponent("original")
         let id = "codex:original"
         try Cleanup$Authentication.login(AuthSwap$Codex.baseHome, name: "native", mode: "file")
@@ -356,5 +362,129 @@ private enum RemovalSignals {
                 try expect(visible.contains(original), "rollback lost the original readable snapshot")
             }
         }
+    }
+
+    private static func backupCleanup(mode: String, stable: Bool) throws {
+        let base = AuthSwap$Codex.baseHome
+        let profile = ProfileDirectories.codexRoot.appendingPathComponent("selected")
+        let other = ProfileDirectories.codexRoot.appendingPathComponent("replacement")
+        let active = "codex:selected"
+        try Cleanup$Authentication.login(base, name: "primary", mode: "auto-file")
+        try Cleanup$Authentication.login(profile, name: "selected", mode: "keyring")
+        try Cleanup$Authentication.login(other, name: "replacement", mode: "file")
+        let original = try Cleanup$Authentication.bytes(base, mode: "auto-file")!
+        let selected = try Cleanup$Authentication.bytes(profile, mode: "keyring")!
+        let replacement = try Cleanup$Authentication.bytes(other, mode: "file")!
+        try AuthSwap$Codex.activate(columnID: active, home: profile)
+        try Fixture.codexMode(base, mode)
+        let backup = AuthSwap$Codex.stashHome
+        let backupFile = backup.appendingPathComponent("auth.json")
+        try expect(try Data(contentsOf: backupFile) == original, "setup did not create file backup")
+        let baseKey = Fixture.codexKey(base)
+        var afterPublicationReads = 0, reached = false, succeeded = false
+        var backupReadBetween = false
+        RemovalSignals.fileProbe = { path in
+            if path == backupFile.path, afterPublicationReads == 1 { backupReadBetween = true }
+        }
+        RemovalSignals.reading = { key in
+            guard key == baseKey, Fixture.codexKeychain[baseKey] == original, !reached else { return }
+            afterPublicationReads += 1
+            guard afterPublicationReads == 2 else { return }
+            reached = true
+            if !stable { try! replacement.write(to: backupFile, options: .atomic) }
+        }
+        do { try AuthSwap$Codex.restoreDefault(); succeeded = true }
+        catch { print("Restore refused: \(error)") }
+        let stored = try? Data(contentsOf: backupFile)
+        let current = try AuthSwap$Codex.authData(home: base)
+        print("backup mode=\(mode) reached=\(reached) success=\(succeeded) replacementPreserved=\(stored == replacement) selectedPreserved=\(current == selected) originalPublished=\(current == original)")
+        try expect(reached && backupReadBetween, "did not reach native publication check after the backup file read")
+        if stable {
+            try expect(succeeded && current == original && stored == nil, "ordinary primary restoration failed")
+        } else {
+            try expect(stored == replacement, "backup cleanup unlinked a newer independent file login")
+            try expect(!succeeded && current == selected && AuthSwap$Codex.activeColumnID == active,
+                       "refused restoration did not restore the selected route")
+        }
+    }
+
+    private static func renewalCleanup(stable: Bool) throws {
+        let base = AuthSwap$Codex.baseHome
+        let profile = ProfileDirectories.codexRoot.appendingPathComponent("sleeping")
+        let fallback = ProfileDirectories.codexRoot.appendingPathComponent("fallback")
+        try Cleanup$Authentication.login(base, name: "native", mode: "file")
+        try Cleanup$Authentication.login(profile, name: "sleeping", mode: "auto")
+        try Cleanup$Authentication.login(fallback, name: "fallback", mode: "file")
+        let data = try Cleanup$Authentication.bytes(fallback, mode: "file")!
+        let profileFile = profile.appendingPathComponent("auth.json")
+        try data.write(to: profileFile)
+        let key = Fixture.codexKey(profile)
+        let original = Fixture.codexKeychain[key]!
+        guard let renewal = try AuthSwap$Codex.beginRenewal(columnID: "codex:sleeping", home: profile) else {
+            throw Failure(description: "sleeping renewal was not admitted")
+        }
+        try expect(try AuthSwap$Codex.canSubmit(renewal, home: profile), "sleeping renewal was not submitted")
+        var readPublished = false, reached = false
+        RemovalSignals.reading = { readKey in
+            if readKey == key, let record = Fixture.codexKeychain[key], record != original { readPublished = true }
+        }
+        RemovalSignals.configRead = { path in
+            guard path == profile.appendingPathComponent("config.toml").path, readPublished, !reached else { return }
+            reached = true
+            // An external Keychain-only sign-out leaves the native file fallback.
+            if !stable { Fixture.codexKeychain[key] = nil }
+        }
+        let tokens = OAuth$Codex.Tokens(idToken: nil, accessToken: "rotated-access", refreshToken: "rotated-refresh")
+        let snapshot = try AuthSwap$Codex.storeRenewed(renewal, usedRefreshToken: "synthetic-refresh-sleeping", tokens: tokens)
+        let actual = try AuthSwap$Codex.authData(home: profile)
+        let file = try? Data(contentsOf: profileFile)
+        print("renewal reached=\(reached) returnedSnapshot=\(snapshot != nil) fallbackPreserved=\(file == data) fallbackUsable=\(actual == data)")
+        try expect(reached, "configuration read after the published Keychain lookup was not reached")
+        if stable {
+            try expect(snapshot != nil && actual != nil && actual != original && file == nil, "ordinary rotation failed")
+        } else {
+            try expect(file == data && actual == data, "renewal deleted the only current auto fallback")
+            try expect(snapshot == nil, "renewal reported a Keychain snapshot that no longer exists")
+        }
+    }
+
+    private static func rollbackConfig(mode: String, opaque: Bool, stable: Bool) throws {
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("original")
+        try Cleanup$Authentication.login(AuthSwap$Codex.baseHome, name: "native", mode: "file")
+        try Cleanup$Authentication.login(home, name: "original", mode: mode)
+        let original = try Cleanup$Authentication.bytes(home, mode: mode)!
+        let store = UsageStore(providers: [:], discovery: Discovery$Real())
+        store.rediscover(force: true)
+        Fixture.denyCodexRead = opaque
+        Fixture.denyCodexDelete = true
+        var recovery: URL?, reached = false, attempted = false, refused = false
+        var replacement: Data?
+        RemovalSignals.created = { url in
+            if url.lastPathComponent.hasPrefix("recovered-"), recovery == nil { recovery = url }
+        }
+        RemovalSignals.attempting = { if let recovery, Fixture.codexKey(recovery) == $0 { attempted = true } }
+        Fixture.beforeDirectoryMove = { from, to in
+            guard from.lastPathComponent.hasPrefix(".removed-"), to.path == home.path, let recovery else { return }
+            reached = true
+            try Cleanup$Authentication.login(home, name: "replacement", mode: "file")
+            replacement = try Cleanup$Authentication.bytes(home, mode: "file")
+            if !stable { try Fixture.codexMode(recovery, "file") }
+        }
+        do { try store.removeAccount(id: "codex:original") }
+        catch { refused = true; print("Removal refused: \(error)") }
+        Fixture.beforeDirectoryMove = nil
+        Fixture.denyCodexRead = false
+        let found = Discovery$Real().discover().filter { $0.provider == .codex }.compactMap { account -> Data? in
+            guard case .codexHome(let directory) = account.source else { return nil }
+            return try? AuthSwap$Codex.authData(columnID: account.id, home: directory)
+        }
+        let atOriginal = try AuthSwap$Codex.authData(home: home)
+        if !stable, let recovery {
+            try expect(try AuthStorage$Codex(home: recovery).mode == .file, "rollback replaced the new recovery configuration")
+        }
+        print("recovery mode=\(mode) opaque=\(opaque) reached=\(reached) refused=\(refused) originalVisible=\(found.contains(original)) replacementPreserved=\(atOriginal == replacement)")
+        try expect(reached && attempted && refused, "refused deletion did not reach the rollback boundary")
+        try expect(atOriginal == replacement, "rollback changed the independently re-added login")
+        try expect(found.contains(original), "rollback left the original login hidden behind a changed recovery mode")
     }
 }
