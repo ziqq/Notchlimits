@@ -1,6 +1,11 @@
 # Changelog
 
 
+## 1.5.1 - 12/11/2026
+- **FIXED**: The update dialog is narrower, with a centered description and spacing that fits the text.
+- **CHANGED**: The panel and column menus use the shorter labels KIMI and GROK.
+
+
 ## 1.5.0 - 11/11/2026
 - **ADDED**: Kimi Code and Grok Build columns. Notchlimits discovers existing CLI logins and polls usage through
   temporary CLI processes. The CLIs handle token renewal. Extra CLI profiles can be monitored alongside the primary account.
