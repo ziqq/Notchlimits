@@ -12,6 +12,20 @@ struct KimiProvider: UsageProvider {
         let quota: Quota?
     }
 
+    private struct ProfileEnvelope: Decodable {
+        struct Payload: Decodable {
+            struct UserInfo: Decodable {
+                let userLevelName: String?
+                let email: String?
+                let nickname: String?
+            }
+            let kind: String
+            let userInfo: UserInfo?
+        }
+        let code: Int
+        let data: Payload?
+    }
+
     private struct Quota: Decodable {
         struct Window: Decodable {
             let usedRatio: Double
@@ -67,7 +81,20 @@ struct KimiProvider: UsageProvider {
                 let (data, response) = try await session.data(for: request)
                 guard let http = response as? HTTPURLResponse else { return .failure(L.t("error.noHTTP")) }
                 guard http.statusCode == 200 else { return .failure(L.t("error.http", http.statusCode)) }
-                return Self.parse(data)
+                let outcome = Self.parse(data)
+                guard case .success(var snapshot) = outcome else { return outcome }
+                var profileRequest = request
+                profileRequest.url = url.deletingLastPathComponent().appendingPathComponent("userinfo")
+                profileRequest.timeoutInterval = 4
+                if let (profileData, profileResponse) = try? await session.data(for: profileRequest),
+                   (profileResponse as? HTTPURLResponse)?.statusCode == 200,
+                   let profile = try? JSONDecoder().decode(ProfileEnvelope.self, from: profileData),
+                   profile.code == 0, profile.data?.kind == "ok", let user = profile.data?.userInfo {
+                    let email = user.email.flatMap { $0.isEmpty ? nil : $0 }
+                    let parts = [user.userLevelName, email ?? user.nickname].compactMap { $0 }.filter { !$0.isEmpty }
+                    if !parts.isEmpty { snapshot.subtitle = parts.joined(separator: " · ") }
+                }
+                return .success(snapshot)
             } catch UsageProcess.Failure.timeout {
                 return .failure(L.t("error.timeout"))
             } catch {

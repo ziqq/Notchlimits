@@ -22,6 +22,7 @@
 // Колонка
 "column.updating" = "aggiornamento…";
 "column.stale" = "dati di %@";
+"column.usageUnavailable" = "Utilizzo non disponibile";
 "column.reauth" = "Riautentica";
 "column.reauth.help" = "Apri Terminale e accedi di nuovo a questo account. L'app in esecuzione non viene toccata.";
 

@@ -22,6 +22,7 @@
 // Колонка
 "column.updating" = "actualisation…";
 "column.stale" = "données %@";
+"column.usageUnavailable" = "Utilisation indisponible";
 "column.reauth" = "Reconnexion";
 "column.reauth.help" = "Ouvrir Terminal et reconnecter ce compte. L'app en cours n'est pas touchée.";
 

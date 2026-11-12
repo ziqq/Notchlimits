@@ -23,6 +23,13 @@ struct GrokProvider: UsageProvider {
         let error: RPCError?
     }
 
+    private struct AuthInfo: Decodable {
+        struct Account: Decodable {
+            let email: String?
+        }
+        let result: Account?
+    }
+
     func fetch(_ account: DiscoveredAccount) async -> FetchOutcome {
         guard case .grokAuth(let auth) = account.source else {
             return .failure(L.t("error.unknownSource"))
@@ -52,7 +59,14 @@ struct GrokProvider: UsageProvider {
                     "protocolVersion": 1, "clientCapabilities": [:],
                     "clientInfo": ["name": "Notchlimits", "version": "1"]
                 ])
-                return Self.parse(try request(2, "_x.ai/billing"))
+                let outcome = Self.parse(try request(2, "_x.ai/billing"))
+                guard case .success(var snapshot) = outcome else { return outcome }
+                if let data = try? request(3, "_x.ai/auth/info"),
+                   let info = try? JSONDecoder().decode(AuthInfo.self, from: data),
+                   let email = info.result?.email, !email.isEmpty {
+                    snapshot.subtitle = [snapshot.subtitle, email].compactMap { $0 }.joined(separator: " · ")
+                }
+                return .success(snapshot)
             } catch UsageProcess.Failure.timeout {
                 return .failure(L.t("error.timeout"))
             } catch {

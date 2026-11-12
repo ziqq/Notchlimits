@@ -1,20 +1,18 @@
 import AppKit
 import Sparkle
+import SwiftUI
 
 /// Ручная проверка обновления; подпись, установка и перезапуск принадлежат Sparkle.
 @MainActor
 final class UpdaterController: NSObject, SPUStandardUserDriverDelegate {
     private let suppressPanel: (Bool) -> Void
-    private let presentAlert: (NSAlert) -> NSApplication.ModalResponse
-    private lazy var driver = CompactUpdateUserDriver(delegate: self, presentAlert: presentAlert)
+    private lazy var driver = CompactUpdateUserDriver(delegate: self, suppressPanel: suppressPanel)
     private lazy var updater = SPUUpdater(hostBundle: .main, applicationBundle: .main,
                                          userDriver: driver, delegate: nil)
     private var startError: Error?
 
-    init(suppressPanel: @escaping (Bool) -> Void,
-         presentAlert: @escaping (NSAlert) -> NSApplication.ModalResponse) {
+    init(suppressPanel: @escaping (Bool) -> Void) {
         self.suppressPanel = suppressPanel
-        self.presentAlert = presentAlert
         super.init()
         do { try updater.start() }
         catch { startError = error }
@@ -45,26 +43,47 @@ final class UpdaterController: NSObject, SPUStandardUserDriverDelegate {
 /// Остальные окна и состояние сессии остаются у стандартного драйвера Sparkle.
 @MainActor
 final class CompactUpdateUserDriver: SPUStandardUserDriver {
-    private let presentAlert: (NSAlert) -> NSApplication.ModalResponse
-    private var updateAlert: NSAlert?
+    private let suppressPanel: (Bool) -> Void
+    private var updatePanel: UpdateDialogPanel?
 
-    init(delegate: SPUStandardUserDriverDelegate,
-         presentAlert: @escaping (NSAlert) -> NSApplication.ModalResponse) {
-        self.presentAlert = presentAlert
+    init(delegate: SPUStandardUserDriverDelegate, suppressPanel: @escaping (Bool) -> Void) {
+        self.suppressPanel = suppressPanel
         super.init(hostBundle: .main, delegate: delegate)
     }
 
-    static func makeAlert(version: String) -> NSAlert {
-        let alert = NSAlert()
-        alert.messageText = L.t("update.available", version)
-        let label = NSTextField(wrappingLabelWithString: L.t("update.availableBody"))
-        label.preferredMaxLayoutWidth = 360
-        label.frame = NSRect(x: 0, y: 0, width: 360, height: 50)
-        alert.accessoryView = label
+    private func presentUpdate(version: String) -> NSApplication.ModalResponse {
         let bundle = Bundle(for: SPUStandardUserDriver.self)
-        alert.addButton(withTitle: bundle.localizedString(forKey: "Install Update", value: nil, table: "Sparkle"))
-        alert.addButton(withTitle: bundle.localizedString(forKey: "Skip This Version", value: nil, table: "Sparkle"))
-        return alert
+        let view = UpdateDialogView(
+            icon: NSApp.applicationIconImage,
+            title: L.t("update.available", version),
+            message: L.t("update.availableBody"),
+            installTitle: bundle.localizedString(forKey: "Install Update", value: nil, table: "Sparkle"),
+            skipTitle: bundle.localizedString(forKey: "Skip This Version", value: nil, table: "Sparkle"),
+            onInstall: { NSApp.stopModal(withCode: .alertFirstButtonReturn) },
+            onSkip: { NSApp.stopModal(withCode: .alertSecondButtonReturn) }
+        )
+        let host = NSHostingView(rootView: view)
+        let panel = UpdateDialogPanel(contentRect: NSRect(origin: .zero, size: host.fittingSize),
+                                      styleMask: .borderless, backing: .buffered, defer: false)
+        panel.title = view.title
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.contentView = host
+        panel.center()
+        updatePanel = panel
+        suppressPanel(true)
+        defer {
+            panel.orderOut(nil)
+            updatePanel = nil
+            suppressPanel(false)
+        }
+        NSApp.unhideWithoutActivation()
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        return NSApp.runModal(for: panel)
     }
 
     override func showUpdateFound(with appcastItem: SUAppcastItem, state: SPUUserUpdateState,
@@ -76,13 +95,7 @@ final class CompactUpdateUserDriver: SPUStandardUserDriver {
             return
         }
         super.dismissUpdateInstallation()
-        NSApp.unhideWithoutActivation()
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = Self.makeAlert(version: appcastItem.displayVersionString)
-        updateAlert = alert
-        let result = presentAlert(alert)
-        updateAlert = nil
-        switch result {
+        switch presentUpdate(version: appcastItem.displayVersionString) {
         case .alertFirstButtonReturn: reply(.install)
         case .alertSecondButtonReturn: reply(.skip)
         default: reply(.dismiss)
@@ -90,16 +103,25 @@ final class CompactUpdateUserDriver: SPUStandardUserDriver {
     }
 
     override func dismissUpdateInstallation() {
-        if let updateAlert {
+        if let updatePanel, NSApp.modalWindow === updatePanel {
             NSApp.abortModal()
-            updateAlert.window.close()
         }
         super.dismissUpdateInstallation()
     }
 
     override func showUpdateInFocus() {
-        guard let updateAlert else { super.showUpdateInFocus(); return }
+        guard let updatePanel else { super.showUpdateInFocus(); return }
         NSApp.activate(ignoringOtherApps: true)
-        updateAlert.window.makeKeyAndOrderFront(nil)
+        updatePanel.makeKeyAndOrderFront(nil)
+    }
+}
+
+private final class UpdateDialogPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+
+    override func cancelOperation(_ sender: Any?) {
+        if NSApp.modalWindow === self {
+            NSApp.stopModal(withCode: .cancel)
+        }
     }
 }

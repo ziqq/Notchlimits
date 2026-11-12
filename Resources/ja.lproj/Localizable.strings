@@ -22,6 +22,7 @@
 // Колонка
 "column.updating" = "更新中…";
 "column.stale" = "%@のデータ";
+"column.usageUnavailable" = "使用量を取得できません";
 "column.reauth" = "再認証";
 "column.reauth.help" = "ターミナルを開いてこのアカウントに再ログインします。実行中のアプリには影響しません。";
 

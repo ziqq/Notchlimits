@@ -22,6 +22,7 @@
 // Колонка
 "column.updating" = "оновлюю…";
 "column.stale" = "дані %@";
+"column.usageUnavailable" = "Дані про витрати недоступні";
 "column.reauth" = "re-auth";
 "column.reauth.help" = "Відкрити Terminal і знову увійти в цей акаунт. Запущений застосунок не чіпаємо.";
 
