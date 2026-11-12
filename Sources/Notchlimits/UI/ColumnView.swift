@@ -33,6 +33,11 @@ struct ColumnView: View {
 
             if column.hasData {
                 VStack(alignment: .leading, spacing: 10) {
+                    if column.windows.isEmpty {
+                        Text(L.t("column.usageUnavailable"))
+                            .font(.system(size: 9.5))
+                            .foregroundColor(Theme.tertiary)
+                    }
                     ForEach(column.windows) { window in
                         LimitRowView(window: window, isExpanded: isExpanded)
                     }

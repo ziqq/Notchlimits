@@ -22,6 +22,7 @@
 // Колонка
 "column.updating" = "更新中…";
 "column.stale" = "%@的資料";
+"column.usageUnavailable" = "暫無用量資料";
 "column.reauth" = "重新認證";
 "column.reauth.help" = "打開終端機並重新登入此帳號。正在執行的 App 不受影響。";
 
