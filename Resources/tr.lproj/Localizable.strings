@@ -22,6 +22,7 @@
 // Колонка
 "column.updating" = "yenileniyor…";
 "column.stale" = "%@ verisi";
+"column.usageUnavailable" = "Kullanım bilgisi yok";
 "column.reauth" = "Yeniden giriş";
 "column.reauth.help" = "Terminal'i aç ve bu hesaba yeniden giriş yap. Çalışan uygulamaya dokunulmaz.";
 
