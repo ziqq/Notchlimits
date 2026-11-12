@@ -39,6 +39,24 @@ enum BinaryLocator {
         ])
     }
 
+    static func kimi() -> URL? {
+        firstExecutable([
+            home.appendingPathComponent(".kimi-code/bin/kimi"),
+            home.appendingPathComponent(".local/bin/kimi"),
+            URL(fileURLWithPath: "/opt/homebrew/bin/kimi"),
+            URL(fileURLWithPath: "/usr/local/bin/kimi")
+        ])
+    }
+
+    static func grok() -> URL? {
+        firstExecutable([
+            home.appendingPathComponent(".grok/bin/grok"),
+            home.appendingPathComponent(".local/bin/grok"),
+            URL(fileURLWithPath: "/opt/homebrew/bin/grok"),
+            URL(fileURLWithPath: "/usr/local/bin/grok")
+        ])
+    }
+
     private static func firstExecutable(_ candidates: [URL]) -> URL? {
         candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }

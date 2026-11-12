@@ -132,9 +132,30 @@ enum AccountSetup {
             let script = codexReloginScript(binary: binary, profileName: account.profileName, home: live)
             launch(script: script, in: directory, completion: completion)
 
+        case .kimiHome(let home):
+            cliRelogin(binary: BinaryLocator.kimi(), command: "kimi", variable: "KIMI_CODE_HOME",
+                       path: home, completion: completion)
+        case .grokAuth(let auth):
+            cliRelogin(binary: BinaryLocator.grok(), command: "grok", variable: "GROK_AUTH_PATH",
+                       path: auth, completion: completion)
         case .mock:
             return
         }
+    }
+
+    private static func cliRelogin(binary: URL?, command: String, variable: String,
+                                   path: URL, completion: @escaping () -> Void) {
+        guard let binary else {
+            showAlert(title: L.t("setup.missing.title", command), message: "")
+            return
+        }
+        let script = """
+        #!/bin/zsh
+        export \(variable)="\(shellEscaped(path.path))"
+        "\(shellEscaped(binary.path))" login
+        """
+        let directory = DesktopApp.supportDirectory.appendingPathComponent("login/\(command)")
+        launch(script: script, in: directory, completion: completion)
     }
 
     /// Скрипт повторного входа в Claude. Отдельная команда `auth login`:

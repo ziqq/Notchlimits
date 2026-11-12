@@ -32,7 +32,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         claudeProvider = useMock ? nil : claude
         let providers: [Provider: UsageProvider] = useMock
             ? [.claude: Provider$Mock(), .codex: Provider$Mock()]
-            : [.claude: claude, .codex: Provider$Codex()]
+            : [.claude: claude, .codex: Provider$Codex(),
+               .kimi: KimiProvider(), .grok: GrokProvider()]
 
         store = UsageStore(providers: providers, discovery: discovery)
         panel = PanelController(store: store, keepAwake: .shared, power: .shared)
@@ -154,7 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // но удалить надо уметь.
         let removeItem = NSMenuItem(title: L.t("menu.removeColumn"), action: nil, keyEquivalent: "")
         let removeSubmenu = NSMenu()
-        let allColumns = store.columns
+        let allColumns = store.columns.filter { $0.provider == .claude || $0.provider == .codex }
         let orphans = orphanProfiles()
         if allColumns.isEmpty && orphans.isEmpty {
             let empty = NSMenuItem(title: L.t("menu.noColumns"), action: nil, keyEquivalent: "")
@@ -471,8 +472,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func switchAppAccount(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String,
               let account = store.account(for: id),
-              let column = store.columns.first(where: { $0.id == id }) else { return }
-        let switcher = appAccountSwitcher(for: account.provider)
+              let column = store.columns.first(where: { $0.id == id }),
+              let switcher = appAccountSwitcher(for: account.provider) else { return }
         let confirm = NSAlert()
         confirm.messageText = L.t("appswitch.confirm.title")
         confirm.informativeText = L.t("appswitch.confirm.body", switcher.appName, column.displayName)

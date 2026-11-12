@@ -3,11 +3,15 @@ import Foundation
 enum Provider: String, Codable {
     case claude
     case codex
+    case kimi
+    case grok
 
     var displayName: String {
         switch self {
         case .claude: return "CLAUDE"
         case .codex:  return "CODEX"
+        case .kimi:   return "KIMI CODE"
+        case .grok:   return "GROK BUILD"
         }
     }
 }
@@ -79,7 +83,7 @@ struct AccountColumn: Identifiable, Equatable {
     var header: String { "\(provider.displayName) · \(displayName)" }
 
     /// Есть ли что показывать в колонке прямо сейчас.
-    var hasData: Bool { !windows.isEmpty }
+    var hasData: Bool { !windows.isEmpty || !stats.isEmpty }
 
     /// Максимальная загрузка среди окон — цвет точки в свёрнутом состоянии.
     var peakUtilization: Double { windows.map(\.utilization).max() ?? 0 }

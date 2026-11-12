@@ -15,6 +15,8 @@
 "window.hours" = "%d-годинне вікно";
 "window.days" = "%d-денне вікно";
 "window.generic" = "Вікно ліміту";
+"window.monthTotal" = "Місяць · загальний";
+"window.monthCode" = "Місяць · Code";
 "format.percent" = "%d %%";
 
 // Колонка

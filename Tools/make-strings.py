@@ -21,7 +21,7 @@ ORDER = [
         "reset.days", "reset.hours", "reset.minutes", "reset.imminent",
         "age.justNow", "age.seconds", "age.minutes", "age.hours", "age.days",
         "window.fiveHour", "window.week", "window.hours", "window.days",
-        "window.generic", "format.percent",
+        "window.generic", "window.monthTotal", "window.monthCode", "format.percent",
     ]),
     ("Колонка", [
         "column.updating", "column.stale",
@@ -1634,6 +1634,26 @@ _PORTS = {
 }
 for _lang, _values in _PORTS.items():
     T[_lang].update(zip(("power.port", "power.modes", "ports.charging", "ports.free", "ports.connected"), _values))
+
+
+_MONTH_WINDOWS = {
+    "en": ("Monthly total", "Monthly Code"),
+    "ru": ("Месяц · общий", "Месяц · Code"),
+    "uk": ("Місяць · загальний", "Місяць · Code"),
+    "de": ("Monat gesamt", "Monat · Code"),
+    "es": ("Total mensual", "Mes · Code"),
+    "fr": ("Total mensuel", "Mois · Code"),
+    "it": ("Totale mensile", "Mese · Code"),
+    "pl": ("Suma miesięczna", "Miesiąc · Code"),
+    "pt-BR": ("Total mensal", "Mês · Code"),
+    "tr": ("Aylık toplam", "Ay · Code"),
+    "ja": ("月間合計", "月間 Code"),
+    "ko": ("월간 합계", "월간 Code"),
+    "zh-Hans": ("月度总额度", "月度 Code 额度"),
+    "zh-Hant": ("每月總額度", "每月 Code 額度"),
+}
+for _lang, _values in _MONTH_WINDOWS.items():
+    T[_lang].update(zip(("window.monthTotal", "window.monthCode"), _values))
 
 
 def main():

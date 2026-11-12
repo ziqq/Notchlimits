@@ -15,6 +15,8 @@
 "window.hours" = "%d saatlik pencere";
 "window.days" = "%d günlük pencere";
 "window.generic" = "Limit penceresi";
+"window.monthTotal" = "Aylık toplam";
+"window.monthCode" = "Ay · Code";
 "format.percent" = "%%%d";
 
 // Колонка
