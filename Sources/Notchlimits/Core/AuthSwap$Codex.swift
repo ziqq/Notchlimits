@@ -414,11 +414,12 @@ enum AuthSwap$Codex {
         payload = checked.record?.data
         try requireNativeLocation(base, owner: baseOwner)
         let validatePublication = {
-            guard try checkedRecord(incomingRecord, storage: source, home: incoming, owner: sourceOwner).matches else {
-                throw Failure.busy
-            }
-            guard try checkedRecord(previous, storage: base, home: baseHome, owner: baseOwner).matches else {
-                throw Failure.busy
+            let includesKeyring = source.mode == .keyring || source.mode == .auto || base.mode == .keyring || base.mode == .auto
+            try AuthStorage$Codex.validateMutation(homes: [incoming, baseHome], includesKeyring: includesKeyring) {
+                guard try checkedRecord(incomingRecord, storage: source, home: incoming, owner: sourceOwner).matches,
+                      try checkedRecord(previous, storage: base, home: baseHome, owner: baseOwner).matches else {
+                    throw Failure.busy
+                }
             }
         }
         if let payload { try base.save(payload, validating: validatePublication) }
