@@ -22,6 +22,7 @@
 // Колонка
 "column.updating" = "odświeżam…";
 "column.stale" = "dane z %@";
+"column.usageUnavailable" = "Dane o zużyciu niedostępne";
 "column.reauth" = "re-auth";
 "column.reauth.help" = "Otwórz Terminal i zaloguj się ponownie na to konto. Uruchomiona aplikacja pozostaje nietknięta.";
 
