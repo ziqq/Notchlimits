@@ -8,6 +8,9 @@ struct ColumnView: View {
     var onRelogin: (() -> Void)? = nil
 
     var body: some View {
+        let period = column.windows.isEmpty ? column.stats.first { $0.key == "period" } : nil
+        let stats = column.stats.filter { $0.key != period?.key }
+
         VStack(alignment: .leading, spacing: 0) {
             // Префикс провайдера («CLAUDE · ») всегда приглушён. Имя колонки
             // («me») подсвечиваем основным цветом ТОЛЬКО у активного аккаунта —
@@ -33,18 +36,35 @@ struct ColumnView: View {
 
             if column.hasData {
                 VStack(alignment: .leading, spacing: 10) {
-                    if column.windows.isEmpty {
+                    if let period {
+                        VStack(alignment: .leading, spacing: LimitRowView.lineSpacing) {
+                            Text(L.t("column.usageUnavailable"))
+                                .font(LimitRowView.titleFont)
+                                .foregroundColor(Theme.primary)
+                            Capsule().fill(Theme.track)
+                                .frame(height: LimitRowView.trackHeight)
+                                .accessibilityHidden(true)
+                            HStack(alignment: .firstTextBaseline) {
+                                Text(period.label)
+                                Spacer(minLength: 4)
+                                Text(period.value).monospacedDigit()
+                            }
+                            .font(LimitRowView.timingFont)
+                            .foregroundColor(Theme.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
+                    } else if column.windows.isEmpty {
                         Text(L.t("column.usageUnavailable"))
-                            .font(.system(size: 9.5))
+                            .font(LimitRowView.titleFont)
                             .foregroundColor(Theme.tertiary)
                     }
                     ForEach(column.windows) { window in
                         LimitRowView(window: window, isExpanded: isExpanded)
                     }
                 }
-                if !column.stats.isEmpty {
+                if !stats.isEmpty {
                     VStack(alignment: .leading, spacing: 3) {
-                        ForEach(column.stats) { stat in
+                        ForEach(stats) { stat in
                             HStack(alignment: .firstTextBaseline, spacing: 0) {
                                 // Невидимая опора шрифта заголовка окна: строка
                                 // получает его высоту и базовую линию и стоит
@@ -184,6 +204,11 @@ private struct ReauthChip: View {
 }
 
 struct LimitRowView: View {
+    static let titleFont = Font.system(size: 11, weight: .medium)
+    static let timingFont = Font.system(size: 9.5)
+    static let lineSpacing: CGFloat = 4
+    static let trackHeight: CGFloat = 5
+
     let window: LimitWindow
     var isExpanded = true
 
@@ -191,12 +216,12 @@ struct LimitRowView: View {
     private var color: Color { Theme.color(for: window.utilization) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Self.lineSpacing) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 // Названия вроде «GPT-5.3-Codex-Spark · Недельное окно» длиннее
                 // колонки, поэтому переносим их, а не режем многоточием.
                 Text(window.title)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(Self.titleFont)
                     .foregroundColor(Theme.primary)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -217,7 +242,7 @@ struct LimitRowView: View {
                         .frame(width: max(fraction > 0 ? 3 : 0, proxy.size.width * fraction))
                 }
             }
-            .frame(height: 5)
+            .frame(height: Self.trackHeight)
 
             // Время сброса видно всегда. Если при текущем темпе упрёмся в предел
             // раньше сброса — дописываем прогноз к той же строке тревожным цветом
@@ -227,14 +252,14 @@ struct LimitRowView: View {
                 let forecastTime = window.exhaustsAt.map(Format.clock)
                 TimelineView(.periodic(from: .now, by: isExpanded ? 1 : 600)) { context in
                     timingLine(resetsAt: resetsAt, forecastTime: forecastTime, now: context.date)
-                        .font(.system(size: 9.5))
+                        .font(Self.timingFont)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             } else {
                 // Окно ещё не началось (0 %, даты сброса нет). Держим место под
                 // строку, иначе всё ниже съезжает относительно соседних колонок.
                 Text(" ")
-                    .font(.system(size: 9.5))
+                    .font(Self.timingFont)
                     .hidden()
             }
         }
