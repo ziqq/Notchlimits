@@ -133,11 +133,15 @@ enum CLISelection$Claude {
                         && account.claudeConfigOwner?.matches(URL(fileURLWithPath: selection)) == true)
                     && AuthStorage$Claude.contains(service: service)
             }
-            guard ownsProfile(),
-                  revisionIsCurrent?() == true
-                    || (!AuthStorage$Claude.hasNoLogin(service: service, interactive: false, verifyingOwner: true)
-                        && ownsProfile()) else {
+            guard ownsProfile() else {
                 throw Failure(errorDescription: L.t("error.cliProfile"))
+            }
+            if revisionIsCurrent?() != true {
+                let stillCurrent = AuthStorage$Claude.captureSelectionRevision(for: service)
+                guard !AuthStorage$Claude.hasNoLogin(service: service, interactive: false, verifyingOwner: true),
+                      ownsProfile(), stillCurrent() else {
+                    throw Failure(errorDescription: L.t("error.cliProfile"))
+                }
             }
             guard rename(staged.path, pointer.path) == 0 else {
                 throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
