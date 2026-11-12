@@ -1,6 +1,11 @@
 # Changelog
 
 
+## 1.5.2 - 12/11/2026
+- **FIXED**: KIMI and GROK show the plan and account email when the CLI provides them.
+- **CHANGED**: GROK shows “Usage unavailable” when the response contains a reset date without a usage percentage.
+
+
 ## 1.5.1 - 12/11/2026
 - **FIXED**: The update dialog is narrower, with a centered description and spacing that fits the text.
 - **CHANGED**: The panel and column menus use the shorter labels KIMI and GROK.
