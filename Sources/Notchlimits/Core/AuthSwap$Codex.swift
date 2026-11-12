@@ -414,7 +414,7 @@ enum AuthSwap$Codex {
         payload = checked.record?.data
         try requireNativeLocation(base, owner: baseOwner)
         let validatePublication = {
-            let includesKeyring = source.mode == .keyring || source.mode == .auto || base.mode == .keyring || base.mode == .auto
+            let includesKeyring = source.mode.usesKeyring || base.mode.usesKeyring
             try AuthStorage$Codex.validateMutation(homes: [incoming, baseHome], includesKeyring: includesKeyring) {
                 guard try checkedRecord(incomingRecord, storage: source, home: incoming, owner: sourceOwner).matches,
                       try checkedRecord(previous, storage: base, home: baseHome, owner: baseOwner).matches else {
@@ -429,7 +429,7 @@ enum AuthSwap$Codex {
             // Do not forget a refused backup cleanup or report a completed switch.
             if !keepBackup {
                 do {
-                    try deleteBackup(incomingRecord, storage: source, owner: sourceOwner, validating: {
+                    try deleteBackup(incomingRecord, storage: source, owner: sourceOwner, protecting: [(baseHome, base.mode)], validating: {
                         guard try ownsPublication(payload, storage: base, owner: baseOwner) else { throw Failure.busy }
                     })
                 } catch {
@@ -653,7 +653,12 @@ enum AuthSwap$Codex {
                             throw Failure.busy
                         }
                     })
-                    updated = data
+                    // A native Keychain change during fallback cleanup can
+                    // retire this publication before we return its snapshot.
+                    if record.backend == .keyring {
+                        let current = try destination.load(backend: .keyring)
+                        if current.flatMap({ authIdentity($0.data) }) == authIdentity(data) { updated = current?.data }
+                    } else { updated = data }
                 }
             }
         } catch { failure = error }
@@ -1013,7 +1018,8 @@ enum AuthSwap$Codex {
                 }
                 try validateRemoval(at: home)
                 removedBackup = primary
-                try deleteBackup(primary, storage: backup, owner: backupOwner, validating: {
+                try deleteBackup(primary, storage: backup, owner: backupOwner,
+                                 protecting: [(baseHome, base.mode), (home, target.mode)], validating: {
                     try validateRemoval(at: home)
                     if restore {
                         guard try checkedRecord(restoredNative, storage: base, home: baseHome, owner: baseOwner).matches else {
@@ -1085,32 +1091,34 @@ enum AuthSwap$Codex {
     /// Carry both publication and backup admission through unlink, Keychain
     /// deletion and completion. Shared fallbacks retain their independent owner.
     private static func deleteBackup(_ record: AuthStorage$Codex.Record?, storage backup: AuthStorage$Codex,
-                                     owner: DirectoryIdentity?, validating publication: @escaping () throws -> Void) throws {
+                                     owner: DirectoryIdentity?, protecting owners: [(home: URL, mode: AuthStorage$Codex.Mode)],
+                                     validating publication: @escaping () throws -> Void) throws {
         let shared = backup.mode != .file && fileIsShared(home: backup.home, fileHome: backup.home)
         let file = try backup.load(backend: .file)?.data
+        let includesKeyring = backup.mode.usesKeyring || owners.contains { $0.mode.usesKeyring }
         func validate(_ remaining: AuthStorage$Codex.Record?, fileRemoved: Bool) throws {
-            try publication()
-            guard try checkedRecord(remaining, storage: backup, home: stashHome, owner: owner).matches else {
-                throw Failure.busy
-            }
-            if !shared {
-                let current = try backup.load(backend: .file)?.data
-                if fileRemoved {
-                    guard current == nil else { throw Failure.busy }
-                } else {
-                    guard current == file || current.flatMap(authIdentity) != nil
-                        && current.flatMap(authIdentity) == file.flatMap(authIdentity) else { throw Failure.busy }
-                    // A configured file login is an independent owner even when
-                    // the internal backup still pins an older Keychain backend.
-                    if backup.mode != .file, let current, let record,
-                       authIdentity(current) != authIdentity(record.data),
-                       try AuthStorage$Codex(home: backup.home).mode == .file { throw Failure.busy }
+            try AuthStorage$Codex.validateMutation(homes: [stashHome] + owners.map { $0.home }, includesKeyring: includesKeyring) {
+                try publication()
+                guard try checkedRecord(remaining, storage: backup, home: stashHome, owner: owner).matches else {
+                    throw Failure.busy
                 }
+                if !shared {
+                    let current = try backup.load(backend: .file)?.data
+                    if fileRemoved {
+                        guard current == nil else { throw Failure.busy }
+                    } else {
+                        guard current == file || current.flatMap(authIdentity) != nil
+                            && current.flatMap(authIdentity) == file.flatMap(authIdentity) else { throw Failure.busy }
+                        // The internal backup can pin a backend above an
+                        // independent login in the configured file store.
+                        if backup.mode != .file, let current, let record,
+                           authIdentity(current) != authIdentity(record.data),
+                           try AuthStorage$Codex(home: backup.home).mode == .file { throw Failure.busy }
+                    }
+                }
+                try publication()
+                guard try matchesLocation(backup, home: stashHome, owner: owner) else { throw Failure.busy }
             }
-            // Backup reads can block while the native login changes. Do not
-            // complete cleanup using the publication proof from before them.
-            try publication()
-            guard try matchesLocation(backup, home: stashHome, owner: owner) else { throw Failure.busy }
         }
         try backup.delete(validating: { try validate(record, fileRemoved: false) }, afterFileRemoval: {
             try validate(record?.backend == .file ? nil : record, fileRemoved: true)

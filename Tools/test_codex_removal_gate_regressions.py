@@ -108,7 +108,12 @@ for phase, modes in (("reserve-late", ("auto-file", "auto", "keyring")),
                      ("switch-late", ("auto-file", "auto", "keyring", "file"))):
     for mode in modes:
         scenarios.extend(f"{mode}:readable:{phase}:{state}" for state in ("stable", "replacement"))
-assert len(scenarios) == len(set(scenarios)) == 98
+for phase, modes in (("backup-cleanup", ("auto", "keyring")), ("renewal-cleanup", ("auto",)),
+                     ("rollback-config", ("auto", "keyring"))):
+    for mode in modes:
+        for visibility in (("readable", "opaque") if phase == "rollback-config" else ("readable",)):
+            scenarios.extend(f"{mode}:{visibility}:{phase}:{state}" for state in ("stable", "replacement"))
+assert len(scenarios) == len(set(scenarios)) == 112
 for scenario in scenarios:
     setattr(CodexRemovalGateRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"),
             scenario_test(scenario))
