@@ -71,10 +71,11 @@ enum AppSwitchState {
     }
 }
 
-func appAccountSwitcher(for provider: Provider) -> any AppAccountSwitcher {
+func appAccountSwitcher(for provider: Provider) -> (any AppAccountSwitcher)? {
     switch provider {
     case .claude: return AppSwitcher$Claude()
     case .codex: return AppSwitcher$Codex()
+    case .kimi, .grok: return nil
     }
 }
 

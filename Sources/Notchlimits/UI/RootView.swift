@@ -66,7 +66,7 @@ private struct CollapsedContent: View {
                     Circle()
                         .fill(Theme.color(for: column.peakUtilization))
                         .frame(width: 6, height: 6)
-                        .opacity(column.hasData ? 1 : 0.35)
+                        .opacity(column.windows.isEmpty ? 0.35 : 1)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

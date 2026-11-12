@@ -15,6 +15,8 @@
 "window.hours" = "Finestra da %d h";
 "window.days" = "Finestra da %d g";
 "window.generic" = "Finestra di limite";
+"window.monthTotal" = "Totale mensile";
+"window.monthCode" = "Mese · Code";
 "format.percent" = "%d%%";
 
 // Колонка

@@ -11,12 +11,13 @@ enum AccountRemoval {
     }
 
     enum Failure: LocalizedError {
-        case keychain(OSStatus), busy
+        case keychain(OSStatus), busy, unsupported
 
         var errorDescription: String? {
             switch self {
             case .keychain(let status): return SecCopyErrorMessageString(status, nil) as String?
             case .busy: return L.t("remove.busy")
+            case .unsupported: return L.t("error.unknownSource")
             }
         }
     }
@@ -28,7 +29,7 @@ enum AccountRemoval {
             return configDir.map { !ProfileDirectories.containsNativeHome($0) } ?? false
         case .codexHome(let url):
             return !ProfileDirectories.containsNativeHome(url) && url.path.hasPrefix(ProfileDirectories.codexRoot.path + "/")
-        case .mock:
+        case .kimiHome, .grokAuth, .mock:
             return false
         }
     }
@@ -199,6 +200,8 @@ enum AccountRemoval {
                 }
             }
 
+        case .kimiHome, .grokAuth:
+            throw Failure.unsupported
         case .mock:
             break
         }

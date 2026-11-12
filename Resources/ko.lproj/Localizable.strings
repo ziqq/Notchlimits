@@ -15,6 +15,8 @@
 "window.hours" = "%d시간 창";
 "window.days" = "%d일 창";
 "window.generic" = "한도 창";
+"window.monthTotal" = "월간 합계";
+"window.monthCode" = "월간 Code";
 "format.percent" = "%d%%";
 
 // Колонка

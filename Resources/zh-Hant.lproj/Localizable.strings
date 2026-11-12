@@ -15,6 +15,8 @@
 "window.hours" = "%d 小時視窗";
 "window.days" = "%d 天視窗";
 "window.generic" = "限額視窗";
+"window.monthTotal" = "每月總額度";
+"window.monthCode" = "每月 Code 額度";
 "format.percent" = "%d%%";
 
 // Колонка
