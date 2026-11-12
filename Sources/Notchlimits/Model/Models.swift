@@ -10,8 +10,8 @@ enum Provider: String, Codable {
         switch self {
         case .claude: return "CLAUDE"
         case .codex:  return "CODEX"
-        case .kimi:   return "KIMI CODE"
-        case .grok:   return "GROK BUILD"
+        case .kimi:   return "KIMI"
+        case .grok:   return "GROK"
         }
     }
 }
