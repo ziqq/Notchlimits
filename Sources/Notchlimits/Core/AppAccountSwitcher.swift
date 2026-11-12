@@ -21,6 +21,7 @@ protocol AppAccountSwitcher {
     /// Открыт ли аккаунт колонки в приложении. nil — неизвестно (через нас
     /// ещё не переключались).
     func isOpenInApp(columnID: String) -> Bool?
+    func beginSwitch(_ account: DiscoveredAccount)
     /// Приложение уже закрыто: подготовить аккаунт и вернуть параметры запуска.
     func prepare(_ account: DiscoveredAccount) throws -> NSWorkspace.OpenConfiguration
     /// Приложение открылось под аккаунтом — запомнить это.
@@ -29,6 +30,7 @@ protocol AppAccountSwitcher {
 }
 
 extension AppAccountSwitcher {
+    func beginSwitch(_ account: DiscoveredAccount) {}
     func cancel() {}
 
     var isInstalled: Bool { DesktopApp.url(bundleID: bundleID) != nil }
@@ -43,6 +45,7 @@ extension AppAccountSwitcher {
             return
         }
         AppSwitchState.inProgress.insert(account.provider)
+        beginSwitch(account)
         DesktopApp.restart(bundleID: bundleID, appName: appName,
                            prepare: { try prepare(account) }) { result in
             defer { AppSwitchState.inProgress.remove(account.provider) }
@@ -125,15 +128,17 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
         return current.isEmpty ? nil : current == Self.key(for: columnID)
     }
 
+    func beginSwitch(_ account: DiscoveredAccount) {
+        guard case .claudeKeychain(let service, _) = account.source else { return }
+        // Cover the outgoing Desktop's shutdown and a setting change during launch.
+        cliRevisionIsCurrent = AuthStorage$Claude.captureSelectionRevision(for: service)
+    }
+
     func prepare(_ account: DiscoveredAccount) throws -> NSWorkspace.OpenConfiguration {
         let key = Self.key(for: account.id)
         let dir = Self.root.appendingPathComponent(key, isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         preparedKey = key
-        if case .claudeKeychain(let service, _) = account.source {
-            // The CLI setting can be enabled while Desktop is launching.
-            cliRevisionIsCurrent = AuthStorage$Claude.captureSelectionRevision(for: service)
-        }
         if CLISelection$Claude.isEnabled { cliChange = try CLISelection$Claude.stage(account) }
         let config = NSWorkspace.OpenConfiguration()
         config.arguments = ["--user-data-dir=\(dir.path)"]
