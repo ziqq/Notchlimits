@@ -444,8 +444,8 @@ enum AuthSwap$Codex {
             var recovered: AuthStorage$Codex.Record?
             do {
                 try verifyPublication()
-                if let removedBackup, try restoreBackup(removedBackup, to: backup, owner: backupOwner) {
-                    recovered = removedBackup
+                if let removedBackup {
+                    try restoreBackup(removedBackup, to: backup, owner: backupOwner, recovered: &recovered)
                 }
                 try rollbackPublication(previous, storage: base, owner: baseOwner, validating: verifyPublication)
             } catch {
@@ -1070,15 +1070,15 @@ enum AuthSwap$Codex {
                 try validateRemoval(at: home)
                 try operation(target.validatingMutation(validateMutation))
             } catch {
+                var recovered: AuthStorage$Codex.Record?
                 if let activation {
                     let validateRollback = validateNative ?? {
                         try requirePublication(activation.published?.data, storage: base, owner: baseOwner)
                     }
-                    var recovered: AuthStorage$Codex.Record?
                     do {
                         try validateRollback()
-                        if let removedBackup, try restoreBackup(removedBackup, to: backup, owner: backupOwner) {
-                            recovered = removedBackup
+                        if let removedBackup {
+                            try restoreBackup(removedBackup, to: backup, owner: backupOwner, recovered: &recovered)
                         }
                         try rollbackPublication(activation.previous, storage: base, owner: baseOwner,
                                                 validating: validateRollback)
@@ -1093,7 +1093,7 @@ enum AuthSwap$Codex {
                         throw error
                     }
                 } else if let removedBackup {
-                    try restoreBackup(removedBackup, to: backup, owner: backupOwner)
+                    try restoreBackup(removedBackup, to: backup, owner: backupOwner, recovered: &recovered)
                 }
                 throw error
             }
@@ -1169,9 +1169,8 @@ enum AuthSwap$Codex {
 
     /// Keep primary durable before restoring the selected native account. A
     /// refusal at the old backup path must not discard it or skip native rollback.
-    @discardableResult
     private static func restoreBackup(_ record: AuthStorage$Codex.Record, to backup: AuthStorage$Codex,
-                                       owner: DirectoryIdentity?) throws -> Bool {
+                                       owner: DirectoryIdentity?, recovered: inout AuthStorage$Codex.Record?) throws {
         // A completed file-mode CLI login owns the primary route. Preserve its
         // former Keychain login separately before adopting that file backend.
         let configured = try? AuthStorage$Codex(home: backup.home)
@@ -1183,14 +1182,13 @@ enum AuthSwap$Codex {
             if independentFile { throw Failure.busy }
             if let current = try backup.load(verifyingOwner: true) {
                 if authIdentity(current.data) == authIdentity(record.data),
-                   homeKey(stashHome) == backup.home.path, homeKey(backup.home) == backup.home.path { return false }
+                   homeKey(stashHome) == backup.home.path, homeKey(backup.home) == backup.home.path { return }
                 throw Failure.busy
             }
             guard try checkedRecord(nil, storage: backup, home: stashHome, owner: owner).matches else { throw Failure.busy }
             try backup.save(record.data, backend: record.backend, validating: {
                 guard try checkedRecord(nil, storage: backup, home: stashHome, owner: owner).matches else { throw Failure.busy }
             })
-            return false
         }
         catch {
             // Preserve a new primary's credentials and route. Its former login
@@ -1200,6 +1198,7 @@ enum AuthSwap$Codex {
                 ? ProfileDirectories.codexRoot.appendingPathComponent("recovered-" + UUID().uuidString, isDirectory: true)
                 : DesktopApp.supportDirectory.appendingPathComponent("codex-app/recovery-" + UUID().uuidString, isDirectory: true)
             try saveRecoveredBackup(record, mode: backup.mode, at: recovery)
+            if replaced { recovered = record }
             // Discovery, renewal and CLI re-login use the recovered primary too.
             if independentFile, let configured, let replacementFile {
                 guard homeKey(stashHome) == backup.home.path,
@@ -1210,7 +1209,6 @@ enum AuthSwap$Codex {
                 }
                 UserDefaults.standard.set(AuthStorage$Codex.Mode.file.rawValue, forKey: stashStoreKey)
             } else if !replaced { UserDefaults.standard.set(recovery.path, forKey: stashHomeKey) }
-            return replaced
         }
     }
 
@@ -1220,21 +1218,37 @@ enum AuthSwap$Codex {
                                              removed: AuthStorage$Codex.Record?,
                                              published: AuthStorage$Codex.Record?,
                                              alreadyVisible: AuthStorage$Codex.Record?) throws {
-        let observed: AuthStorage$Codex.Record?
+        let observed: [AuthStorage$Codex.Record]
         do {
-            let current = try storage(at: stashHome)
+            let location = stashHome
+            let current = try storage(at: location)
             guard current.home == backup.home else { throw Failure.busy }
-            try requireStorage(current, home: stashHome, owner: owner)
-            let record = try current.load(verifyingOwner: true)
-            try requireStorage(current, home: stashHome, owner: owner)
-            observed = record
+            try requireStorage(current, home: location, owner: owner)
+            let pinned = Result { try current.load(verifyingOwner: true) }
+            // A CLI login can change config.toml and use a different store
+            // while Notchlimits still has the backup's previous mode pinned.
+            var configuredRecord: AuthStorage$Codex.Record?
+            if let configured = try? AuthStorage$Codex(home: location),
+               configured.home == current.home, configured.mode != current.mode {
+                let record = try? configured.load(verifyingOwner: true)
+                if let latest = try? AuthStorage$Codex(home: location),
+                   latest.home == configured.home, latest.mode == configured.mode {
+                    configuredRecord = record
+                }
+            }
+            guard stashHome == location else { throw Failure.busy }
+            try requireStorage(current, home: location, owner: owner)
+            switch pinned {
+            case .success(let record): observed = [record, configuredRecord].compactMap { $0 }
+            case .failure: observed = [published, configuredRecord].compactMap { $0 }
+            }
         } catch {
-            observed = published
+            observed = [published].compactMap { $0 }
         }
         let native = try? storage(at: baseHome)
         let nativeOwner = native.flatMap { DirectoryIdentity.capture($0.home) }
         var visible = [alreadyVisible].compactMap { $0?.data }
-        for record in [removed, observed].compactMap({ $0 }) {
+        for record in [removed].compactMap({ $0 }) + observed {
             guard !visible.contains(where: { AuthStorage$Codex.sameCredentials($0, record.data) }) else { continue }
             if let native, (try? requirePublication(record.data, storage: native, owner: nativeOwner)) != nil {
                 continue

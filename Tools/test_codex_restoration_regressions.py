@@ -67,6 +67,7 @@ for direction in ("select", "return"):
     for change in ("foreign", "stable"):
         scenarios.append(f"routing:{direction}:{change}")
 scenarios.extend(("compensation-logins:both", "compensation-logins:backup-only"))
-assert len(scenarios) == len(set(scenarios)) == 117
+scenarios.extend(("compensation-logins:both:file", "compensation-logins:backup-only:file"))
+assert len(scenarios) == len(set(scenarios)) == 119
 for scenario in scenarios:
     setattr(CodexRestorationRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"), scenario_test(scenario))

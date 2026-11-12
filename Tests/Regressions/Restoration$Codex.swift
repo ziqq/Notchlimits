@@ -30,7 +30,8 @@ enum Restoration$Codex {
             let parts = CommandLine.arguments[1].split(separator: ":").map(String.init)
             switch parts[0] {
             case "compensate": try compensation(mode: parts[1], phase: parts[2], change: parts[3])
-            case "compensation-logins": try compensationLogins(both: parts[1] == "both")
+            case "compensation-logins":
+                try compensationLogins(both: parts[1] == "both", fileBackup: parts.count > 2 && parts[2] == "file")
             case "routing": try routing(returning: parts[1] == "return", foreign: parts[2] == "foreign")
             default: try restoration(kind: parts[0], mode: parts[1], phase: parts[2], change: parts[3])
             }
@@ -290,7 +291,7 @@ enum Restoration$Codex {
         }
     }
 
-    private static func compensationLogins(both: Bool) throws {
+    private static func compensationLogins(both: Bool, fileBackup: Bool) throws {
         Fixture.keychainExists = false
         let native = AuthSwap$Codex.baseHome
         let selected = ProfileDirectories.codexRoot.appendingPathComponent("selected")
@@ -306,14 +307,20 @@ enum Restoration$Codex {
         let newPrimary = Fixture.codexKeychain[Fixture.codexKey(backupLogin)]!
         try AuthSwap$Codex.activate(columnID: "codex:selected", home: selected)
         let selectedNative = Fixture.codexKeychain[nativeKey]!
-        let backupKey = Fixture.codexKey(AuthSwap$Codex.stashHome)
+        let backup = AuthSwap$Codex.stashHome
+        let backupKey = Fixture.codexKey(backup)
         let account = Discovery$Real().discover().first { $0.id == "codex:selected" }!
         var reached = false
         RestorationSignals.beforeDelete = { key in
             guard key != backupKey && key != nativeKey && Fixture.codexKeychain[backupKey] == nil else { return }
             RestorationSignals.beforeDelete = nil
             reached = true
-            Fixture.codexKeychain[backupKey] = newPrimary
+            if fileBackup {
+                try! Fixture.codexMode(backup, "file")
+                try! newPrimary.write(to: backup.appendingPathComponent("auth.json"), options: .atomic)
+            } else {
+                Fixture.codexKeychain[backupKey] = newPrimary
+            }
             if both { Fixture.codexKeychain[nativeKey] = newNative }
             Fixture.denyCodexDelete = true
         }
@@ -322,11 +329,13 @@ enum Restoration$Codex {
         Fixture.denyCodexDelete = false
         RestorationSignals.beforeDelete = nil
         let visible = try visibleLogins()
-        print("Codex removal both=\(both) reached=\(reached) refused=\(refused) active=\(AuthSwap$Codex.activeColumnID) old primary copies=\(visible.filter { $0 == primary }.count) new backup visible=\(visible.contains(newPrimary)) backup still written=\(Fixture.codexKeychain[backupKey] == newPrimary)")
+        let retained = fileBackup ? try? Data(contentsOf: backup.appendingPathComponent("auth.json")) : Fixture.codexKeychain[backupKey]
+        print("Codex removal both=\(both) file=\(fileBackup) reached=\(reached) refused=\(refused) active=\(AuthSwap$Codex.activeColumnID) old primary copies=\(visible.filter { $0 == primary }.count) new backup visible=\(visible.contains(newPrimary)) backup still written=\(retained == newPrimary)")
         try expect(reached && refused && Fixture.codexKeychain[nativeKey] == (both ? newNative : selectedNative),
                    "Fixture did not exercise a refused managed-profile deletion with native credentials intact")
         try expect(visible.filter { $0 == primary }.count == 1 && visible.contains(newPrimary),
                    "Compensation duplicated the former primary and hid the new login in the backup")
+        try expect(retained == newPrimary, "Compensation modified the independent backup login")
     }
     private static func visibleLogins() throws -> [Data] {
         try Discovery$Real().discover().compactMap { account in
