@@ -22,6 +22,7 @@
 // Колонка
 "column.updating" = "refreshing…";
 "column.stale" = "data from %@";
+"column.usageUnavailable" = "Usage unavailable";
 "column.reauth" = "re-auth";
 "column.reauth.help" = "Open Terminal and sign in to this account again. The running app is not touched.";
 

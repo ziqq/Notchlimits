@@ -9,12 +9,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var claudeProvider: Provider$Claude?
     private var terminationPending = false
     private var hotKeys: HotKeyManager!
-    private lazy var updater = UpdaterController(
-        suppressPanel: { [weak self] in self?.panel.setModalSuppression($0) },
-        presentAlert: { [weak self] alert in
-            self?.runModalAbovePanel(alert) ?? .alertSecondButtonReturn
-        }
-    )
+    private lazy var updater = UpdaterController { [weak self] in
+        self?.panel.setModalSuppression($0)
+    }
 
     private enum Setting: Int {
         case telemetry, keepAwake, keepDisplayOn, loginItem, switchCLI

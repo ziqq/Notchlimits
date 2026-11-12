@@ -1,6 +1,21 @@
 # Changelog
 
 
+## 1.5.3 - 12/11/2026
+- **CHANGED**: The update dialog follows the system layout, with a leading icon and text and two equally wide buttons.
+- **FIXED**: GROK aligns its unavailable usage and reset rows with adjacent columns and shows an empty gray track.
+
+
+## 1.5.2 - 12/11/2026
+- **FIXED**: KIMI and GROK show the plan and account email when the CLI provides them.
+- **CHANGED**: GROK shows “Usage unavailable” when the response contains a reset date without a usage percentage.
+
+
+## 1.5.1 - 12/11/2026
+- **FIXED**: The update dialog is narrower, with a centered description and spacing that fits the text.
+- **CHANGED**: The panel and column menus use the shorter labels KIMI and GROK.
+
+
 ## 1.5.0 - 11/11/2026
 - **ADDED**: Kimi Code and Grok Build columns. Notchlimits discovers existing CLI logins and polls usage through
   temporary CLI processes. The CLIs handle token renewal. Extra CLI profiles can be monitored alongside the primary account.
