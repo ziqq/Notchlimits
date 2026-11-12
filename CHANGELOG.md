@@ -1,6 +1,11 @@
 # Changelog
 
 
+## 1.5.0 - 11/11/2026
+- **ADDED**: Kimi Code and Grok Build columns. Notchlimits discovers existing CLI logins and polls usage through
+  temporary CLI processes. The CLIs handle token renewal. Extra CLI profiles can be monitored alongside the primary account.
+
+
 ## 1.4.0 - 13/10/2026
 - **CHANGED**: In-app updates use Sparkle 2.10.0 with signed appcasts and Ed25519-verified archives. Checks remain
   manual, with a compact prompt for ordinary updates; Sparkle handles download, installation and relaunch.
