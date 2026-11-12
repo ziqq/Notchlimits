@@ -50,6 +50,8 @@ private enum Fixture {
     static var denyCredentialChmodHome: String?
     static var failCodexFileWrite = false
     static var beforeCredentialDelete: (() -> Void)?
+    static var beforeCodexSecretRead: ((String) -> Void)?
+    static var beforeDirectoryListing: ((String) -> Void)?
     static var rejectSpentRefresh = false
     static var pauseAuthReadPath: String?
     static var authReadRequiresPath: String?
@@ -423,6 +425,10 @@ private final class FixtureFileManager: Foundation.FileManager, @unchecked Senda
     }
     override func contents(atPath path: String) -> Data? { super.contents(atPath: configPath(path)) }
 
+    override func contentsOfDirectory(atPath path: String) throws -> [String] {
+        Fixture.beforeDirectoryListing?(path)
+        return try super.contentsOfDirectory(atPath: path)
+    }
 
     override func contentsOfDirectory(at url: URL, includingPropertiesForKeys keys: [URLResourceKey]?,
                                       options mask: DirectoryEnumerationOptions = []) throws -> [URL] {
@@ -615,6 +621,9 @@ func SecItemCopyMatching(_ query: CFDictionary, _ result: UnsafeMutablePointer<C
     defer { Fixture.lock.unlock() }
     if (query as NSDictionary)[kSecAttrService as String] as? String == "Codex Auth" {
         let key = (query as NSDictionary)[kSecAttrAccount as String] as! String
+        if (query as NSDictionary)[kSecReturnData as String] as? Bool == true {
+            Fixture.beforeCodexSecretRead?(key)
+        }
         guard let data = Fixture.codexKeychain[key] else { return errSecItemNotFound }
         if (query as NSDictionary)[kSecReturnData as String] as? Bool == true {
             Fixture.codexSecretReads += 1
@@ -1347,6 +1356,11 @@ enum Authentication {
             case "codex-rollback-implicit-file-auto": try codexRollbackStorageMode(originalMode: "auto")
             case "codex-rollback-explicit-file-control": try codexRollbackStorageMode(replacementConfig: true)
             case "codex-rollback-metadata-only-control": try codexRollbackStorageMode(replacementAuth: false)
+            case "codex-rollback-late-file-keyring": try codexRollbackStorageMode(originalMode: "keyring", lateFileLogin: true)
+            case "codex-rollback-late-file-auto": try codexRollbackStorageMode(originalMode: "auto", lateFileLogin: true)
+            case "codex-removal-recovery-native-login": try codexRemovalRecovery(newLogin: "native")
+            case "codex-removal-recovery-backup-login": try codexRemovalRecovery(newLogin: "backup")
+            case "codex-removal-recovery-stable": try codexRemovalRecovery(newLogin: nil)
             case "claude-primary-shared-preserves-fallback": try claudePrimarySharedFallback()
             case "claude-primary-shared-cli-off": try claudePrimarySharedFallback(switchCLI: false)
             case "claude-primary-shared-metadata-denied": try claudePrimarySharedFallback(failure: "metadata")
@@ -1714,6 +1728,11 @@ enum Authentication {
             case "claude-usage-forbidden": try await claudeUsageForbidden()
             case "claude-oauth-profile": try await claudeOAuthProfile()
             case "claude-switch-default": try claudeSwitchCLI(enabled: nil)
+            case "claude-switch-stub-extra": try claudeSwitchStub(primary: false)
+            case "claude-switch-stub-primary": try claudeSwitchStub(primary: true)
+            case "claude-switch-stub-desktop-only": try claudeSwitchStub(primary: false, enabled: false)
+            case "claude-switch-stub-toggle-on": try claudeSwitchStub(primary: false, enabled: false, toggleOn: true)
+            case "claude-switch-unreadable-control": try claudeSwitchStub(primary: false, unreadable: true)
             case "claude-switch-off": try claudeSwitchCLI(enabled: false)
             case "claude-switch-main": try claudeSwitchCLI(enabled: true, primary: true)
             case "claude-switch-bash": try claudeSwitchBash()
@@ -5059,6 +5078,43 @@ enum Authentication {
     }
 
     @MainActor
+    private static func claudeSwitchStub(primary: Bool, enabled: Bool = true,
+                                         unreadable: Bool = false, toggleOn: Bool = false) throws {
+        let profile = primary ? Fixture.storageDirectory : ProfileDirectories.claudeRoot.appendingPathComponent("work")
+        try Foundation.FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+        let hash = SHA256.hash(data: Data(profile.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(8)
+        let service = primary ? Fixture.service : Fixture.service + "-" + hash
+        Fixture.claudeEntries = [service: Fixture.claudeLogin("selected", expired: false)]
+        guard let account = Discovery$Real().discover().first(where: { $0.id == "claude:" + service }) else {
+            throw Failure(description: "Fixture did not discover the selected Claude profile")
+        }
+        let pointer = DesktopApp.supportDirectory.appendingPathComponent("claude-cli/selected-profile")
+        try Foundation.FileManager.default.createDirectory(at: pointer.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let previous = "/previous-cli-profile\n"
+        try Data(previous.utf8).write(to: pointer)
+        CLISelection$Claude.isEnabled = enabled
+        Fixture.holdDesktopCompletion = true
+        var result: Result<Void, Error>?
+        AppSwitcher$Claude().switchTo(account) { result = $0 }
+        try expect(result == nil && Fixture.desktopCompletion != nil, "Fixture did not hold the Desktop launch")
+        if unreadable { Fixture.denyClaudeRead = true }
+        else { Fixture.claudeEntries?[service] = ["trustedDeviceToken": "synthetic-stub"] }
+        // Classic Keychain commits can replace the database while leaving
+        // item metadata unchanged, including its second-resolution date.
+        try Data().write(to: Fixture.classicKeychainDatabase(), options: .atomic)
+        if toggleOn { CLISelection$Claude.isEnabled = true }
+        Fixture.desktopCompletion?(.success(()))
+        let refused: Bool
+        if case .failure? = result { refused = true } else { refused = false }
+        try expect(AppSwitcher$Claude().isOpenInApp(columnID: account.id) == true,
+                   "The Desktop marker did not describe the completed launch")
+        let cliEnabled = enabled || toggleOn
+        let expectedPointer = cliEnabled && unreadable ? profile.path + "\n" : previous
+        try expect(refused == (cliEnabled && !unreadable) && String(contentsOf: pointer) == expectedPointer,
+                   "CLI published a non-login stub or rejected an existing login without read access")
+    }
+
+    @MainActor
     private static func claudeLaunchFailed(first: Bool, enabled: Bool) throws {
         UserDefaults.standard.set(enabled, forKey: "switchClaudeCLI")
         UserDefaults.standard.set("previous-desktop", forKey: "currentClaudeAppAccount")
@@ -6879,24 +6935,35 @@ enum Authentication {
     @MainActor
     private static func codexRollbackStorageMode(originalMode: String = "keyring",
                                                   replacementConfig: Bool = false,
-                                                  replacementAuth: Bool = true) throws {
+                                                  replacementAuth: Bool = true,
+                                                  lateFileLogin: Bool = false) throws {
         let home = ProfileDirectories.codexRoot.appendingPathComponent("rollback-storage-mode")
         try Fixture.codexLogin(home, account: "old-keyring-owner", mode: originalMode)
         let account = DiscoveredAccount(id: "codex:rollback-storage-mode", provider: .codex,
                                         profileName: "rollback-storage-mode", source: .codexHome(home))
+        var listedStagedProfile = false
         Fixture.denyCodexDelete = true
         Fixture.beforeCredentialDelete = {
-            if replacementAuth {
+            if replacementAuth && !lateFileLogin {
                 try! Fixture.writeAuth(home, account: "replacement-file-owner", refresh: "replacement-file-grant", expired: false)
             } else {
                 try! Foundation.FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
                 try! Data("new-cli-settings".utf8).write(to: home.appendingPathComponent("settings.json"))
+            }
+            if lateFileLogin {
+                Fixture.beforeDirectoryListing = { path in
+                    guard URL(fileURLWithPath: path).lastPathComponent.hasPrefix(".removed-") else { return }
+                    Fixture.beforeDirectoryListing = nil
+                    listedStagedProfile = true
+                    try! Fixture.writeAuth(home, account: "replacement-file-owner", refresh: "replacement-file-grant", expired: false)
+                }
             }
             if replacementConfig { try! Fixture.codexMode(home, "file") }
         }
         var failed = false
         do { try AccountRemoval.remove(account) } catch { failed = true }
         try expect(failed, "Credential deletion refusal was not propagated")
+        try expect(!lateFileLogin || listedStagedProfile, "Fixture did not reach rollback directory enumeration")
         try expect(Provider$Codex.readAuth(codexHome: home)?.accountID == (replacementAuth ? "replacement-file-owner" : "old-keyring-owner"),
                    "Rollback hid the replacement CLI login behind old storage settings or lost the old login")
         try expect(try AuthStorage$Codex(home: home).mode.rawValue == (replacementAuth ? "file" : originalMode),
@@ -6905,6 +6972,57 @@ enum Authentication {
             try expect(try String(contentsOf: home.appendingPathComponent("settings.json")) == "new-cli-settings",
                        "Rollback replaced concurrent CLI metadata")
         }
+    }
+
+    @MainActor
+    private static func codexRemovalRecovery(newLogin: String?) throws {
+        let native = AuthSwap$Codex.baseHome
+        let selected = ProfileDirectories.codexRoot.appendingPathComponent("selected")
+        let replacement = Fixture.root.appendingPathComponent("new-login")
+        try Fixture.codexLogin(native, account: "primary", mode: "keyring")
+        try Fixture.codexLogin(selected, account: "selected", mode: "keyring")
+        try Fixture.codexLogin(replacement, account: "replacement", mode: "keyring")
+        let nativeKey = Fixture.codexKey(native)
+        let primary = Fixture.codexKeychain[nativeKey]!
+        let newer = Fixture.codexKeychain[Fixture.codexKey(replacement)]!
+        if newLogin == "backup" { Fixture.codexKeychain[nativeKey] = nil }
+        try AuthSwap$Codex.activate(columnID: "codex:selected", home: selected)
+        let selectedLogin = Fixture.codexKeychain[nativeKey]!
+        let backupKey = Fixture.codexKey(AuthSwap$Codex.stashHome)
+        guard let account = Discovery$Real().discover().first(where: { $0.id == "codex:selected" }) else {
+            throw Failure(description: "Fixture did not discover the active Codex profile")
+        }
+        var reached = false
+        if newLogin == "backup" {
+            Fixture.beforeCredentialDelete = {
+                reached = true
+                Fixture.codexKeychain[backupKey] = newer
+            }
+        } else {
+            Fixture.beforeCodexSecretRead = { key in
+                guard key == nativeKey, !AuthSwap$Codex.isSwapped,
+                      Fixture.codexKeychain[key] == primary else { return }
+                Fixture.beforeCodexSecretRead = nil
+                reached = true
+                if newLogin == "native" { Fixture.codexKeychain[key] = newer }
+            }
+        }
+        var refused = false
+        do { try AccountRemoval.remove(account) } catch { refused = true }
+        try expect(reached && refused == (newLogin != nil), "Fixture did not exercise the expected removal boundary")
+        let expectedNative = newLogin == "backup" ? selectedLogin : newLogin == "native" ? newer : primary
+        let expectedRoute = newLogin == "backup" ? "codex:selected" : AuthSwap$Codex.defaultColumnID
+        try expect(Fixture.codexKeychain[nativeKey] == expectedNative && AuthSwap$Codex.activeColumnID == expectedRoute,
+                   "Refused removal lost native credentials or their routing")
+        let visiblePrimary = newLogin == "backup" ? newer : primary
+        let discovered = Discovery$Real().discover()
+        try expect(try discovered.contains { account in
+            guard case .codexHome(let home) = account.source else { return false }
+            let live = AuthSwap$Codex.liveHome(columnID: account.id, home: home)
+            return try AuthSwap$Codex.authData(home: live) == visiblePrimary
+        }, "The primary login survived in storage but became undiscoverable")
+        try expect(discovered.contains { $0.id == "codex:selected" } == refused,
+                   "Removal did not preserve the selected profile on refusal or retire it on success")
     }
 
     @MainActor

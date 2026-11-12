@@ -125,12 +125,18 @@ enum CLISelection$Claude {
             self.account = account
         }
 
-        func commit() throws {
-            guard AuthStorage$Claude.contains(service: service),
-                  (service == AuthStorage$Claude.baseService
+        func commit(revisionIsCurrent: (() -> Bool)?) throws {
+            func ownsProfile() -> Bool {
+                (service == AuthStorage$Claude.baseService
                     ? AuthStorage$Claude.matchesPrimaryOwner(account)
                     : AuthStorage$Claude.configPath(for: service) == selection
-                        && account.claudeConfigOwner?.matches(URL(fileURLWithPath: selection)) == true) else {
+                        && account.claudeConfigOwner?.matches(URL(fileURLWithPath: selection)) == true)
+                    && AuthStorage$Claude.contains(service: service)
+            }
+            guard ownsProfile(),
+                  revisionIsCurrent?() == true
+                    || (!AuthStorage$Claude.hasNoLogin(service: service, interactive: false, verifyingOwner: true)
+                        && ownsProfile()) else {
                 throw Failure(errorDescription: L.t("error.cliProfile"))
             }
             guard rename(staged.path, pointer.path) == 0 else {
