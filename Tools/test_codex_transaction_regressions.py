@@ -68,6 +68,9 @@ for mode in modes:
         scenarios.append(f"rollback:{mode}:{change}:capture")
 for change in ("login", "rotation", "stable", "metadata"):
     scenarios.append(f"rollback:file:{change}:prepare")
-assert len(scenarios) == len(set(scenarios)) == 194
+for mode in ("file", "keyring"):
+    for change in ("logout", "stable"):
+        scenarios.append(f"source-logout:{mode}:{change}")
+assert len(scenarios) == len(set(scenarios)) == 198
 for scenario in scenarios:
     setattr(CodexTransactionRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"), scenario_test(scenario))

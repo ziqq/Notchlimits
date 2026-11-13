@@ -65,10 +65,15 @@ enum DesktopApp {
     /// оно может ещё писать свои файлы (у Codex — тот самый auth.json).
     static func restart(bundleID: String,
                         appName: String,
+                        beforeStop: () throws -> Void,
                         prepare: @escaping () throws -> NSWorkspace.OpenConfiguration,
                         completion: @escaping (Result<Void, Error>) -> Void) {
         guard let appURL = url(bundleID: bundleID) else {
             completion(.failure(Failure.notInstalled(appName)))
+            return
+        }
+        do { try beforeStop() } catch {
+            completion(.failure(error))
             return
         }
         stop(bundleID: bundleID, appName: appName) { result in

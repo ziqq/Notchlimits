@@ -67,13 +67,30 @@ enum AuthStorage$Claude {
             || credentialFile(service: service).map { FileManager.default.fileExists(atPath: $0.path) } == true
     }
 
-    /// Unchanged selections can validate using metadata alone. Classic
-    /// Keychain database revisions also detect writes in the same second.
-    static func captureSelectionRevision(for service: String) -> () -> Bool {
+    /// Keep the fallback file and Classic Keychain generation from before a
+    /// secret read. A replacement may leave the item date unchanged.
+    private static func captureCredentialRevision(for service: String) -> () -> Bool? {
         let keychainIsCurrent = AuthStorage$Codex.captureClassicKeychainRevision()
         let file = credentialFile(service: service)
         let revision = file.flatMap(fallbackIdentity)
-        return { file.flatMap(fallbackIdentity) == revision && keychainIsCurrent() }
+        let fileIsCurrent = { credentialFile(service: service).flatMap(fallbackIdentity) == revision }
+        return {
+            if let keychainIsCurrent { return keychainIsCurrent(fileIsCurrent) }
+            return fileIsCurrent() ? nil : false
+        }
+    }
+
+    /// The unchanged-selection path needs no additional secret read.
+    static func captureSelectionRevision(for service: String) -> () -> Bool {
+        let revision = captureCredentialRevision(for: service)
+        return { revision() == true }
+    }
+
+    static func validateSelectionLogin(service: String, ownsProfile: () -> Bool) -> Bool {
+        let revision = captureCredentialRevision(for: service)
+        guard !hasNoLogin(service: service, interactive: false, verifyingOwner: true), ownsProfile() else { return false }
+        if let verified = revision() { return verified }
+        return !hasNoLogin(service: service, interactive: false, verifyingOwner: true) && ownsProfile() && revision() != false
     }
 
     private static let removedPrimaryFallbackKey = "claudeRemovedPrimaryFallback"
@@ -248,6 +265,7 @@ enum AuthStorage$Claude {
     /// Recheck the exact usage login at publication without adopting a fallback
     /// when the preferred Keychain owner cannot be verified.
     static func isCurrent(_ expected: Credentials, service: String) throws -> Bool {
+        let stillCurrent = captureCredentialRevision(for: service)
         let item = readItem(service: service, interactive: false, verifyingOwner: true)
         guard let json = item.json else {
             if item.status == errSecItemNotFound { return false }
@@ -256,7 +274,12 @@ enum AuthStorage$Claude {
         guard var current = parse(json) else { return false }
         current.backend = item.backend
         current.directory = item.directory
-        return current.hasSameTokens(as: expected)
+        guard current.hasSameTokens(as: expected) else { return false }
+        if let verified = stillCurrent() { return verified }
+        // A custom Keychain may allow reading the item without exposing its
+        // database file. Confirm the fresh secret again in that environment.
+        return credentials(service: service, interactive: false, verifyingOwner: true)
+            .map { $0.hasSameTokens(as: expected) } == true && stillCurrent() != false
     }
 
     /// Capture the existing no-login check together with its publication proof.
@@ -267,17 +290,19 @@ enum AuthStorage$Claude {
         credentials?.backend = observed.backend
         credentials?.directory = observed.directory
         return (credentials, observed.json.map(isNoLogin) ?? false, {
+            let stillCurrent = captureCredentialRevision(for: service)
             let current = readItem(service: service, interactive: false, verifyingOwner: true)
             if observed.json == nil, observed.status != errSecItemNotFound,
                current.json == nil, current.status == observed.status,
                current.backend == observed.backend, current.directory == observed.directory {
                 // An unchanged unresolved owner keeps its existing status and polling interval.
+                guard stillCurrent() != false else { throw UnavailableCredentials() }
                 return true
             }
             guard current.json != nil || current.status == errSecItemNotFound else {
                 throw UnavailableCredentials()
             }
-            guard observed.json != nil || observed.status == errSecItemNotFound else {
+            guard observed.json != nil || observed.status == errSecItemNotFound, stillCurrent() != false else {
                 return false
             }
             guard let old = observed.json, let new = current.json else {
@@ -653,8 +678,12 @@ enum AuthStorage$Claude {
     /// Preserve the exact config string: the CLI hashes it before resolving paths.
     static func configPath(for service: String) -> String? {
         guard let path = profileLocation(for: service)?.path,
-              service == baseService + "-" + String(sha256Hex(path).prefix(8)) else { return nil }
+              service == profileService(forConfigPath: path) else { return nil }
         return path
+    }
+
+    static func profileService(forConfigPath path: String) -> String {
+        baseService + "-" + sha256Hex(path).prefix(8)
     }
 
     /// Include native and legacy namespaces before an unfinished directory moves.

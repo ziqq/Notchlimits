@@ -111,8 +111,10 @@ struct AuthStorage$Codex {
             try AuthStorage$Codex.classicKeyringSearchList().map(AuthStorage$Codex.keyringPath) == paths
         }
 
-        var isCurrent: Bool {
-            (try? matchesSearchList()) == true && databases.allSatisfy(\.isCurrent)
+        func isCurrent(checkingFiles: () -> Bool) -> Bool {
+            // Security can block while the fallback file is replaced. Check
+            // file metadata after that call and the databases after both.
+            (try? matchesSearchList()) == true && checkingFiles() && databases.allSatisfy(\.isCurrent)
         }
 
         func validate(files: CredentialFilesRevision) throws {
@@ -124,9 +126,9 @@ struct AuthStorage$Codex {
         }
     }
 
-    static func captureClassicKeychainRevision() -> () -> Bool {
-        let revision = try? KeyringSearchRevision()
-        return { revision?.isCurrent == true }
+    static func captureClassicKeychainRevision() -> ((() -> Bool) -> Bool)? {
+        guard let revision = try? KeyringSearchRevision() else { return nil }
+        return { checkingFiles in revision.isCurrent(checkingFiles: checkingFiles) }
     }
 
     /// A later credential or configuration read can invalidate an earlier one.
@@ -488,6 +490,10 @@ struct AuthStorage$Codex {
         case .auto:
             return keyringStatus() == errSecSuccess || FileManager.default.fileExists(atPath: file.path)
         }
+    }
+
+    func containsKeyringItem() -> Bool {
+        keyringStatus() == errSecSuccess
     }
 
     /// Renewal persists back to the backend that supplied its current grant.

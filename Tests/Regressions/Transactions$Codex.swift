@@ -15,6 +15,7 @@ enum Transactions$Codex {
             Fixture.keychainExists = false
             switch parts[0] {
             case "publish": try publication(nativeMode: parts[1], sourceMode: parts[2], phase: parts[3], change: parts[4])
+            case "source-logout": try sourceLogout(mode: parts[1], logout: parts[2] == "logout")
             case "copyback": try copyback(mode: parts[1], phase: parts[2], change: parts[3])
             case "primary": try primary(mode: parts[1], phase: parts[2], change: parts[3])
             case "rollback": try rollback(mode: parts[1], change: parts[2], phase: parts.count > 3 ? parts[3] : "backup")
@@ -69,6 +70,36 @@ enum Transactions$Codex {
     }
 
     private static func stable(_ change: String) -> Bool { change == "stable" || change == "metadata" }
+
+    private static func sourceLogout(mode: String, logout: Bool) throws {
+        let native = AuthSwap$Codex.baseHome
+        let source = ProfileDirectories.codexRoot.appendingPathComponent("incoming")
+        try login(native, name: "native", mode: "file")
+        try login(source, name: "incoming", mode: mode)
+        let original = try raw(native, mode: "file")
+        let incoming = try raw(source, mode: mode)
+        let backup = AuthSwap$Codex.stashHome
+        var reached = false
+        TransactionSignals.attributes = { path in
+            let file = URL(fileURLWithPath: path)
+            guard file.deletingLastPathComponent().path == backup.path, file.lastPathComponent.hasPrefix(".auth-") else { return }
+            TransactionSignals.attributes = nil
+            reached = true
+            if logout {
+                if mode == "file" { try! manager.removeItem(at: source.appendingPathComponent("auth.json")) }
+                else { Fixture.codexKeychain[Fixture.codexKey(source)] = nil }
+            }
+        }
+        let column = AuthSwap$Codex.profileColumnID(source.lastPathComponent)
+        var switched = false
+        do { try AuthSwap$Codex.activate(columnID: column, home: source); switched = true } catch {}
+        TransactionSignals.attributes = nil
+        try expect(reached, "The outgoing backup write was not reached")
+        try expect(switched == !logout && AuthSwap$Codex.activeColumnID == (logout ? AuthSwap$Codex.defaultColumnID : column),
+                   "Switch reported success for a source that logged out during copyback")
+        try expect(try raw(native, mode: "file") == (logout ? original : incoming),
+                   "Switch changed native credentials despite the missing source login")
+    }
 
     private static func publication(nativeMode: String, sourceMode: String, phase: String, change: String) throws {
         let native = Fixture.root.appendingPathComponent("native")
