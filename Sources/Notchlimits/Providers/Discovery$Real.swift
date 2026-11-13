@@ -3,7 +3,7 @@ import Foundation
 /// Поиск живых аккаунтов: записи Claude Code в Keychain + папки CODEX_HOME.
 /// Вызывается на каждом цикле обновления, поэтому новый профиль появляется
 /// в панели сам, без перезапуска.
-struct RealDiscovery: AccountDiscovery {
+struct Discovery$Real: AccountDiscovery {
 
     func discover() -> [DiscoveredAccount] {
         claudeAccounts() + codexAccounts() + kimiAccounts() + grokAccounts()
@@ -59,23 +59,25 @@ struct RealDiscovery: AccountDiscovery {
     }
 
     private func claudeAccounts() -> [DiscoveredAccount] {
-        ClaudeKeychain.items()
+        AuthStorage$Claude.items()
             // Записи без входа (их пишет голый `claude`) — не аккаунты.
-            .filter { !ClaudeKeychain.isKnownNoLogin(service: $0.service, modified: $0.modified) }
+            .filter { !AuthStorage$Claude.isKnownNoLogin(service: $0.service, modified: $0.modified) }
             .map(\.service)
             .map { service in
-                let name = ClaudeKeychain.profileName(for: service)
+                let name = AuthStorage$Claude.profileName(for: service)
                 return DiscoveredAccount(
                     id: "claude:\(service)",
                     provider: .claude,
                     profileName: name,
                     source: .claudeKeychain(service: service,
-                                            configDir: ClaudeKeychain.configDirectory(for: service)),
+                                            configDir: AuthStorage$Claude.configDirectory(for: service)),
                     // Активен аккаунт, открытый в приложении Claude. Пока через нас
                     // не переключались — тот, что берёт голая `claude` (базовая
                     // запись Keychain без суффикса-хэша).
-                    isActive: ClaudeAppSwitcher().isOpenInApp(columnID: "claude:\(service)")
-                        ?? (service == ClaudeKeychain.baseService)
+                    isActive: AppSwitcher$Claude().isOpenInApp(columnID: "claude:\(service)")
+                        ?? (service == AuthStorage$Claude.baseService),
+                    claudePrimaryOwner: service == AuthStorage$Claude.baseService
+                        ? AuthStorage$Claude.primaryOwner() : nil
                 )
             }
     }
@@ -85,20 +87,28 @@ struct RealDiscovery: AccountDiscovery {
         // Переименование основного профиля не должно ронять кэш и уведомления.
         var homes: [(id: String, name: String, url: URL)] = []
 
-        let defaultHome = CodexAuthSwap.baseHome
-        let defaultLive = CodexAuthSwap.liveHome(columnID: CodexAuthSwap.defaultColumnID, home: defaultHome)
-        if FileManager.default.fileExists(atPath: defaultLive.appendingPathComponent("auth.json").path) {
-            homes.append((id: CodexAuthSwap.defaultColumnID,
+        let defaultHome = AuthSwap$Codex.baseHome
+        let defaultLive = AuthSwap$Codex.liveHome(columnID: AuthSwap$Codex.defaultColumnID, home: defaultHome)
+        if AuthSwap$Codex.hasAuth(home: defaultLive) {
+            homes.append((id: AuthSwap$Codex.defaultColumnID,
                           name: ProfileDirectories.primaryName, url: defaultHome))
         }
 
-        for directory in ProfileDirectories.codexProfiles() {
+        let recovered = AuthSwap$Codex.recoveredBackupHomes()
+        let recoveredPaths = Set(recovered.map { $0.home.path })
+        let managed = ProfileDirectories.codexProfiles().filter {
+            !recoveredPaths.contains(AuthStorage$Codex.canonicalPath($0))
+        }.map { directory in
+            (id: AuthSwap$Codex.profileColumnID(directory.lastPathComponent), home: directory)
+        }
+        for (id, directory) in recovered + managed {
+            // A native base home inside the managed root is still the primary
+            // account, with projects and threads that profile removal must preserve.
+            guard !AuthSwap$Codex.isBaseHome(directory),
+                  !AuthSwap$Codex.isPrimaryBackup(directory) else { continue }
             let folder = directory.lastPathComponent
-            let id = CodexAuthSwap.profileColumnID(folder)
-            let live = CodexAuthSwap.liveHome(columnID: id, home: directory)
-            guard FileManager.default.fileExists(
-                atPath: live.appendingPathComponent("auth.json").path
-            ) else { continue }
+            let live = AuthSwap$Codex.liveHome(columnID: id, home: directory)
+            guard AuthSwap$Codex.hasAuth(home: live) else { continue }
             homes.append((id: id, name: folder, url: directory))
         }
 
@@ -109,7 +119,7 @@ struct RealDiscovery: AccountDiscovery {
                               source: .codexHome(home.url),
                               // Активен тот, чей вход сейчас в ~/.codex: под ним
                               // и приложение Codex, и голая `codex`.
-                              isActive: home.id == CodexAuthSwap.activeColumnID)
+                              isActive: home.id == AuthSwap$Codex.activeColumnID)
         }
     }
 }
