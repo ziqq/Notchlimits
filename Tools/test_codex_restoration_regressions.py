@@ -68,6 +68,11 @@ for direction in ("select", "return"):
         scenarios.append(f"routing:{direction}:{change}")
 scenarios.extend(("compensation-logins:both", "compensation-logins:backup-only"))
 scenarios.extend(("compensation-logins:both:file", "compensation-logins:backup-only:file"))
-assert len(scenarios) == len(set(scenarios)) == 119
+for operation in ("restore", "remove"):
+    for mode in ("keyring", "auto"):
+        for phase in ("stable", "empty", "unlink", "denied", "foreign", "foreign-denied"):
+            scenarios.append(f"migration:{operation}:{mode}:{phase}")
+    scenarios.extend((f"migration:{operation}:file:stable", f"migration:{operation}:auto:config-only"))
+assert len(scenarios) == len(set(scenarios)) == 147
 for scenario in scenarios:
     setattr(CodexRestorationRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"), scenario_test(scenario))

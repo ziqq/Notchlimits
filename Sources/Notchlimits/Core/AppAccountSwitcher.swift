@@ -1,6 +1,6 @@
 import AppKit
 
-/// Переключение аккаунта в самом десктоп-приложении (не CLI!).
+/// Switch the desktop application account and optionally route new Claude CLI sessions.
 ///
 /// Подменить аккаунт у работающего приложения нельзя, поэтому свич всегда
 /// один: закрыть приложение → подготовить аккаунт → открыть заново
@@ -21,7 +21,8 @@ protocol AppAccountSwitcher {
     /// Открыт ли аккаунт колонки в приложении. nil — неизвестно (через нас
     /// ещё не переключались).
     func isOpenInApp(columnID: String) -> Bool?
-    func beginSwitch(_ account: DiscoveredAccount)
+    /// Prepare the switch before stopping the running application.
+    func beginSwitch(_ account: DiscoveredAccount) throws
     /// Приложение уже закрыто: подготовить аккаунт и вернуть параметры запуска.
     func prepare(_ account: DiscoveredAccount) throws -> NSWorkspace.OpenConfiguration
     /// Приложение открылось под аккаунтом — запомнить это.
@@ -45,8 +46,8 @@ extension AppAccountSwitcher {
             return
         }
         AppSwitchState.inProgress.insert(account.provider)
-        beginSwitch(account)
         DesktopApp.restart(bundleID: bundleID, appName: appName,
+                           beforeStop: { try beginSwitch(account) },
                            prepare: { try prepare(account) }) { result in
             defer { AppSwitchState.inProgress.remove(account.provider) }
             switch result {
@@ -128,10 +129,11 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
         return current.isEmpty ? nil : current == Self.key(for: columnID)
     }
 
-    func beginSwitch(_ account: DiscoveredAccount) {
+    func beginSwitch(_ account: DiscoveredAccount) throws {
         guard case .claudeKeychain(let service, _) = account.source else { return }
         // Cover the outgoing Desktop's shutdown and a setting change during launch.
         cliRevisionIsCurrent = AuthStorage$Claude.captureSelectionRevision(for: service)
+        if CLISelection$Claude.isEnabled { cliChange = try CLISelection$Claude.stage(account) }
     }
 
     func prepare(_ account: DiscoveredAccount) throws -> NSWorkspace.OpenConfiguration {
@@ -139,7 +141,6 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
         let dir = Self.root.appendingPathComponent(key, isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         preparedKey = key
-        if CLISelection$Claude.isEnabled { cliChange = try CLISelection$Claude.stage(account) }
         let config = NSWorkspace.OpenConfiguration()
         config.arguments = ["--user-data-dir=\(dir.path)"]
         return config
@@ -171,7 +172,9 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
 
 /// Desktop and CLI share the base CODEX_HOME and its configured auth backend.
 /// Swap credentials only, preserving the application's projects and threads.
-struct AppSwitcher$Codex: AppAccountSwitcher {
+final class AppSwitcher$Codex: AppAccountSwitcher {
+    private var primaryUsageOwner: AuthSwap$Codex.UsageOwner?
+
     let bundleID = "com.openai.codex"
     let appName = "Codex"
 
@@ -179,12 +182,21 @@ struct AppSwitcher$Codex: AppAccountSwitcher {
         AuthSwap$Codex.activeColumnID == columnID
     }
 
+    func beginSwitch(_ account: DiscoveredAccount) {
+        guard account.id == AuthSwap$Codex.defaultColumnID,
+              case .codexHome(let home) = account.source else { return }
+        primaryUsageOwner = AuthSwap$Codex.usageOwner(columnID: account.id, home: home)
+    }
+
     func prepare(_ account: DiscoveredAccount) throws -> NSWorkspace.OpenConfiguration {
         guard case .codexHome(let home) = account.source else { throw AuthSwap$Codex.Failure.missingAuth }
-        try AuthSwap$Codex.activate(columnID: account.id, home: home)
+        try AuthSwap$Codex.activate(columnID: account.id, home: home, expectedAccount: account,
+                                    expectedPrimaryRoute: primaryUsageOwner)
         return NSWorkspace.OpenConfiguration()
     }
 
     /// Состояние меняет сама подмена в `prepare`.
-    func commit(_ account: DiscoveredAccount) {}
+    func commit(_ account: DiscoveredAccount) { cancel() }
+
+    func cancel() { primaryUsageOwner = nil }
 }

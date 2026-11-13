@@ -554,10 +554,12 @@ enum DesktopApp {
         }
     }
     @MainActor static func restart(bundleID: String, appName: String,
+                                 beforeStop: () throws -> Void,
                                  prepare: () throws -> NSWorkspace.OpenConfiguration,
                                  completion: @escaping (Result<Void, Error>) -> Void) {
         Fixture.desktopCalls += 1
         do {
+            try beforeStop()
             try Fixture.beforeDesktopPrepare?()
             Fixture.desktopArguments = try prepare().arguments
             if Fixture.holdDesktopCompletion {

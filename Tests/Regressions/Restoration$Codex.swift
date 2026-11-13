@@ -6,6 +6,7 @@ private enum RestorationSignals {
     static var remove: ((URL) throws -> Void)?
     static var attributes: ((String) -> Void)?
     static var beforeDelete: ((String) -> Void)?
+    static var afterNativeFileWrite: (() -> Void)?
 
     static func didWrite(_ key: String) {
         if armed && key == Fixture.codexKey(AuthSwap$Codex.baseHome) { published = true }
@@ -17,6 +18,7 @@ func rename(_ from: UnsafePointer<CChar>, _ to: UnsafePointer<CChar>) -> Int32 {
     if result == 0 && RestorationSignals.armed
         && String(cString: to) == AuthSwap$Codex.baseHome.appendingPathComponent("auth.json").path {
         RestorationSignals.published = true
+        RestorationSignals.afterNativeFileWrite?()
     }
     return result
 }
@@ -32,6 +34,7 @@ enum Restoration$Codex {
             case "compensate": try compensation(mode: parts[1], phase: parts[2], change: parts[3])
             case "compensation-logins":
                 try compensationLogins(both: parts[1] == "both", fileBackup: parts.count > 2 && parts[2] == "file")
+            case "migration": try backupMigration(operation: parts[1], mode: parts[2], phase: parts[3])
             case "routing": try routing(returning: parts[1] == "return", foreign: parts[2] == "foreign")
             default: try restoration(kind: parts[0], mode: parts[1], phase: parts[2], change: parts[3])
             }
@@ -337,6 +340,129 @@ enum Restoration$Codex {
                    "Compensation duplicated the former primary and hid the new login in the backup")
         try expect(retained == newPrimary, "Compensation modified the independent backup login")
     }
+
+    private static func backupMigration(operation: String, mode: String, phase: String) throws {
+        Fixture.keychainExists = false
+        let native = AuthSwap$Codex.baseHome
+        let selected = ProfileDirectories.codexRoot.appendingPathComponent("selected")
+        let incoming = Fixture.root.appendingPathComponent("new-primary")
+        let initialMode = mode == "file" ? "keyring" : "file"
+        try Fixture.codexLogin(native, account: "primary", mode: initialMode)
+        try Fixture.codexLogin(selected, account: "selected", mode: "file")
+        try Fixture.codexLogin(incoming, account: "new-primary", mode: mode)
+        let primary = try AuthSwap$Codex.authData(home: native)!
+        let fresh = try AuthSwap$Codex.authData(home: incoming)!
+        try AuthSwap$Codex.activate(columnID: "codex:selected", home: selected)
+        let selectedLogin = try AuthSwap$Codex.authData(home: native)
+        let backup = AuthSwap$Codex.stashHome
+        let file = backup.appendingPathComponent("auth.json")
+        let key = Fixture.codexKey(backup)
+        let account = Discovery$Real().discover().first { $0.id == "codex:selected" }!
+
+        func attempt() -> Bool {
+            do {
+                if operation == "remove" { try AccountRemoval.remove(account) }
+                else { try AuthSwap$Codex.restoreDefault() }
+                return true
+            } catch { return false }
+        }
+        func publishCLIReplacement() throws {
+            try Fixture.codexMode(backup, mode)
+            if phase == "empty" { try manager.removeItem(at: file) }
+            if mode == "file" { try fresh.write(to: file, options: .atomic) }
+            else if phase != "config-only" { Fixture.codexKeychain[key] = fresh }
+        }
+
+        var reached = false
+        let lateRead = phase == "foreign" || phase == "foreign-denied"
+        if phase == "unlink" {
+            RestorationSignals.remove = { url in
+                guard url.path == file.path else { return }
+                RestorationSignals.remove = nil
+                reached = true
+                try publishCLIReplacement()
+            }
+        } else {
+            try publishCLIReplacement()
+            reached = !lateRead
+        }
+        let foreign = Fixture.root.appendingPathComponent("foreign")
+        try Fixture.codexLogin(foreign, account: "foreign-native", mode: "file")
+        let foreignLogin = try AuthSwap$Codex.authData(home: foreign)!
+        if lateRead {
+            let nativeFile = native.appendingPathComponent("auth.json")
+            RestorationSignals.armed = true
+            RestorationSignals.afterNativeFileWrite = {
+                guard !reached, (try? Data(contentsOf: nativeFile)) == primary else { return }
+                RestorationSignals.afterNativeFileWrite = nil
+                reached = true
+                try! foreignLogin.write(to: nativeFile, options: .atomic)
+                Fixture.denyCodexRead = phase == "foreign-denied"
+            }
+        }
+        Fixture.denyCodexRead = phase == "denied"
+        let first = attempt()
+        Fixture.denyCodexRead = false
+        RestorationSignals.afterNativeFileWrite = nil
+        RestorationSignals.remove = nil
+        let current = try AuthSwap$Codex.authData(home: native)
+        let visible = try visibleLogins()
+        print("Codex backup migration operation=\(operation) mode=\(mode) phase=\(phase) reached=\(reached) succeeded=\(first) old=\(visible.contains(primary)) replacement=\(visible.contains(fresh))")
+        try expect(reached, "Backup migration boundary was not reached")
+        if phase == "config-only" {
+            try expect(first && current == primary && visible.contains(primary),
+                       "A mode edit without a replacement login blocked restoration")
+            return
+        }
+        if lateRead {
+            try expect(!first && current == foreignLogin && visible.filter { $0 == fresh }.count == 1
+                       && visible.filter { $0 == primary }.count == 1,
+                       "Concurrent native login hid the backup or kept stale routing")
+            try expect(AuthSwap$Codex.activeColumnID == AuthSwap$Codex.defaultColumnID,
+                       "The selected profile kept routing to the independent native login")
+            try expect(Fixture.codexKeychain[key] == fresh && (try? Data(contentsOf: file)) != fresh,
+                       "Recovery moved the original CLI login or wrote it to plaintext")
+            let recovered = Discovery$Real().discover().first { account in
+                guard case .codexHome(let home) = account.source else { return false }
+                return (try? AuthSwap$Codex.authData(columnID: account.id, home: home)) == fresh
+            }!
+            let recoveredAgain = Discovery$Real().discover().contains { $0.id == recovered.id }
+            try expect(recoveredAgain && manager.fileExists(atPath: selected.path),
+                       "Rediscovery lost the retained profile or removed the selected one")
+            try AuthSwap$Codex.activate(columnID: account.id, home: selected)
+            try expect((phase == "foreign" || AuthSwap$Codex.stashHome.path != backup.path)
+                       && (try AuthSwap$Codex.authData(home: AuthSwap$Codex.stashHome)) == foreignLogin
+                       && Fixture.codexKeychain[key] == fresh,
+                       "The next switch reused the recovered CLI namespace")
+            try AuthSwap$Codex.restoreDefault()
+            try AccountRemoval.remove(recovered)
+            let afterRemoval = Discovery$Real().discover()
+            try expect(!afterRemoval.contains { $0.id == recovered.id }
+                       && (try AuthSwap$Codex.authData(home: native)) == foreignLogin,
+                       "Removing the recovered profile affected the native primary")
+            return
+        }
+        try expect(!first && current == selectedLogin && AuthSwap$Codex.activeColumnID == "codex:selected",
+                   "Backup migration completed using the old login or left a stale native route")
+        try expect(manager.fileExists(atPath: selected.path), "Refused transaction removed the selected profile")
+        if mode != "file" {
+            try expect(Fixture.codexKeychain[key] == fresh && (try? Data(contentsOf: file)) != fresh,
+                       "Compensation changed the Keychain login or wrote it to plaintext")
+        }
+        if phase == "denied" {
+            try expect(visible.contains(primary), "A denied replacement read abandoned the pinned backup")
+            try expect(!attempt(), "Retry failed to recognize the now-readable independent login")
+        }
+        let recovered = try visibleLogins()
+        try expect(recovered.contains(fresh), "The configured replacement login is hidden")
+        if phase != "empty" {
+            try expect(recovered.filter { $0 == primary }.count == 1,
+                       "The original login was lost or duplicated during migration compensation")
+        }
+        try expect(attempt() && (try AuthSwap$Codex.authData(home: native)) == fresh,
+                   "A retry did not restore the configured replacement login")
+    }
+
     private static func visibleLogins() throws -> [Data] {
         try Discovery$Real().discover().compactMap { account in
             guard case .codexHome(let home) = account.source else { return nil }

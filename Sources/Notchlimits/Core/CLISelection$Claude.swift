@@ -15,8 +15,51 @@ enum CLISelection$Claude {
         DesktopApp.supportDirectory.appendingPathComponent("claude-cli", isDirectory: true)
     }
 
+    private static var pointer: URL { root.appendingPathComponent("selected-profile") }
+
     private struct Failure: LocalizedError {
         let errorDescription: String?
+    }
+
+    /// An old shell must refuse a retired extra profile even after its path is
+    /// reused. Keep the native default and any other selected profile intact.
+    static func withRetiredSelection(services: Set<String>, operation: () throws -> Void) throws {
+        guard services.contains(where: { $0 != AuthStorage$Claude.baseService }) else {
+            try operation()
+            return
+        }
+        let pointer = self.pointer
+        let contents: String
+        do {
+            contents = try String(contentsOf: pointer, encoding: .utf8)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            try operation()
+            return
+        }
+        guard let selection = contents.split(separator: "\n", omittingEmptySubsequences: false).first,
+              selection.hasPrefix("/"),
+              services.contains(AuthStorage$Claude.profileService(forConfigPath: String(selection))) else {
+            try operation()
+            return
+        }
+        let retired = pointer.deletingLastPathComponent().appendingPathComponent(".retired-" + UUID().uuidString)
+        try moveSelection(from: pointer, to: retired)
+        do {
+            try operation()
+        } catch {
+            // If another switch set a route, preserve it. Otherwise restore
+            // the pointer inode, including its permissions, before returning.
+            do { try moveSelection(from: retired, to: pointer) }
+            catch let restore as POSIXError where restore.code == .EEXIST { _ = unlink(retired.path) }
+            throw error
+        }
+        _ = unlink(retired.path)
+    }
+
+    private static func moveSelection(from source: URL, to destination: URL) throws {
+        guard renameatx_np(AT_FDCWD, source.path, AT_FDCWD, destination.path, UInt32(RENAME_EXCL)) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
     }
 
     static func stage(_ account: DiscoveredAccount) throws -> Prepared {
@@ -54,7 +97,6 @@ enum CLISelection$Claude {
         }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
-        let pointer = root.appendingPathComponent("selected-profile")
         let script = root.appendingPathComponent("profile.sh")
         let wasIntegrated = FileManager.default.fileExists(atPath: script.path)
         if !wasIntegrated && !FileManager.default.fileExists(atPath: pointer.path) {
@@ -136,12 +178,9 @@ enum CLISelection$Claude {
             guard ownsProfile() else {
                 throw Failure(errorDescription: L.t("error.cliProfile"))
             }
-            if revisionIsCurrent?() != true {
-                let stillCurrent = AuthStorage$Claude.captureSelectionRevision(for: service)
-                guard !AuthStorage$Claude.hasNoLogin(service: service, interactive: false, verifyingOwner: true),
-                      ownsProfile(), stillCurrent() else {
-                    throw Failure(errorDescription: L.t("error.cliProfile"))
-                }
+            guard revisionIsCurrent?() == true
+                    || AuthStorage$Claude.validateSelectionLogin(service: service, ownsProfile: ownsProfile) else {
+                throw Failure(errorDescription: L.t("error.cliProfile"))
             }
             guard rename(staged.path, pointer.path) == 0 else {
                 throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))

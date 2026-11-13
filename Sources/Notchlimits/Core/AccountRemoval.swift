@@ -82,8 +82,10 @@ enum AccountRemoval {
                 // Logout removes Keychain metadata but leaves the profile and
                 // its Desktop session. Retire every supported path spelling.
                 let desktopServices = Set(services + AuthStorage$Claude.profileServices(in: directory))
-                try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot, move: { try move($0, $1) }) { _ in
-                    for service in services { try deleteKeychainEntry(service: service, validating: { try validate() }) }
+                try CLISelection$Claude.withRetiredSelection(services: desktopServices) {
+                    try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot, move: { try move($0, $1) }) { _ in
+                        for service in services { try deleteKeychainEntry(service: service, validating: { try validate() }) }
+                    }
                 }
                 for service in desktopServices {
                     AppSwitcher$Claude.accountRemoved(columnID: "claude:" + service)
@@ -120,19 +122,21 @@ enum AccountRemoval {
                     // another Keychain owner has appeared, including native main.
                     guard !shared || owners.contains(service) else { throw Failure.busy }
                     var retainedFile: DirectoryIdentity?
-                    if shared {
-                        // Other owners retain their shared configuration and fallback.
-                        if FileManager.default.fileExists(atPath: owner.appendingPathComponent(".credentials.json").path) {
-                            guard let identity = DirectoryIdentity.capture(owner) else { throw Failure.busy }
-                            retainedFile = identity
-                        }
-                        try deleteKeychainEntry(service: service, validating: { try validate() })
-                        if service == AuthStorage$Claude.baseService {
-                            AuthStorage$Claude.recordSharedPrimaryRemoval()
-                        }
-                    } else {
-                        try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot, move: { try move($0, $1) }) { moved in
-                            try deleteClaudeCredentials(service: service, configDir: moved, validating: { try validate() })
+                    try CLISelection$Claude.withRetiredSelection(services: [service]) {
+                        if shared {
+                            // Other owners retain their shared configuration and fallback.
+                            if FileManager.default.fileExists(atPath: owner.appendingPathComponent(".credentials.json").path) {
+                                guard let identity = DirectoryIdentity.capture(owner) else { throw Failure.busy }
+                                retainedFile = identity
+                            }
+                            try deleteKeychainEntry(service: service, validating: { try validate() })
+                            if service == AuthStorage$Claude.baseService {
+                                AuthStorage$Claude.recordSharedPrimaryRemoval()
+                            }
+                        } else {
+                            try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot, move: { try move($0, $1) }) { moved in
+                                try deleteClaudeCredentials(service: service, configDir: moved, validating: { try validate() })
+                            }
                         }
                     }
                     AppSwitcher$Claude.accountRemoved(columnID: account.id)
