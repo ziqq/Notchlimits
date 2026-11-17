@@ -130,10 +130,11 @@ enum AuthSwap$Codex {
         return homeKey(home) == path && fileOwnerKey(home) == owner ? home : nil
     }
 
-    static func recoveredBackupDiscovery() -> (profiles: [(id: String, home: URL)], reservedPaths: Set<String>) {
+    static func recoveredBackupDiscovery(managedDirectories: [URL])
+        -> (profiles: [(id: String, home: URL)], reservedPaths: Set<String>) {
         lock.lock()
         defer { lock.unlock() }
-        resolveRecoveredBackups()
+        resolveRecoveredBackups(managedDirectories: managedDirectories)
         let backups = recoveredBackupHomes()
         let entries = recoveredBackups
         let profiles = backups.filter { profile in
@@ -166,7 +167,7 @@ enum AuthSwap$Codex {
     }
 
     /// Keep a saved login private until the original namespace can be checked.
-    private static func resolveRecoveredBackups() {
+    private static func resolveRecoveredBackups(managedDirectories: [URL]) {
         var state = recoveredBackupState
         let previous = recoveredBackups
         var entries = previous
@@ -175,16 +176,26 @@ enum AuthSwap$Codex {
                   let original = previous[originalID],
                   let originalPath = original["home"], let originalOwner = original["owner"] else { continue }
             let originalURL = URL(fileURLWithPath: originalPath, isDirectory: true)
-            let currentOwner = fileOwnerKey(URL(fileURLWithPath: homeKey(originalURL)))
-            if DirectoryIdentity.missingPath(originalURL) != nil
-                || currentOwner.map({ $0 != originalOwner }) == true {
-                // A proven replacement is outside this recovery's ownership.
+            if DirectoryIdentity.missingPath(originalURL) != nil {
                 entries[id]?["pendingOn"] = nil
                 continue
             }
-            guard let originalHome = recoveredBackupHome(original) else { continue }
+            let canonical = URL(fileURLWithPath: homeKey(originalURL), isDirectory: true)
+            guard let currentOwner = fileOwnerKey(canonical) else { continue }
+            var retained = original
+            if currentOwner != originalOwner {
+                // The same Keychain namespace can still be visible through the managed root.
+                guard canonical.path == originalPath, !isBaseHome(canonical), !isPrimaryBackup(canonical),
+                      managedDirectories.contains(where: { homeKey($0) == originalPath }) else {
+                    entries[id]?["pendingOn"] = nil
+                    continue
+                }
+                retained["owner"] = currentOwner
+            }
+            guard let originalHome = recoveredBackupHome(retained) else { continue }
             do {
-                if try discardDuplicateRecovery(at: snapshot, matching: entry, retainedAt: originalHome, matching: original) {
+                if try discardDuplicateRecovery(at: snapshot, matching: entry, retainedAt: originalHome, matching: retained,
+                                                onDuplicate: { entries[originalID] = retained }) {
                     entries[id] = nil
                 } else {
                     entries[id]?["pendingOn"] = nil
@@ -200,8 +211,17 @@ enum AuthSwap$Codex {
         }
     }
 
+    private static func hasPendingRecovery(for home: URL) -> Bool {
+        let entries = recoveredBackups
+        return entries.values.contains { entry in
+            guard let original = entry["pendingOn"] else { return false }
+            return entries[original]?["home"] == home.path
+        }
+    }
+
     private static func discardDuplicateRecovery(at snapshot: URL, matching savedEntry: [String: String],
-                                                 retainedAt original: URL, matching retainedEntry: [String: String]) throws -> Bool {
+                                                 retainedAt original: URL, matching retainedEntry: [String: String],
+                                                 onDuplicate: () -> Void) throws -> Bool {
         guard let savedOwner = DirectoryIdentity.capture(snapshot),
               let retainedOwner = DirectoryIdentity.capture(original),
               recoveredBackupHome(savedEntry) == snapshot, recoveredBackupHome(retainedEntry) == original else {
@@ -209,7 +229,7 @@ enum AuthSwap$Codex {
         }
         let saved = try storage(at: snapshot)
         let retained = try storage(at: original)
-        guard saved.mode != .ephemeral, retained.mode != .ephemeral else { throw Failure.busy }
+        guard saved.mode != .ephemeral else { throw Failure.busy }
         try requireIdle(saved)
         try requireIdle(retained)
         let includesKeyring = saved.mode.usesKeyring || retained.mode.usesKeyring
@@ -226,6 +246,9 @@ enum AuthSwap$Codex {
         guard let retainedRecord, AuthStorage$Codex.sameCredentials(savedRecord.data, retainedRecord.data) else {
             return false
         }
+        // An exact match keeps the existing route and its removal guard, even
+        // if Keychain refuses to clear the private copy this time.
+        onDuplicate()
         try requireIdleGrant(savedRecord.data)
         try saved.delete(validating: {
             try AuthStorage$Codex.validateMutation(homes: [snapshot, original], includesKeyring: includesKeyring,
@@ -1126,14 +1149,9 @@ enum AuthSwap$Codex {
         // The proven primary transaction removes credentials, never its home.
         guard !containsPrimaryBackup(target.home, excludingRecoveryID: columnID)
             || columnID == defaultColumnID && isBaseHome(target.home) else { throw Failure.busy }
-        if let columnID, columnID.hasPrefix(recoveredBackupIDPrefix) {
-            let recoveryID = String(columnID.dropFirst(recoveredBackupIDPrefix.count))
-            if recoveredBackups.values.contains(where: { $0["pendingOn"] == recoveryID }) {
-                resolveRecoveredBackups()
-                guard !recoveredBackups.values.contains(where: { $0["pendingOn"] == recoveryID }) else {
-                    throw Failure.busy
-                }
-            }
+        if hasPendingRecovery(for: target.home) {
+            resolveRecoveredBackups(managedDirectories: ProfileDirectories.codexProfiles())
+            guard !hasPendingRecovery(for: target.home) else { throw Failure.busy }
         }
         var removalRecord: AuthStorage$Codex.Record?
         var verifiesLogin = false

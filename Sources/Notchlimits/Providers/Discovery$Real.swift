@@ -95,7 +95,7 @@ struct Discovery$Real: AccountDiscovery {
         }
 
         let managedDirectories = ProfileDirectories.codexProfiles()
-        let recovered = AuthSwap$Codex.recoveredBackupDiscovery()
+        let recovered = AuthSwap$Codex.recoveredBackupDiscovery(managedDirectories: managedDirectories)
         let managed = managedDirectories.filter {
             !recovered.reservedPaths.contains(AuthStorage$Codex.canonicalPath($0))
         }.map { directory in

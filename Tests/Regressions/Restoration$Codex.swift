@@ -260,8 +260,10 @@ enum Restoration$Codex {
         let native = AuthSwap$Codex.baseHome
         let selected = ProfileDirectories.codexRoot.appendingPathComponent("selected")
         let other = Fixture.root.appendingPathComponent("foreign")
-        let refusesCleanup = outcome == "cleanup-refused" || outcome == "aliased-root"
-        if outcome == "aliased-root" {
+        let replacesManaged = outcome.hasPrefix("replaced-managed-")
+        let reusesKeychainLogin = outcome == "replaced-managed-same"
+        let refusesCleanup = outcome == "cleanup-refused" || outcome == "aliased-root" || reusesKeychainLogin
+        if outcome == "aliased-root" || replacesManaged {
             let support = DesktopApp.supportDirectory.appendingPathComponent("codex-app", isDirectory: true)
             try manager.createDirectory(at: support, withIntermediateDirectories: true)
             try manager.createSymbolicLink(at: ProfileDirectories.codexRoot, withDestinationURL: support)
@@ -290,23 +292,33 @@ enum Restoration$Codex {
         try expect(reached && refused && Fixture.codexKeychain[backupKey] == original
                    && Fixture.codexKeychain[nativeKey] == foreign,
                    "The fixture did not retain the unchanged original backup")
-        if outcome == "replaced" || outcome == "replaced-alias" {
+        if outcome == "replaced" || outcome == "replaced-alias" || replacesManaged {
             let moved = Fixture.root.appendingPathComponent("original-backup")
             try manager.moveItem(at: backup, to: moved)
-            let replacement = outcome == "replaced" ? backup : Fixture.root.appendingPathComponent("replacement")
-            try Fixture.codexLogin(replacement, account: "replacement", mode: "file")
-            if replacement != backup {
-                try manager.createSymbolicLink(at: backup, withDestinationURL: replacement)
+            if reusesKeychainLogin {
+                try manager.createDirectory(at: backup, withIntermediateDirectories: true)
+                try Fixture.codexMode(backup, "keyring")
+            } else {
+                let replacement = outcome == "replaced-alias" ? Fixture.root.appendingPathComponent("replacement") : backup
+                try Fixture.codexLogin(replacement, account: "replacement", mode: "file")
+                if replacement != backup {
+                    try manager.createSymbolicLink(at: backup, withDestinationURL: replacement)
+                }
+                let newFile = replacement.appendingPathComponent("auth.json")
+                let newLogin = try Data(contentsOf: newFile)
+                Fixture.codexKeychain[backupKey] = nil
+                let scans = try (0..<3).map { _ in try visibleLogins() }
+                let counts = scans.map { $0.filter { $0 == original }.count }
+                print("Saved login visible columns: \(counts)")
+                try expect(counts == [1, 1, 1] && (try Data(contentsOf: newFile)) == newLogin
+                           && Fixture.codexKeychain[nativeKey] == foreign,
+                           "A replacement hid the saved login or recovery modified another owner's credentials")
+                if replacesManaged {
+                    try expect(scans.allSatisfy { $0.filter { $0 == newLogin }.count == 1 },
+                               "Recovery hid or duplicated the independent managed login")
+                }
+                return
             }
-            let newFile = replacement.appendingPathComponent("auth.json")
-            let newLogin = try Data(contentsOf: newFile)
-            Fixture.codexKeychain[backupKey] = nil
-            let counts = try (0..<3).map { _ in try visibleLogins().filter { $0 == original }.count }
-            print("Saved login visible columns: \(counts)")
-            try expect(counts == [1, 1, 1] && (try Data(contentsOf: newFile)) == newLogin
-                       && Fixture.codexKeychain[nativeKey] == foreign,
-                       "A replacement hid the saved login or recovery modified another owner's credentials")
-            return
         }
         if outcome == "logged-out" { Fixture.codexKeychain[backupKey] = nil }
         Fixture.denyCodexDelete = refusesCleanup
@@ -330,7 +342,9 @@ enum Restoration$Codex {
             Fixture.denyCodexDelete = false
         }
         try AccountRemoval.remove(recovered)
-        try expect(!(try visibleLogins()).contains(original) && Fixture.codexKeychain[nativeKey] == foreign,
+        let resurrected = try visibleLogins().contains(original)
+        print("Removed backup login reappeared: \(resurrected)")
+        try expect(!resurrected && Fixture.codexKeychain[nativeKey] == foreign,
                    "Removing the recovered profile resurrected its staged copy or touched the native login")
     }
 
