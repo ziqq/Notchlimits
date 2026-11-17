@@ -273,7 +273,8 @@ enum Restoration$Codex {
         let original = Fixture.codexKeychain[nativeKey]!
         let foreign = Fixture.codexKeychain[Fixture.codexKey(other)]!
         try AuthSwap$Codex.activate(columnID: "codex:selected", home: selected)
-        let backupKey = Fixture.codexKey(AuthSwap$Codex.stashHome)
+        let backup = AuthSwap$Codex.stashHome
+        let backupKey = Fixture.codexKey(backup)
         var reached = false
         Fixture.beforeCodexSecretRead = { key in
             guard key == backupKey, Fixture.codexKeychain[nativeKey] == original else { return }
@@ -289,6 +290,24 @@ enum Restoration$Codex {
         try expect(reached && refused && Fixture.codexKeychain[backupKey] == original
                    && Fixture.codexKeychain[nativeKey] == foreign,
                    "The fixture did not retain the unchanged original backup")
+        if outcome == "replaced" || outcome == "replaced-alias" {
+            let moved = Fixture.root.appendingPathComponent("original-backup")
+            try manager.moveItem(at: backup, to: moved)
+            let replacement = outcome == "replaced" ? backup : Fixture.root.appendingPathComponent("replacement")
+            try Fixture.codexLogin(replacement, account: "replacement", mode: "file")
+            if replacement != backup {
+                try manager.createSymbolicLink(at: backup, withDestinationURL: replacement)
+            }
+            let newFile = replacement.appendingPathComponent("auth.json")
+            let newLogin = try Data(contentsOf: newFile)
+            Fixture.codexKeychain[backupKey] = nil
+            let counts = try (0..<3).map { _ in try visibleLogins().filter { $0 == original }.count }
+            print("Saved login visible columns: \(counts)")
+            try expect(counts == [1, 1, 1] && (try Data(contentsOf: newFile)) == newLogin
+                       && Fixture.codexKeychain[nativeKey] == foreign,
+                       "A replacement hid the saved login or recovery modified another owner's credentials")
+            return
+        }
         if outcome == "logged-out" { Fixture.codexKeychain[backupKey] = nil }
         Fixture.denyCodexDelete = refusesCleanup
         let copies = try visibleLogins().filter { $0 == original }.count

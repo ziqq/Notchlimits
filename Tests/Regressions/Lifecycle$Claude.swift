@@ -32,10 +32,27 @@ private actor ClaudeUsagePublicationProbe: UsageProvider {
     }
 }
 
+func rmdir(_ path: UnsafePointer<CChar>) -> Int32 {
+    ClaudeLifecycleSignals.replaceExpiredLock(at: AT_FDCWD, path: path)
+    return Darwin.rmdir(path)
+}
+
 private enum ClaudeLifecycleSignals {
     static var storeReached = false
     static var searchList: ((UnsafeMutablePointer<CFArray?>) -> OSStatus)?
     static var deniedSelection: String?
+    static var replacingLock: String?
+    static var nativeLock: Int32 = -1
+
+    static func replaceExpiredLock(at parent: Int32, path: UnsafePointer<CChar>) {
+        guard let replacingLock,
+              String(cString: path) == (parent == AT_FDCWD ? replacingLock : URL(fileURLWithPath: replacingLock).lastPathComponent)
+        else { return }
+        self.replacingLock = nil
+        if Darwin.unlinkat(parent, path, AT_REMOVEDIR) == 0 && Darwin.mkdirat(parent, path, 0o700) == 0 {
+            nativeLock = Darwin.openat(parent, path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        }
+    }
 
     static func selectionRenameRefused(_ path: String) -> Bool {
         guard path == deniedSelection else { return false }
@@ -57,6 +74,8 @@ enum Lifecycle$Claude {
                 try cliRemoved(mode: args[1])
             case "dotdir":
                 try dotdir(configured: args[1] != "default", interactiveOnly: args[1] == "interactive")
+            case "lock-syscall":
+                try lockSyscall(recovering: args[1] == "recover")
             case "usage":
                 try await usage(mode: args[1])
             default:
@@ -144,6 +163,32 @@ enum Lifecycle$Claude {
         } else {
             try expect(refused && selected == prior, "CLI selected a file login retired during final Keychain validation")
         }
+    }
+
+    private static func lockSyscall(recovering: Bool) throws {
+        let directory = Fixture.root.appendingPathComponent("claude-lock")
+        let path = directory.appendingPathComponent(".storage-write.lock")
+        var old: StorageLock$Claude? = try StorageLock$Claude(directory: directory)
+        try expect(old?.isHeld == true, "Fixture did not acquire the original lock")
+        if recovering { old = nil }
+        try Foundation.FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1)],
+                                                         ofItemAtPath: path.path)
+        ClaudeLifecycleSignals.replacingLock = path.path
+        var admitted = false
+        if let old {
+            old.release()
+        } else if let recovered = try? StorageLock$Claude(directory: directory) {
+            admitted = true
+            recovered.release()
+        }
+        let native = ClaudeLifecycleSignals.nativeLock
+        try expect(native >= 0, "CLI did not acquire its replacement lock at the syscall boundary")
+        defer { _ = Darwin.close(native) }
+        var owner = stat(), current = stat()
+        let intact = Darwin.fstat(native, &owner) == 0 && Darwin.lstat(path.path, &current) == 0
+            && owner.st_dev == current.st_dev && owner.st_ino == current.st_ino
+        print("Native Claude lock intact: \(intact), recovery admitted: \(admitted)")
+        try expect(intact && !admitted, "Notchlimits removed a fresh native lock or recovered while CLI owned it")
     }
 
     @MainActor

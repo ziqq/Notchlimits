@@ -18,7 +18,8 @@ class ClaudeLifecycleRegressions(unittest.TestCase):
             "func SecKeychainCopySearchList(_ result: UnsafeMutablePointer<CFArray?>) -> OSStatus {":
                 "if let searchList = ClaudeLifecycleSignals.searchList { return searchList(result) }",
             "_ to: UnsafePointer<CChar>, _ flags: UInt32) -> Int32 {":
-                "if ClaudeLifecycleSignals.selectionRenameRefused(String(cString: from)) { return -1 }",
+                """if flags == UInt32(RENAME_SWAP) { ClaudeLifecycleSignals.replaceExpiredLock(at: fromFD, path: from) }
+    if ClaudeLifecycleSignals.selectionRenameRefused(String(cString: from)) { return -1 }""",
         }
         for anchor, body in hooks.items():
             assert support.count(anchor) == 1
@@ -80,3 +81,9 @@ class ClaudeLifecycleRegressions(unittest.TestCase):
 
     def test_audit_rollback_empty_bootstrap(self):
         self.check_scenario("cli-removed:rollback-empty")
+
+    def test_preserves_native_lock_replaced_during_release(self):
+        self.check_scenario("lock-syscall:release")
+
+    def test_preserves_native_lock_replaced_during_recovery(self):
+        self.check_scenario("lock-syscall:recover")

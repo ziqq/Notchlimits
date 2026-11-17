@@ -78,8 +78,8 @@ for operation in ("restore", "remove"):
     scenarios.extend((f"migration:{operation}:file:stable", f"migration:{operation}:auto:config-only"))
 scenarios.append("compensation-logins:both:denied")
 scenarios.append("compensation-logins:both:locked")
-for outcome in ("unchanged", "logged-out", "cleanup-refused", "aliased-root"):
+for outcome in ("unchanged", "logged-out", "cleanup-refused", "aliased-root", "replaced", "replaced-alias"):
     scenarios.append(f"unreadable-original:{outcome}")
-assert len(scenarios) == len(set(scenarios)) == 153
+assert len(scenarios) == len(set(scenarios)) == 155
 for scenario in scenarios:
     setattr(CodexRestorationRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"), scenario_test(scenario))

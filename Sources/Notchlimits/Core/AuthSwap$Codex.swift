@@ -173,9 +173,12 @@ enum AuthSwap$Codex {
         for (id, entry) in previous {
             guard let originalID = entry["pendingOn"], let snapshot = recoveredBackupHome(entry),
                   let original = previous[originalID],
-                  let originalPath = original["home"] else { continue }
+                  let originalPath = original["home"], let originalOwner = original["owner"] else { continue }
             let originalURL = URL(fileURLWithPath: originalPath, isDirectory: true)
-            if DirectoryIdentity.missingPath(originalURL) != nil {
+            let currentOwner = fileOwnerKey(URL(fileURLWithPath: homeKey(originalURL)))
+            if DirectoryIdentity.missingPath(originalURL) != nil
+                || currentOwner.map({ $0 != originalOwner }) == true {
+                // A proven replacement is outside this recovery's ownership.
                 entries[id]?["pendingOn"] = nil
                 continue
             }

@@ -62,10 +62,7 @@ final class StorageLock$Claude: @unchecked Sendable {
         defer { if !keepFD { _ = close(directory) } }
         var opened = stat()
         guard fstat(directory, &opened) == 0, Identity(opened) == identity else { throw Failure.lost }
-        let marker = Data(UUID().uuidString.utf8)
-        guard marker.withUnsafeBytes({
-            fsetxattr(directory, Self.ownerAttribute, $0.baseAddress, $0.count, 0, 0)
-        }) == 0 else { throw Failure.lost }
+        guard Self.markOwner(directory) else { throw Failure.lost }
         // Never replace a native owner that acquired the path while preparing.
         guard renameatx_np(AT_FDCWD, prepared, AT_FDCWD, path, UInt32(RENAME_EXCL)) == 0 else {
             throw Failure.busy
@@ -117,10 +114,9 @@ final class StorageLock$Claude: @unchecked Sendable {
     }
 
     private func ownsDirectory(at path: String) -> Bool {
-        guard let current = Identity.at(path) else { return false }
         // The held descriptor prevents inode reuse while alive. Birthtime is
         // checked only when recovering the previous JSON owner-record format.
-        return current.inode == identity.inode && current.device == identity.device
+        return identity.matches(Identity.at(path))
     }
 
     private var withinLease: Bool {
@@ -161,9 +157,7 @@ final class StorageLock$Claude: @unchecked Sendable {
         stateLock.unlock()
         timer.cancel()
         queue.sync {}
-        // Preserve a replacement owner's lock. Never steal busy or stale CLI locks;
-        // defer the write when ownership is uncertain.
-        if ownsDirectory && rmdir(path) == 0 {
+        if Self.removeOwnedDirectory(at: path, identity: identity) {
             _ = ftruncate(ownerFD, 0)
         }
         _ = close(directoryFD)
@@ -191,11 +185,75 @@ final class StorageLock$Claude: @unchecked Sendable {
             birthNanoseconds = Int64(info.st_birthtimespec.tv_nsec)
         }
 
-        static func at(_ path: String) -> Identity? {
+        func matches(_ current: Identity?) -> Bool {
+            current?.inode == inode && current?.device == device
+        }
+
+        static func at(_ path: String, relativeTo directory: Int32 = AT_FDCWD) -> Identity? {
             var info = stat()
-            guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFDIR else { return nil }
+            guard fstatat(directory, path, &info, AT_SYMLINK_NOFOLLOW) == 0,
+                  (info.st_mode & S_IFMT) == S_IFDIR else { return nil }
             return Identity(info)
         }
+    }
+
+    private static func markOwner(_ directory: Int32) -> Bool {
+        let marker = Data(UUID().uuidString.utf8)
+        return marker.withUnsafeBytes {
+            fsetxattr(directory, ownerAttribute, $0.baseAddress, $0.count, 0, 0) == 0
+        }
+    }
+
+    private static func removeOwnedDirectory(at path: String, identity: Identity) -> Bool {
+        let url = URL(fileURLWithPath: path)
+        let name = url.lastPathComponent
+        let parent = open(url.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard parent >= 0 else { return false }
+        defer { _ = close(parent) }
+        guard identity.matches(Identity.at(name, relativeTo: parent)) else { return false }
+
+        let staged = "." + name + ".retiring-" + UUID().uuidString
+        guard mkdirat(parent, staged, 0o700) == 0 else { return false }
+        let guardFD = openat(parent, staged, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard guardFD >= 0 else {
+            _ = unlinkat(parent, staged, AT_REMOVEDIR)
+            return false
+        }
+        defer { _ = close(guardFD) }
+        var info = stat()
+        guard fstat(guardFD, &info) == 0, markOwner(guardFD) else {
+            _ = unlinkat(parent, staged, AT_REMOVEDIR)
+            return false
+        }
+        let placeholder = Identity(info)
+        func removeStaged(_ owner: Identity) -> Bool {
+            owner.matches(Identity.at(staged, relativeTo: parent)) && unlinkat(parent, staged, AT_REMOVEDIR) == 0
+        }
+
+        // Keep the native name occupied while checking the inode that was moved.
+        // The empty, marked placeholder is recoverable if Notchlimits crashes.
+        guard identity.matches(Identity.at(name, relativeTo: parent)),
+              renameatx_np(parent, name, parent, staged, UInt32(RENAME_SWAP)) == 0 else {
+            _ = removeStaged(placeholder)
+            return false
+        }
+        guard removeStaged(identity) else {
+            if placeholder.matches(Identity.at(name, relativeTo: parent)),
+               renameatx_np(parent, staged, parent, name, UInt32(RENAME_SWAP)) == 0 {
+                _ = removeStaged(placeholder)
+            } else {
+                _ = renameatx_np(parent, staged, parent, name, UInt32(RENAME_EXCL))
+            }
+            return false
+        }
+
+        // Detach the placeholder before removing it as well. A native owner
+        // that appears during cleanup must be restored without an overwrite.
+        guard placeholder.matches(Identity.at(name, relativeTo: parent)),
+              renameatx_np(parent, name, parent, staged, UInt32(RENAME_EXCL)) == 0 else { return false }
+        if removeStaged(placeholder) { return true }
+        _ = renameatx_np(parent, staged, parent, name, UInt32(RENAME_EXCL))
+        return false
     }
 
     private static func hasOwnerMarker(_ directory: Int32) -> Bool {
@@ -226,10 +284,8 @@ final class StorageLock$Claude: @unchecked Sendable {
         let identity = Identity(info)
         let marked = hasOwnerMarker(directory)
         let legacy = readIdentity(ownerFD) == identity
-        guard marked || legacy, Identity.at(path) == identity else { return false }
-        // Only our abandoned inode can be removed. An unmarked CLI lock or a
-        // replacement owner is left intact, regardless of its mtime.
-        return rmdir(path) == 0
+        guard marked || legacy else { return false }
+        return removeOwnedDirectory(at: path, identity: identity)
     }
 }
 
