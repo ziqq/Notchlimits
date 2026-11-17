@@ -36,6 +36,7 @@ enum Restoration$Codex {
             case "compensation-logins":
                 try compensationLogins(both: parts[1] == "both", fileBackup: parts.count > 2 && parts[2] == "file", denied: parts.count > 2 && parts[2] == "denied",
                                        unavailable: parts.count > 2 && parts[2] == "locked")
+            case "unreadable-original": try unreadableOriginal(outcome: parts[1])
             case "migration": try backupMigration(operation: parts[1], mode: parts[2], phase: parts[3])
             case "routing": try routing(returning: parts[1] == "return", foreign: parts[2] == "foreign")
             default: try restoration(kind: parts[0], mode: parts[1], phase: parts[2], change: parts[3])
@@ -252,6 +253,60 @@ enum Restoration$Codex {
         try expect(try AuthSwap$Codex.authData(home: native) == previous
                    && AuthSwap$Codex.activeColumnID == "codex:selected" && Fixture.refreshCalls == 0,
                    "Compensation lost the selected native login, its route, or issued a POST")
+    }
+
+    private static func unreadableOriginal(outcome: String) throws {
+        Fixture.keychainExists = false
+        let native = AuthSwap$Codex.baseHome
+        let selected = ProfileDirectories.codexRoot.appendingPathComponent("selected")
+        let other = Fixture.root.appendingPathComponent("foreign")
+        try Fixture.codexLogin(native, account: "primary", mode: "keyring")
+        try Fixture.codexLogin(selected, account: "selected", mode: "keyring")
+        try Fixture.codexLogin(other, account: "foreign", mode: "keyring")
+        let nativeKey = Fixture.codexKey(native)
+        let original = Fixture.codexKeychain[nativeKey]!
+        let foreign = Fixture.codexKeychain[Fixture.codexKey(other)]!
+        try AuthSwap$Codex.activate(columnID: "codex:selected", home: selected)
+        let backupKey = Fixture.codexKey(AuthSwap$Codex.stashHome)
+        var reached = false
+        Fixture.beforeCodexSecretRead = { key in
+            guard key == backupKey, Fixture.codexKeychain[nativeKey] == original else { return }
+            Fixture.beforeCodexSecretRead = nil
+            reached = true
+            Fixture.codexKeychain[nativeKey] = foreign
+            RestorationSignals.unavailableKey = backupKey
+        }
+        var refused = false
+        do { try AuthSwap$Codex.restoreDefault() } catch { refused = true }
+        Fixture.beforeCodexSecretRead = nil
+        RestorationSignals.unavailableKey = nil
+        try expect(reached && refused && Fixture.codexKeychain[backupKey] == original
+                   && Fixture.codexKeychain[nativeKey] == foreign,
+                   "The fixture did not retain the unchanged original backup")
+        if outcome == "logged-out" { Fixture.codexKeychain[backupKey] = nil }
+        Fixture.denyCodexDelete = outcome == "cleanup-refused"
+        let copies = try visibleLogins().filter { $0 == original }.count
+        print("Original backup visible columns: \(copies)")
+        try expect(copies == 1, "The same unchanged grant became visible in more than one column after unlock")
+        let recovered = try Discovery$Real().discover().first { account in
+            guard case .codexHome(let home) = account.source else { return false }
+            return try AuthSwap$Codex.authData(columnID: account.id, home: home) == original
+        }
+        guard let recovered, case .codexHome(let recoveredHome) = recovered.source else {
+            throw Failure(description: "The saved login could not be discovered")
+        }
+        try expect((Fixture.codexKey(recoveredHome) == backupKey) == (outcome != "logged-out"),
+                   "Recovery did not prefer the surviving original CLI namespace")
+        if outcome == "cleanup-refused" {
+            var removalRefused = false
+            do { try AccountRemoval.remove(recovered) } catch { removalRefused = true }
+            try expect(removalRefused && Fixture.codexKeychain[backupKey] == original,
+                       "Removal lost the original namespace while its private copy could not be cleared")
+            Fixture.denyCodexDelete = false
+        }
+        try AccountRemoval.remove(recovered)
+        try expect(!(try visibleLogins()).contains(original) && Fixture.codexKeychain[nativeKey] == foreign,
+                   "Removing the recovered profile resurrected its staged copy or touched the native login")
     }
 
     private static func routing(returning: Bool, foreign: Bool) throws {

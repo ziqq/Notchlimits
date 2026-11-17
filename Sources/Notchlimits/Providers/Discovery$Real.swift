@@ -94,7 +94,7 @@ struct Discovery$Real: AccountDiscovery {
                           name: ProfileDirectories.primaryName, url: defaultHome))
         }
 
-        let recovered = AuthSwap$Codex.recoveredBackupHomes()
+        let recovered = AuthSwap$Codex.discoverableRecoveredBackupHomes()
         let recoveredPaths = Set(recovered.map { $0.home.path })
         let managed = ProfileDirectories.codexProfiles().filter {
             !recoveredPaths.contains(AuthStorage$Codex.canonicalPath($0))
