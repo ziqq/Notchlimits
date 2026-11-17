@@ -9,6 +9,7 @@ final class StorageLock$Claude: @unchecked Sendable {
     private var path: String
     private let identity: Identity
     private static let ownerAttribute = "dev.ustinoff.notchlimits.lock-owner"
+    private static let retirementAttribute = "dev.ustinoff.notchlimits.lock-retirement"
     private let queue = DispatchQueue(label: "dev.ustinoff.notchlimits.claude-storage-lock")
     private let timer: DispatchSourceTimer
     private let ownerFD: Int32
@@ -38,6 +39,7 @@ final class StorageLock$Claude: @unchecked Sendable {
         var keepFD = false
         defer { if !keepFD { _ = close(fd) } }
         guard flock(fd, LOCK_EX | LOCK_NB) == 0 else { throw Failure.busy }
+        guard Self.finishRetirement(at: path, ownerFD: fd) else { throw Failure.busy }
         var existing = stat()
         if lstat(path, &existing) == 0 {
             guard Self.recoverAbandoned(path: path, ownerFD: fd) else {
@@ -157,7 +159,7 @@ final class StorageLock$Claude: @unchecked Sendable {
         stateLock.unlock()
         timer.cancel()
         queue.sync {}
-        if Self.removeOwnedDirectory(at: path, identity: identity) {
+        if Self.removeOwnedDirectory(at: path, identity: identity, ownerFD: ownerFD) {
             _ = ftruncate(ownerFD, 0)
         }
         _ = close(directoryFD)
@@ -204,15 +206,26 @@ final class StorageLock$Claude: @unchecked Sendable {
         }
     }
 
-    private static func removeOwnedDirectory(at path: String, identity: Identity) -> Bool {
+    private struct Retirement: Codable {
+        let id: UUID
+        let original: Identity
+        let placeholder: Identity
+
+        func stagedName(for name: String) -> String {
+            "." + name + ".retiring-" + id.uuidString
+        }
+    }
+
+    private static func removeOwnedDirectory(at path: String, identity: Identity, ownerFD: Int32) -> Bool {
         let url = URL(fileURLWithPath: path)
         let name = url.lastPathComponent
         let parent = open(url.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         guard parent >= 0 else { return false }
         defer { _ = close(parent) }
-        guard identity.matches(Identity.at(name, relativeTo: parent)) else { return false }
+        guard let original = Identity.at(name, relativeTo: parent), identity.matches(original) else { return false }
 
-        let staged = "." + name + ".retiring-" + UUID().uuidString
+        let id = UUID()
+        let staged = "." + name + ".retiring-" + id.uuidString
         guard mkdirat(parent, staged, 0o700) == 0 else { return false }
         let guardFD = openat(parent, staged, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard guardFD >= 0 else {
@@ -233,27 +246,75 @@ final class StorageLock$Claude: @unchecked Sendable {
         // Keep the native name occupied while checking the inode that was moved.
         // The empty, marked placeholder is recoverable if Notchlimits crashes.
         guard identity.matches(Identity.at(name, relativeTo: parent)),
+              recordRetirement(Retirement(id: id, original: original, placeholder: placeholder), ownerFD: ownerFD)
+        else {
+            _ = removeStaged(placeholder)
+            return false
+        }
+        // Keep the record until any directory displaced by either rename is
+        // removed or restored. Recovery can then put a native lease back.
+        defer { _ = finishRetirement(name: name, parent: parent, ownerFD: ownerFD) }
+        guard identity.matches(Identity.at(name, relativeTo: parent)),
               renameatx_np(parent, name, parent, staged, UInt32(RENAME_SWAP)) == 0 else {
             _ = removeStaged(placeholder)
             return false
         }
-        guard removeStaged(identity) else {
-            if placeholder.matches(Identity.at(name, relativeTo: parent)),
-               renameatx_np(parent, staged, parent, name, UInt32(RENAME_SWAP)) == 0 {
-                _ = removeStaged(placeholder)
-            } else {
-                _ = renameatx_np(parent, staged, parent, name, UInt32(RENAME_EXCL))
-            }
-            return false
-        }
+        guard removeStaged(identity) else { return false }
 
         // Detach the placeholder before removing it as well. A native owner
         // that appears during cleanup must be restored without an overwrite.
         guard placeholder.matches(Identity.at(name, relativeTo: parent)),
               renameatx_np(parent, name, parent, staged, UInt32(RENAME_EXCL)) == 0 else { return false }
-        if removeStaged(placeholder) { return true }
-        _ = renameatx_np(parent, staged, parent, name, UInt32(RENAME_EXCL))
-        return false
+        return removeStaged(placeholder)
+    }
+
+    private static func recordRetirement(_ retirement: Retirement, ownerFD: Int32) -> Bool {
+        guard let data = try? JSONEncoder().encode(retirement) else { return false }
+        return data.withUnsafeBytes {
+            fsetxattr(ownerFD, retirementAttribute, $0.baseAddress, $0.count, 0, 0) == 0
+        }
+    }
+
+    private static func finishRetirement(at path: String, ownerFD: Int32) -> Bool {
+        let url = URL(fileURLWithPath: path)
+        let parent = open(url.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard parent >= 0 else { return false }
+        defer { _ = close(parent) }
+        return finishRetirement(name: url.lastPathComponent, parent: parent, ownerFD: ownerFD)
+    }
+
+    private static func finishRetirement(name: String, parent: Int32, ownerFD: Int32) -> Bool {
+        var bytes = [UInt8](repeating: 0, count: 512)
+        let count = bytes.withUnsafeMutableBytes {
+            fgetxattr(ownerFD, retirementAttribute, $0.baseAddress, $0.count, 0, 0)
+        }
+        if count < 0 { return errno == ENOATTR }
+        guard let retirement = try? JSONDecoder().decode(Retirement.self, from: Data(bytes.prefix(count))) else {
+            return false
+        }
+        let staged = retirement.stagedName(for: name)
+        func clearRecord() -> Bool {
+            fremovexattr(ownerFD, retirementAttribute, 0) == 0
+        }
+        var info = stat()
+        if fstatat(parent, staged, &info, AT_SYMLINK_NOFOLLOW) != 0 {
+            return errno == ENOENT && clearRecord()
+        }
+        let displaced = Identity(info)
+        if displaced == retirement.original || displaced == retirement.placeholder {
+            guard unlinkat(parent, staged, AT_REMOVEDIR) == 0 else { return false }
+            return clearRecord()
+        }
+        // The staged directory belongs to CLI. Restore it over our own marker,
+        // or publish it at a vacant path. A newer native lock stays in place.
+        if Identity.at(name, relativeTo: parent) == retirement.placeholder,
+           renameatx_np(parent, staged, parent, name, UInt32(RENAME_SWAP)) == 0 {
+            guard Identity.at(staged, relativeTo: parent) == retirement.placeholder,
+                  unlinkat(parent, staged, AT_REMOVEDIR) == 0 else { return false }
+            return clearRecord()
+        }
+        guard renameatx_np(parent, staged, parent, name, UInt32(RENAME_EXCL)) == 0 else { return false }
+        return clearRecord()
     }
 
     private static func hasOwnerMarker(_ directory: Int32) -> Bool {
@@ -285,7 +346,7 @@ final class StorageLock$Claude: @unchecked Sendable {
         let marked = hasOwnerMarker(directory)
         let legacy = readIdentity(ownerFD) == identity
         guard marked || legacy else { return false }
-        return removeOwnedDirectory(at: path, identity: identity)
+        return removeOwnedDirectory(at: path, identity: identity, ownerFD: ownerFD)
     }
 }
 

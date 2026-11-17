@@ -176,26 +176,41 @@ enum AuthSwap$Codex {
                   let original = previous[originalID],
                   let originalPath = original["home"], let originalOwner = original["owner"] else { continue }
             let originalURL = URL(fileURLWithPath: originalPath, isDirectory: true)
-            if DirectoryIdentity.missingPath(originalURL) != nil {
+            let canonical = URL(fileURLWithPath: homeKey(originalURL), isDirectory: true)
+            var info = stat()
+            if fstatat(AT_FDCWD, canonical.path, &info, 0) != 0 {
+                guard errno == ENOENT || errno == ENOTDIR else { continue }
                 entries[id]?["pendingOn"] = nil
                 continue
             }
-            let canonical = URL(fileURLWithPath: homeKey(originalURL), isDirectory: true)
-            guard let currentOwner = fileOwnerKey(canonical) else { continue }
+            guard let currentOwner = fileOwnerKey(info) else {
+                entries[id]?["pendingOn"] = nil
+                continue
+            }
             var retained = original
-            if currentOwner != originalOwner {
-                // The same Keychain namespace can still be visible through the managed root.
-                guard canonical.path == originalPath, !isBaseHome(canonical), !isPrimaryBackup(canonical),
-                      managedDirectories.contains(where: { homeKey($0) == originalPath }) else {
+            var retainedID = originalID
+            if canonical.path != originalPath || currentOwner != originalOwner {
+                let known = entries.first { id, record in
+                    id != originalID && record["pendingOn"] == nil
+                        && record["home"] == canonical.path && record["owner"] == currentOwner
+                }
+                // Resolve duplicates only against a route discovery can actually show.
+                let isManaged = managedDirectories.contains { homeKey($0) == canonical.path }
+                guard !isBaseHome(canonical), !isPrimaryBackup(canonical), known != nil || isManaged else {
                     entries[id]?["pendingOn"] = nil
                     continue
                 }
+                retainedID = known?.key ?? originalID
+                retained["home"] = canonical.path
                 retained["owner"] = currentOwner
             }
             guard let originalHome = recoveredBackupHome(retained) else { continue }
             do {
                 if try discardDuplicateRecovery(at: snapshot, matching: entry, retainedAt: originalHome, matching: retained,
-                                                onDuplicate: { entries[originalID] = retained }) {
+                                                onDuplicate: {
+                    entries[retainedID] = retained
+                    entries[id]?["pendingOn"] = retainedID
+                }) {
                     entries[id] = nil
                 } else {
                     entries[id]?["pendingOn"] = nil
@@ -214,8 +229,8 @@ enum AuthSwap$Codex {
     private static func hasPendingRecovery(for home: URL) -> Bool {
         let entries = recoveredBackups
         return entries.values.contains { entry in
-            guard let original = entry["pendingOn"] else { return false }
-            return entries[original]?["home"] == home.path
+            guard let original = entry["pendingOn"], let path = entries[original]?["home"] else { return false }
+            return path == home.path || homeKey(URL(fileURLWithPath: path)) == home.path
         }
     }
 

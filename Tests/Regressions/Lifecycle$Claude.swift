@@ -43,6 +43,17 @@ private enum ClaudeLifecycleSignals {
     static var deniedSelection: String?
     static var replacingLock: String?
     static var nativeLock: Int32 = -1
+    static var crashOnSwap = false
+
+    static func beforeRename(_ flags: UInt32) {
+        guard crashOnSwap, flags == UInt32(RENAME_SWAP) else { return }
+        FileHandle.standardOutput.write(Data("ready-for-cli\n".utf8))
+        _ = readLine()
+    }
+
+    static func afterRename(_ flags: UInt32, _ result: Int32) {
+        if crashOnSwap, flags == UInt32(RENAME_SWAP), result == 0 { _exit(86) }
+    }
 
     static func replaceExpiredLock(at parent: Int32, path: UnsafePointer<CChar>) {
         guard let replacingLock,
@@ -76,6 +87,10 @@ enum Lifecycle$Claude {
                 try dotdir(configured: args[1] != "default", interactiveOnly: args[1] == "interactive")
             case "lock-syscall":
                 try lockSyscall(recovering: args[1] == "recover")
+            case "lock-crash-swap":
+                try crashAfterLockSwap(recovering: args[1] == "recover")
+            case "lock-native-owner":
+                try preservesNativeLock()
             case "usage":
                 try await usage(mode: args[1])
             default:
@@ -189,6 +204,32 @@ enum Lifecycle$Claude {
             && owner.st_dev == current.st_dev && owner.st_ino == current.st_ino
         print("Native Claude lock intact: \(intact), recovery admitted: \(admitted)")
         try expect(intact && !admitted, "Notchlimits removed a fresh native lock or recovered while CLI owned it")
+    }
+
+    private static func crashAfterLockSwap(recovering: Bool) throws {
+        let directory = Fixture.root.appendingPathComponent("claude-lock")
+        let path = directory.appendingPathComponent(".storage-write.lock")
+        var owner: StorageLock$Claude? = try StorageLock$Claude(directory: directory)
+        try expect(owner?.isHeld == true, "Fixture did not acquire the original lock")
+        try Foundation.FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1)],
+                                                         ofItemAtPath: path.path)
+        ClaudeLifecycleSignals.crashOnSwap = true
+        if recovering {
+            owner = nil
+            _ = try StorageLock$Claude(directory: directory)
+        } else {
+            owner?.release()
+        }
+        throw Failure(description: "Fixture did not reach the swap")
+    }
+
+    private static func preservesNativeLock() throws {
+        let directory = Fixture.root.appendingPathComponent("claude-lock")
+        do {
+            let owner = try StorageLock$Claude(directory: directory)
+            owner.release()
+            throw Failure(description: "Restart acquired the lock while a native owner was still active")
+        } catch StorageLock$Claude.Failure.busy {}
     }
 
     @MainActor

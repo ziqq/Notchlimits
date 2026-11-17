@@ -292,6 +292,34 @@ enum Restoration$Codex {
         try expect(reached && refused && Fixture.codexKeychain[backupKey] == original
                    && Fixture.codexKeychain[nativeKey] == foreign,
                    "The fixture did not retain the unchanged original backup")
+        if outcome == "relocated-owner" || outcome == "relocated-managed" || outcome == "non-directory" {
+            guard let pending = AuthSwap$Codex.recoveredBackupHomes().first(where: { $0.home != backup }) else {
+                throw Failure(description: "The private recovery copy was never registered")
+            }
+            let pendingKey = Fixture.codexKey(pending.home)
+            try expect(Fixture.codexKeychain[pendingKey] == original, "The private copy was never saved")
+            let parent = outcome == "relocated-managed" ? ProfileDirectories.codexRoot : Fixture.root
+            let relocated = parent.appendingPathComponent("relocated-original")
+            try manager.moveItem(at: backup, to: relocated)
+            if outcome == "non-directory" {
+                try Data("restored config file".utf8).write(to: backup)
+            } else {
+                try manager.createSymbolicLink(at: backup, withDestinationURL: relocated)
+                try expect(Fixture.codexKey(backup) != backupKey, "The alias did not change the effective Keychain namespace")
+            }
+            if outcome == "relocated-managed" {
+                try Fixture.codexMode(relocated, "file")
+                try original.write(to: relocated.appendingPathComponent("auth.json"))
+            }
+            let scans = try (0..<3).map { _ in try visibleLogins().filter { $0 == original }.count }
+            print("Saved login visible columns for \(outcome): \(scans)")
+            try expect(scans == [1, 1, 1] && Fixture.codexKeychain[nativeKey] == foreign,
+                       "A proven path change hid the saved login or duplicated the managed login")
+            let retained = Fixture.codexKeychain[pendingKey]
+            try expect(outcome == "relocated-managed" ? retained == nil : retained == original,
+                       "Recovery did not reconcile the private copy against the effective namespace")
+            return
+        }
         if outcome == "replaced" || outcome == "replaced-alias" || replacesManaged {
             let moved = Fixture.root.appendingPathComponent("original-backup")
             try manager.moveItem(at: backup, to: moved)
