@@ -8971,13 +8971,26 @@ enum Authentication {
         }
         try expect(Fixture.claudeFileWriteFailures > 0, "Original rotation did not reach pending persistence")
         Fixture.denyKeychainDelete = true
+        var reachedDeletion = false
         Fixture.beforeCredentialDelete = {
+            reachedDeletion = true
             try! manager.createDirectory(at: directory, withIntermediateDirectories: true)
             try! replacementData.write(to: file)
         }
         var refused = false
-        do { try AccountRemoval.remove(account) } catch { refused = true }
-        try expect(refused && (try Data(contentsOf: file)) == replacementData,
+        // The write-failure signal arrives before the storage lock is released.
+        for _ in 0..<100 {
+            do {
+                try AccountRemoval.remove(account)
+                break
+            } catch AccountRemoval.Failure.busy where !reachedDeletion {
+                try await Task.sleep(nanoseconds: 5_000_000)
+            } catch {
+                refused = true
+                break
+            }
+        }
+        try expect(reachedDeletion && refused && (try Data(contentsOf: file)) == replacementData,
                    "Refused removal changed the concurrent replacement login")
         Fixture.denyKeychainDelete = false
         Fixture.failClaudeFileWrite = false
