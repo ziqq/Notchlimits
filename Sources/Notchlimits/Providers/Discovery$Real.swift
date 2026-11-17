@@ -94,14 +94,14 @@ struct Discovery$Real: AccountDiscovery {
                           name: ProfileDirectories.primaryName, url: defaultHome))
         }
 
-        let recovered = AuthSwap$Codex.discoverableRecoveredBackupHomes()
-        let recoveredPaths = Set(recovered.map { $0.home.path })
-        let managed = ProfileDirectories.codexProfiles().filter {
-            !recoveredPaths.contains(AuthStorage$Codex.canonicalPath($0))
+        let managedDirectories = ProfileDirectories.codexProfiles()
+        let recovered = AuthSwap$Codex.recoveredBackupDiscovery()
+        let managed = managedDirectories.filter {
+            !recovered.reservedPaths.contains(AuthStorage$Codex.canonicalPath($0))
         }.map { directory in
             (id: AuthSwap$Codex.profileColumnID(directory.lastPathComponent), home: directory)
         }
-        for (id, directory) in recovered + managed {
+        for (id, directory) in recovered.profiles + managed {
             // A native base home inside the managed root is still the primary
             // account, with projects and threads that profile removal must preserve.
             guard !AuthSwap$Codex.isBaseHome(directory),

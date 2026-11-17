@@ -130,12 +130,18 @@ enum AuthSwap$Codex {
         return homeKey(home) == path && fileOwnerKey(home) == owner ? home : nil
     }
 
-    static func discoverableRecoveredBackupHomes() -> [(id: String, home: URL)] {
+    static func recoveredBackupDiscovery() -> (profiles: [(id: String, home: URL)], reservedPaths: Set<String>) {
         lock.lock()
         defer { lock.unlock() }
         resolveRecoveredBackups()
-        let pending = Set(recoveredBackups.filter { $0.value["pendingOn"] != nil }.keys)
-        return recoveredBackupHomes().filter { !pending.contains(String($0.id.dropFirst(recoveredBackupIDPrefix.count))) }
+        let backups = recoveredBackupHomes()
+        let entries = recoveredBackups
+        let profiles = backups.filter { profile in
+            let id = String(profile.id.dropFirst(recoveredBackupIDPrefix.count))
+            return entries[id]?["pendingOn"] == nil
+        }
+        // Managed discovery can reach a private backup through a root alias.
+        return (profiles, Set(backups.map { $0.home.path }))
     }
 
     private static func retainUnreadableBackup(_ backup: AuthStorage$Codex, owner: DirectoryIdentity?) throws -> String {

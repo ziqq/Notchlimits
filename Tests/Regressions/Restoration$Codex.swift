@@ -260,6 +260,12 @@ enum Restoration$Codex {
         let native = AuthSwap$Codex.baseHome
         let selected = ProfileDirectories.codexRoot.appendingPathComponent("selected")
         let other = Fixture.root.appendingPathComponent("foreign")
+        let refusesCleanup = outcome == "cleanup-refused" || outcome == "aliased-root"
+        if outcome == "aliased-root" {
+            let support = DesktopApp.supportDirectory.appendingPathComponent("codex-app", isDirectory: true)
+            try manager.createDirectory(at: support, withIntermediateDirectories: true)
+            try manager.createSymbolicLink(at: ProfileDirectories.codexRoot, withDestinationURL: support)
+        }
         try Fixture.codexLogin(native, account: "primary", mode: "keyring")
         try Fixture.codexLogin(selected, account: "selected", mode: "keyring")
         try Fixture.codexLogin(other, account: "foreign", mode: "keyring")
@@ -284,7 +290,7 @@ enum Restoration$Codex {
                    && Fixture.codexKeychain[nativeKey] == foreign,
                    "The fixture did not retain the unchanged original backup")
         if outcome == "logged-out" { Fixture.codexKeychain[backupKey] = nil }
-        Fixture.denyCodexDelete = outcome == "cleanup-refused"
+        Fixture.denyCodexDelete = refusesCleanup
         let copies = try visibleLogins().filter { $0 == original }.count
         print("Original backup visible columns: \(copies)")
         try expect(copies == 1, "The same unchanged grant became visible in more than one column after unlock")
@@ -297,7 +303,7 @@ enum Restoration$Codex {
         }
         try expect((Fixture.codexKey(recoveredHome) == backupKey) == (outcome != "logged-out"),
                    "Recovery did not prefer the surviving original CLI namespace")
-        if outcome == "cleanup-refused" {
+        if refusesCleanup {
             var removalRefused = false
             do { try AccountRemoval.remove(recovered) } catch { removalRefused = true }
             try expect(removalRefused && Fixture.codexKeychain[backupKey] == original,
