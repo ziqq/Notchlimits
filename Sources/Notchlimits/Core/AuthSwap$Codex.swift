@@ -189,6 +189,7 @@ enum AuthSwap$Codex {
             }
             var retained = original
             var retainedID = originalID
+            let isPrimaryRoute = homeKey(liveHome(columnID: defaultColumnID, home: baseHome)) == canonical.path
             if canonical.path != originalPath || currentOwner != originalOwner {
                 let known = entries.first { id, record in
                     id != originalID && record["pendingOn"] == nil
@@ -196,7 +197,8 @@ enum AuthSwap$Codex {
                 }
                 // Resolve duplicates only against a route discovery can actually show.
                 let isManaged = managedDirectories.contains { homeKey($0) == canonical.path }
-                guard !isBaseHome(canonical), !isPrimaryBackup(canonical), known != nil || isManaged else {
+                let isExtraRoute = !isBaseHome(canonical) && !isPrimaryBackup(canonical) && (known != nil || isManaged)
+                guard isPrimaryRoute || isExtraRoute else {
                     entries[id]?["pendingOn"] = nil
                     continue
                 }
@@ -208,6 +210,7 @@ enum AuthSwap$Codex {
             do {
                 if try discardDuplicateRecovery(at: snapshot, matching: entry, retainedAt: originalHome, matching: retained,
                                                 onDuplicate: {
+                    guard !isPrimaryRoute else { return }
                     entries[retainedID] = retained
                     entries[id]?["pendingOn"] = retainedID
                 }) {
