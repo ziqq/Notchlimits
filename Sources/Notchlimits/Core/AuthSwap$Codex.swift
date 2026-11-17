@@ -1333,15 +1333,17 @@ enum AuthSwap$Codex {
             // A CLI login can change config.toml and use a different store
             // while Notchlimits still has the backup's previous mode pinned.
             var configuredRecord: AuthStorage$Codex.Record?
-            if let configured = try? AuthStorage$Codex(home: location),
-               configured.home == current.home, configured.mode != current.mode {
-                let observed = Result { try configured.load(verifyingOwner: true) }
+            if let configured = try? AuthStorage$Codex(home: location), configured.home == current.home {
+                let observed = configured.mode == current.mode ? pinned
+                    : Result { try configured.load(verifyingOwner: true) }
                 if let latest = try? AuthStorage$Codex(home: location),
                    latest.home == configured.home, latest.mode == configured.mode {
                     switch observed {
-                    case .success(let record): configuredRecord = record
+                    case .success(let record):
+                        if configured.mode != current.mode { configuredRecord = record }
                     case .failure:
-                        retainsUnreadableBackup = configured.mode.usesKeyring && configured.containsKeyringItem()
+                        // A failed read cannot establish that this namespace is empty.
+                        retainsUnreadableBackup = configured.mode.usesKeyring
                     }
                 }
             }

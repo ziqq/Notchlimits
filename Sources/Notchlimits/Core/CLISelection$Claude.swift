@@ -23,9 +23,10 @@ enum CLISelection$Claude {
 
     /// An old shell must refuse a retired extra profile even after its path is
     /// reused. Keep the native default and any other selected profile intact.
-    static func withRetiredSelection(services: Set<String>, operation: () throws -> Void) throws {
+    static func withRetiredSelection(services: Set<String>,
+                                     operation: (_ fileRestored: @escaping (Int32, Int32) -> Void) throws -> Void) throws {
         guard services.contains(where: { $0 != AuthStorage$Claude.baseService }) else {
-            try operation()
+            try operation { _, _ in }
             return
         }
         let pointer = self.pointer
@@ -33,22 +34,44 @@ enum CLISelection$Claude {
         do {
             contents = try String(contentsOf: pointer, encoding: .utf8)
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-            try operation()
+            try operation { _, _ in }
             return
         }
         guard let selection = contents.split(separator: "\n", omittingEmptySubsequences: false).first,
-              selection.hasPrefix("/"),
-              services.contains(AuthStorage$Claude.profileService(forConfigPath: String(selection))) else {
-            try operation()
+              selection.hasPrefix("/") else {
+            try operation { _, _ in }
             return
         }
+        let service = AuthStorage$Claude.profileService(forConfigPath: String(selection))
+        guard services.contains(service) else {
+            try operation { _, _ in }
+            return
+        }
+        let profile = URL(fileURLWithPath: String(selection))
+        let owner = DirectoryIdentity.capture(profile)
+        var credentials = AuthStorage$Claude.credentials(service: service, interactive: false, verifyingOwner: true)
+        var restoredOwner: DirectoryIdentity?
         let retired = pointer.deletingLastPathComponent().appendingPathComponent(".retired-" + UUID().uuidString)
         try moveSelection(from: pointer, to: retired)
         do {
-            try operation()
+            try operation { source, destination in
+                guard credentials?.backend == .file, let owner, credentials?.directory == owner,
+                      let stagedOwner = DirectoryIdentity.capture(descriptor: source),
+                      stagedOwner.isSameDirectory(as: owner) else { return }
+                restoredOwner = DirectoryIdentity.capture(descriptor: destination)
+            }
         } catch {
-            // If another switch set a route, preserve it. Otherwise restore
-            // the pointer inode, including its permissions, before returning.
+            // A failed deletion can leave a different login at the same path.
+            if owner?.matches(profile) != true {
+                credentials?.directory = restoredOwner
+                guard let restoredOwner, let credentials, restoredOwner.matches(profile),
+                      (try? AuthStorage$Claude.isCurrent(credentials, service: service)) == true,
+                      restoredOwner.matches(profile) else {
+                    _ = unlink(retired.path)
+                    throw error
+                }
+            }
+            // Preserve a route published by another switch.
             do { try moveSelection(from: retired, to: pointer) }
             catch let restore as POSIXError where restore.code == .EEXIST { _ = unlink(retired.path) }
             throw error
@@ -87,7 +110,7 @@ enum CLISelection$Claude {
         let startups: [URL]
         switch shell {
         case "zsh":
-            let directory = ProcessInfo.processInfo.environment["ZDOTDIR"].map { URL(fileURLWithPath: $0) } ?? home
+            let directory = try zshStartupDirectory(home: home)
             startups = [directory.appendingPathComponent(".zshrc")]
         case "bash":
             let candidates = [".bash_profile", ".bash_login", ".profile"].map { home.appendingPathComponent($0) }
@@ -191,6 +214,43 @@ enum CLISelection$Claude {
         deinit {
             if !committed { try? FileManager.default.removeItem(at: staged) }
         }
+    }
+
+    private static func zshStartupDirectory(home: URL) throws -> URL {
+        let probeDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("notchlimits-zsh-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: probeDirectory, withIntermediateDirectories: false,
+                                                attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: probeDirectory) }
+        let output = probeDirectory.appendingPathComponent("dotdir")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        // Evaluate .zshenv with interactive options before running any .zshrc.
+        process.arguments = ["-fi", "-c", #"""
+            setopt rcs
+            if [[ -r "${ZDOTDIR-$HOME}/.zshenv" ]]; then
+                builtin source "${ZDOTDIR-$HOME}/.zshenv"
+            fi
+            builtin print -rn -- "${ZDOTDIR-$HOME}" >| "$1"
+            """#, "notchlimits", output.path]
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOME"] = home.path
+        process.environment = environment
+        process.currentDirectoryURL = home
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
+        try process.run()
+        guard exited.wait(timeout: .now() + 2) == .success else {
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            throw Failure(errorDescription: L.t("error.cliShell"))
+        }
+        guard process.terminationStatus == 0,
+              let path = try? String(contentsOf: output, encoding: .utf8),
+              path.hasPrefix("/") else { throw Failure(errorDescription: L.t("error.cliShell")) }
+        return URL(fileURLWithPath: path, isDirectory: true)
     }
 
     private static func quote(_ value: String) -> String {

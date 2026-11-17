@@ -492,10 +492,6 @@ struct AuthStorage$Codex {
         }
     }
 
-    func containsKeyringItem() -> Bool {
-        keyringStatus() == errSecSuccess
-    }
-
     /// Renewal persists back to the backend that supplied its current grant.
     /// A denied Keychain update must not hide rotated tokens behind a stale entry.
     func save(_ data: Data, backend: Backend? = nil, validating: (() throws -> Void)? = nil) throws {

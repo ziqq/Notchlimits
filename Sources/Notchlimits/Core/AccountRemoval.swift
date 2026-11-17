@@ -82,7 +82,7 @@ enum AccountRemoval {
                 // Logout removes Keychain metadata but leaves the profile and
                 // its Desktop session. Retire every supported path spelling.
                 let desktopServices = Set(services + AuthStorage$Claude.profileServices(in: directory))
-                try CLISelection$Claude.withRetiredSelection(services: desktopServices) {
+                try CLISelection$Claude.withRetiredSelection(services: desktopServices) { _ in
                     try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot, move: { try move($0, $1) }) { _ in
                         for service in services { try deleteKeychainEntry(service: service, validating: { try validate() }) }
                     }
@@ -122,7 +122,7 @@ enum AccountRemoval {
                     // another Keychain owner has appeared, including native main.
                     guard !shared || owners.contains(service) else { throw Failure.busy }
                     var retainedFile: DirectoryIdentity?
-                    try CLISelection$Claude.withRetiredSelection(services: [service]) {
+                    try CLISelection$Claude.withRetiredSelection(services: [service]) { fileRestored in
                         if shared {
                             // Other owners retain their shared configuration and fallback.
                             if FileManager.default.fileExists(atPath: owner.appendingPathComponent(".credentials.json").path) {
@@ -134,7 +134,9 @@ enum AccountRemoval {
                                 AuthStorage$Claude.recordSharedPrimaryRemoval()
                             }
                         } else {
-                            try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot, move: { try move($0, $1) }) { moved in
+                            try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot,
+                                                     move: { try move($0, $1) },
+                                                     restoredClaudeFileOwner: fileRestored) { moved in
                                 try deleteClaudeCredentials(service: service, configDir: moved, validating: { try validate() })
                             }
                         }
@@ -219,6 +221,7 @@ enum AccountRemoval {
                                              expectedOwner: DirectoryIdentity? = nil,
                                              rollbackFile: ((Bool) -> Void)? = nil,
                                              restoredFileOwner: ((Int32, Int32) -> Void)? = nil,
+                                             restoredClaudeFileOwner: ((Int32, Int32) -> Void)? = nil,
                                              operation: (URL?) throws -> Void) throws {
         let manager = FileManager.default
         let originalOwner = directory.flatMap { DirectoryIdentity.capture($0) }
@@ -268,7 +271,7 @@ enum AccountRemoval {
                                     authFileRestored: {
                                         rollbackFile?(true)
                                         restoredFileOwner?($0, $1)
-                                    })
+                                    }, claudeFileRestored: restoredClaudeFileOwner)
             }
             throw error
         }
@@ -277,7 +280,8 @@ enum AccountRemoval {
 
     private static func restoreContents(from source: URL, to destination: URL,
                                         isProfileRoot: Bool = true,
-                                        authFileRestored: ((Int32, Int32) -> Void)? = nil) throws {
+                                        authFileRestored: ((Int32, Int32) -> Void)? = nil,
+                                        claudeFileRestored: ((Int32, Int32) -> Void)? = nil) throws {
         let sourceFD = open(source.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard sourceFD >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         defer { _ = close(sourceFD) }
@@ -321,6 +325,7 @@ enum AccountRemoval {
                 }
                 if isProfileRoot && name == ".credentials.json" {
                     AuthStorage$Claude.recordRestoredFileOwner(from: source, to: destination)
+                    claudeFileRestored?(sourceFD, destinationFD)
                 }
                 continue
             }

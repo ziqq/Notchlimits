@@ -15,6 +15,9 @@ class CodexRestorationRegressions(unittest.TestCase):
         cls.addClassCleanup(fixture.cleanup)
         support = (swift_regression.FIXTURES / "Authentication.swift").read_text().split("\n@main\n", 1)[0]
         boundaries = {
+            "guard let data = Fixture.codexKeychain[key] else { return errSecItemNotFound }":
+                """if key == RestorationSignals.unavailableKey { return errSecInteractionNotAllowed }
+        guard let data = Fixture.codexKeychain[key] else { return errSecItemNotFound }""",
             "func SecItemDelete(_ query: CFDictionary) -> OSStatus {":
                 """func SecItemDelete(_ query: CFDictionary) -> OSStatus {
     if (query as NSDictionary)[kSecAttrService as String] as? String == "Codex Auth",
@@ -73,6 +76,8 @@ for operation in ("restore", "remove"):
         for phase in ("stable", "empty", "unlink", "denied", "foreign", "foreign-denied"):
             scenarios.append(f"migration:{operation}:{mode}:{phase}")
     scenarios.extend((f"migration:{operation}:file:stable", f"migration:{operation}:auto:config-only"))
-assert len(scenarios) == len(set(scenarios)) == 147
+scenarios.append("compensation-logins:both:denied")
+scenarios.append("compensation-logins:both:locked")
+assert len(scenarios) == len(set(scenarios)) == 149
 for scenario in scenarios:
     setattr(CodexRestorationRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"), scenario_test(scenario))

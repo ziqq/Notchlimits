@@ -5,6 +5,7 @@ private enum RestorationSignals {
     static var io: ((String) -> Void)?
     static var remove: ((URL) throws -> Void)?
     static var attributes: ((String) -> Void)?
+    static var unavailableKey: String?
     static var beforeDelete: ((String) -> Void)?
     static var afterNativeFileWrite: (() -> Void)?
 
@@ -33,7 +34,8 @@ enum Restoration$Codex {
             switch parts[0] {
             case "compensate": try compensation(mode: parts[1], phase: parts[2], change: parts[3])
             case "compensation-logins":
-                try compensationLogins(both: parts[1] == "both", fileBackup: parts.count > 2 && parts[2] == "file")
+                try compensationLogins(both: parts[1] == "both", fileBackup: parts.count > 2 && parts[2] == "file", denied: parts.count > 2 && parts[2] == "denied",
+                                       unavailable: parts.count > 2 && parts[2] == "locked")
             case "migration": try backupMigration(operation: parts[1], mode: parts[2], phase: parts[3])
             case "routing": try routing(returning: parts[1] == "return", foreign: parts[2] == "foreign")
             default: try restoration(kind: parts[0], mode: parts[1], phase: parts[2], change: parts[3])
@@ -294,7 +296,7 @@ enum Restoration$Codex {
         }
     }
 
-    private static func compensationLogins(both: Bool, fileBackup: Bool) throws {
+    private static func compensationLogins(both: Bool, fileBackup: Bool, denied: Bool, unavailable: Bool) throws {
         Fixture.keychainExists = false
         let native = AuthSwap$Codex.baseHome
         let selected = ProfileDirectories.codexRoot.appendingPathComponent("selected")
@@ -326,11 +328,20 @@ enum Restoration$Codex {
             }
             if both { Fixture.codexKeychain[nativeKey] = newNative }
             Fixture.denyCodexDelete = true
+            if unavailable { RestorationSignals.unavailableKey = backupKey }
+            if denied {
+                Fixture.beforeCodexSecretRead = { key in
+                    Fixture.denyCodexRead = key == backupKey
+                }
+            }
         }
         var refused = false
         do { try AccountRemoval.remove(account) } catch { refused = true }
         Fixture.denyCodexDelete = false
         RestorationSignals.beforeDelete = nil
+        Fixture.beforeCodexSecretRead = nil
+        Fixture.denyCodexRead = false
+        RestorationSignals.unavailableKey = nil
         let visible = try visibleLogins()
         let retained = fileBackup ? try? Data(contentsOf: backup.appendingPathComponent("auth.json")) : Fixture.codexKeychain[backupKey]
         print("Codex removal both=\(both) file=\(fileBackup) reached=\(reached) refused=\(refused) active=\(AuthSwap$Codex.activeColumnID) old primary copies=\(visible.filter { $0 == primary }.count) new backup visible=\(visible.contains(newPrimary)) backup still written=\(retained == newPrimary)")

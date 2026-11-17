@@ -65,3 +65,18 @@ class ClaudeLifecycleRegressions(unittest.TestCase):
 
     def test_readable_keychain_without_classic_revision_still_publishes_limits(self):
         self.check_scenario("usage:unavailable")
+
+    def test_audit_rollback_replacement(self):
+        self.check_scenario("cli-removed:rollback-replacement")
+
+    def test_audit_zsh_custom_dotdir(self):
+        self.check_scenario("dotdir:custom")
+
+    def test_audit_zsh_default_dotdir(self):
+        self.check_scenario("dotdir:default")
+
+    def test_audit_zsh_interactive_dotdir(self):
+        self.check_scenario("dotdir:interactive")
+
+    def test_audit_rollback_empty_bootstrap(self):
+        self.check_scenario("cli-removed:rollback-empty")

@@ -55,6 +55,8 @@ enum Lifecycle$Claude {
                 try filePointer(mode: args[1])
             case "cli-removed":
                 try cliRemoved(mode: args[1])
+            case "dotdir":
+                try dotdir(configured: args[1] != "default", interactiveOnly: args[1] == "interactive")
             case "usage":
                 try await usage(mode: args[1])
             default:
@@ -172,7 +174,32 @@ enum Lifecycle$Claude {
         let before = try invoke()
         let expected = (mode == "previous" ? old.1 : directory).path + "\n"
         try expect(before.0 == 0 && before.1 == expected, "Original selected route did not work")
-        if mode == "refused" || mode == "pointer-refused" {
+        if mode == "rollback-replacement" || mode == "rollback-empty" {
+            let replacesLogin = mode == "rollback-replacement"
+            let credentials = directory.appendingPathComponent(".credentials.json")
+            let original = try Data(contentsOf: credentials)
+            let replacement = try JSONSerialization.data(
+                withJSONObject: Fixture.claudeLogin("independent-new-login", expired: false))
+            var reached = false
+            Fixture.beforeCredentialDelete = {
+                reached = true
+                try! manager.createDirectory(at: directory, withIntermediateDirectories: true)
+                if replacesLogin { try! replacement.write(to: credentials) }
+            }
+            Fixture.denyKeychainDelete = true
+            var refused = false
+            do { try AccountRemoval.remove(account) } catch { refused = true }
+            try expect(reached && refused && !account.claudeConfigOwner!.matches(directory)
+                       && (try Data(contentsOf: credentials)) == (replacesLogin ? replacement : original),
+                       "Expected refused deletion to preserve an independent profile at the same path")
+            CLISelection$Claude.isEnabled = false
+            try switchTo(old.0)
+            let invoked = try invoke()
+            print("rollback collision reached=\(reached) refused=\(refused) CLI used replacement=\(invoked.0 == 0 && invoked.1 == expected)")
+            try expect(replacesLogin ? invoked.0 != 0 && invoked.1.isEmpty : invoked.0 == 0 && invoked.1 == expected,
+                       "Rollback did not retain the route matching the credentials after recovery")
+            return
+        } else if mode == "refused" || mode == "pointer-refused" {
             Fixture.denyCredentialFileRemoval = mode == "refused"
             if mode == "pointer-refused" {
                 ClaudeLifecycleSignals.deniedSelection = script.deletingLastPathComponent()
@@ -215,6 +242,37 @@ enum Lifecycle$Claude {
         } else {
             try expect(after.0 == 0 && after.1 == expected, "An unchanged or independent selected profile stopped routing")
         }
+    }
+
+    @MainActor
+    private static func dotdir(configured: Bool, interactiveOnly: Bool) throws {
+        Fixture.claudeEntries = [:]
+        let (account, profile) = try profile(file: true)
+        let manager = Foundation.FileManager.default
+        let dotfiles = Fixture.root.appendingPathComponent("dotfiles")
+        try manager.createDirectory(at: dotfiles, withIntermediateDirectories: true)
+        if configured {
+            let assignment = interactiveOnly ? "if [[ -o interactive ]]; then ZDOTDIR=$HOME/dotfiles; fi\n" : "ZDOTDIR=$HOME/dotfiles\n"
+            try Data(assignment.utf8).write(to: Fixture.root.appendingPathComponent(".zshenv"))
+            try Data("# existing interactive setup\n".utf8).write(to: dotfiles.appendingPathComponent(".zshrc"))
+        }
+        try switchTo(account)
+        let fake = dotfiles.appendingPathComponent("claude")
+        try Data("#!/bin/sh\nprintf '%s\\n' \"$CLAUDE_CONFIG_DIR\"\n".utf8).write(to: fake)
+        try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fake.path)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-i", "-c", "claude"]
+        process.environment = ["HOME": Fixture.root.path, "PATH": dotfiles.path + ":/usr/bin:/bin", "TERM": "dumb"]
+        let out = Pipe()
+        process.standardOutput = out
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        let result = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        print("Configured zsh dotdir=\(configured), Claude switch returned success, actual shell route matches=\(result == profile.path + "\n")")
+        try expect(process.terminationStatus == 0 && result == profile.path + "\n",
+                   "New interactive zsh ignored a CLI selection reported successful by the switch")
     }
 
     @MainActor
