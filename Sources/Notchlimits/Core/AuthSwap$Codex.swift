@@ -235,8 +235,11 @@ enum AuthSwap$Codex {
     }
 
     private static func matchedPrimaryRecovery(_ entry: [String: String]) -> [String: String]? {
-        guard let path = entry["matchedPrimaryHome"], let owner = entry["matchedPrimaryOwner"],
-              path == homeKey(liveHome(columnID: defaultColumnID, home: baseHome)) else { return nil }
+        guard entry["matchedPrimaryHome"] != nil, let owner = entry["matchedPrimaryOwner"] else { return nil }
+        // A switch moves the primary credentials between the native home and stash.
+        // The previous owner is only a hint. Reconciliation verifies the current
+        // namespace and compares credentials again before discarding a copy.
+        let path = homeKey(liveHome(columnID: defaultColumnID, home: baseHome))
         return ["home": path, "owner": owner]
     }
 
@@ -1179,9 +1182,12 @@ enum AuthSwap$Codex {
         // The proven primary transaction removes credentials, never its home.
         guard !containsPrimaryBackup(target.home, excludingRecoveryID: columnID)
             || columnID == defaultColumnID && isBaseHome(target.home) else { throw Failure.busy }
-        if hasPendingRecovery(for: target.home) {
+        let liveTarget = columnID == defaultColumnID
+            ? URL(fileURLWithPath: homeKey(liveHome(columnID: defaultColumnID, home: home))) : target.home
+        if hasPendingRecovery(for: target.home) || (liveTarget != target.home && hasPendingRecovery(for: liveTarget)) {
             resolveRecoveredBackups(managedDirectories: ProfileDirectories.codexProfiles())
-            guard !hasPendingRecovery(for: target.home) else { throw Failure.busy }
+            guard !hasPendingRecovery(for: target.home),
+                  liveTarget == target.home || !hasPendingRecovery(for: liveTarget) else { throw Failure.busy }
         }
         var removalRecord: AuthStorage$Codex.Record?
         var verifiesLogin = false

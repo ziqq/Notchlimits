@@ -10,6 +10,7 @@ final class StorageLock$Claude: @unchecked Sendable {
     private let identity: Identity
     private static let ownerAttribute = "dev.ustinoff.notchlimits.lock-owner"
     private static let retirementAttribute = "dev.ustinoff.notchlimits.lock-retirement"
+    private static let nativeLeaseAttribute = "dev.ustinoff.notchlimits.native-lease"
     private let queue = DispatchQueue(label: "dev.ustinoff.notchlimits.claude-storage-lock")
     private let timer: DispatchSourceTimer
     private let ownerFD: Int32
@@ -218,7 +219,7 @@ final class StorageLock$Claude: @unchecked Sendable {
     }
 
     private static func removeOwnedDirectory(at path: String, identity: Identity, ownerFD: Int32,
-                                             lifetime: TimeInterval) -> Bool {
+                                             lifetime: TimeInterval, leaseDirectory: Int32? = nil) -> Bool {
         let url = URL(fileURLWithPath: path)
         let name = url.lastPathComponent
         let parent = open(url.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
@@ -236,11 +237,24 @@ final class StorageLock$Claude: @unchecked Sendable {
         }
         defer { _ = close(guardFD) }
         var info = stat()
-        guard fstat(guardFD, &info) == 0, markOwner(guardFD) else {
+        guard fstat(guardFD, &info) == 0, markOwner(guardFD),
+              leaseDirectory == nil || markNativeLease(guardFD) else {
             _ = unlinkat(parent, staged, AT_REMOVEDIR)
             return false
         }
         let placeholder = Identity(info)
+        let placeholderModified = modificationDate(info)
+        func originalLeaseExpired() -> Bool {
+            guard let leaseDirectory else { return true }
+            var current = stat()
+            return fstat(leaseDirectory, &current) == 0
+                && Date().timeIntervalSince(modificationDate(current)) >= lifetime
+        }
+        func placeholderUnchanged() -> Bool {
+            guard leaseDirectory != nil else { return true }
+            var current = stat()
+            return fstat(guardFD, &current) == 0 && modificationDate(current) == placeholderModified
+        }
         func removeStaged(_ owner: Identity) -> Bool {
             owner.matches(Identity.at(staged, relativeTo: parent)) && unlinkat(parent, staged, AT_REMOVEDIR) == 0
         }
@@ -254,18 +268,18 @@ final class StorageLock$Claude: @unchecked Sendable {
             return false
         }
         defer { _ = finishRetirement(name: name, parent: parent, ownerFD: ownerFD, lifetime: lifetime) }
-        guard identity.matches(Identity.at(name, relativeTo: parent)),
+        guard originalLeaseExpired(), identity.matches(Identity.at(name, relativeTo: parent)),
               renameatx_np(parent, name, parent, staged, UInt32(RENAME_SWAP)) == 0 else {
             _ = removeStaged(placeholder)
             return false
         }
-        guard removeStaged(identity) else { return false }
+        guard originalLeaseExpired(), placeholderUnchanged(), removeStaged(identity) else { return false }
 
         // Detach the placeholder before removing it as well. Any native
         // directory caught by the move is subject to the same lease expiry.
-        guard placeholder.matches(Identity.at(name, relativeTo: parent)),
+        guard placeholderUnchanged(), placeholder.matches(Identity.at(name, relativeTo: parent)),
               renameatx_np(parent, name, parent, staged, UInt32(RENAME_EXCL)) == 0 else { return false }
-        return removeStaged(placeholder)
+        return placeholderUnchanged() && removeStaged(placeholder)
     }
 
     private static func recordRetirement(_ retirement: Retirement, ownerFD: Int32) -> Bool {
@@ -301,7 +315,9 @@ final class StorageLock$Claude: @unchecked Sendable {
             return errno == ENOENT && clearRecord()
         }
         let displaced = Identity(info)
-        if displaced == retirement.original || displaced == retirement.placeholder {
+        let displacedIsOwned = (displaced == retirement.original || displaced == retirement.placeholder)
+            && withDirectory(staged, parent: parent) { !hasNativeLease($0) }
+        if displacedIsOwned {
             guard unlinkat(parent, staged, AT_REMOVEDIR) == 0 else { return false }
             return clearRecord()
         }
@@ -318,7 +334,13 @@ final class StorageLock$Claude: @unchecked Sendable {
                 guard recordRetirement(retirement, ownerFD: ownerFD) else { return false }
             }
             guard Identity(publicInfo) == retirement.placeholder,
-                  now.timeIntervalSince(max(modified, modificationDate(publicInfo))) >= lifetime else { return false }
+                  now.timeIntervalSince(max(modified, modificationDate(publicInfo))) >= lifetime,
+                  withDirectory(name, parent: parent, perform: { directory in
+                      var current = stat()
+                      guard fstat(directory, &current) == 0, Identity(current) == retirement.placeholder else { return false }
+                      // Keep the native lease attached to the inode past journal cleanup.
+                      return markNativeLease(directory)
+                  }) else { return false }
         } else {
             guard errno == ENOENT else { return false }
             guard let vacantSince = retirement.vacantSince else {
@@ -333,6 +355,23 @@ final class StorageLock$Claude: @unchecked Sendable {
 
     private static func modificationDate(_ info: stat) -> Date {
         Date(timeIntervalSince1970: Double(info.st_mtimespec.tv_sec) + Double(info.st_mtimespec.tv_nsec) / 1_000_000_000)
+    }
+
+    private static func withDirectory(_ name: String, parent: Int32, perform: (Int32) -> Bool) -> Bool {
+        let directory = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard directory >= 0 else { return false }
+        defer { _ = close(directory) }
+        return perform(directory)
+    }
+
+    private static func hasNativeLease(_ directory: Int32) -> Bool {
+        let size = fgetxattr(directory, nativeLeaseAttribute, nil, 0, 0, 0)
+        return size >= 0 || errno != ENOATTR
+    }
+
+    private static func markNativeLease(_ directory: Int32) -> Bool {
+        var marker: UInt8 = 1
+        return fsetxattr(directory, nativeLeaseAttribute, &marker, 1, 0, 0) == 0
     }
 
     private static func hasOwnerMarker(_ directory: Int32) -> Bool {
@@ -364,7 +403,8 @@ final class StorageLock$Claude: @unchecked Sendable {
         let marked = hasOwnerMarker(directory)
         let legacy = readIdentity(ownerFD) == identity
         guard marked || legacy else { return false }
-        return removeOwnedDirectory(at: path, identity: identity, ownerFD: ownerFD, lifetime: lifetime)
+        return removeOwnedDirectory(at: path, identity: identity, ownerFD: ownerFD, lifetime: lifetime,
+                                    leaseDirectory: hasNativeLease(directory) ? directory : nil)
     }
 }
 

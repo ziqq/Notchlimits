@@ -292,7 +292,7 @@ enum Restoration$Codex {
         try expect(reached && refused && Fixture.codexKeychain[backupKey] == original
                    && Fixture.codexKeychain[nativeKey] == foreign,
                    "The fixture did not retain the unchanged original backup")
-        let removedPrimaryAlias = outcome == "relocated-primary-removed-alias"
+        let removedPrimaryAlias = outcome.hasPrefix("relocated-primary-removed-alias")
         let relocatedIntoPrimary = outcome == "relocated-primary" || removedPrimaryAlias
         let relocatedIntoManaged = outcome == "relocated-managed"
         if outcome == "relocated-owner" || relocatedIntoManaged || relocatedIntoPrimary || outcome == "non-directory" {
@@ -324,11 +324,17 @@ enum Restoration$Codex {
                 try expect(before == 1 && Fixture.codexKeychain[pendingKey] == original,
                            "The first scan did not leave exactly one column after denied cleanup")
                 try manager.removeItem(at: backup)
+                if outcome == "relocated-primary-removed-alias-switch" {
+                    try AuthSwap$Codex.activate(columnID: "codex:selected", home: selected)
+                    try expect(AuthSwap$Codex.activeColumnID == "codex:selected"
+                               && (try AuthSwap$Codex.authData(columnID: AuthSwap$Codex.defaultColumnID, home: relocated)) == original,
+                               "Switching did not move the primary credentials into the backup")
+                }
                 Fixture.denyCodexDeleteAccount = nil
                 let after = try visibleLogins().filter { $0 == original }.count
                 print("Login columns before and after unlinking the alias: \(before), \(after)")
                 try expect(after == 1 && Fixture.codexKeychain[pendingKey] == nil
-                           && Fixture.codexKeychain[Fixture.codexKey(relocated)] == original,
+                           && (try AuthSwap$Codex.authData(columnID: AuthSwap$Codex.defaultColumnID, home: relocated)) == original,
                            "Removing an obsolete alias published a duplicate of the still-live primary login")
                 return
             }

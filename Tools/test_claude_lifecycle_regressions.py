@@ -35,7 +35,7 @@ class ClaudeLifecycleRegressions(unittest.TestCase):
         rename = "return Darwin.renameatx_np(fromFD, from, toFD, to, flags)"
         assert support.count(rename) == 1
         support = support.replace(rename, """let result = Darwin.renameatx_np(fromFD, from, toFD, to, flags)
-    ClaudeLifecycleSignals.afterRename(flags, result)
+    ClaudeLifecycleSignals.afterRename(flags, result, parent: fromFD)
     return result""")
         name = "Lifecycle$Claude.swift"
         cls.fixture_path = pathlib.Path(fixture.name) / name
@@ -121,6 +121,14 @@ class ClaudeLifecycleRegressions(unittest.TestCase):
                         self.assertEqual(child.returncode, 86, (out, err))
                         placeholder = lock.stat().st_ino
                         self.assertNotEqual(placeholder, original, "The fixture did not displace the native lock")
+                        if public_state.startswith("late-heartbeat:"):
+                            time.sleep(1.1)
+                            result = swift_regression.run_fixture(
+                                self.executable, "lock-" + public_state, root
+                            )
+                            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                            self.assertTrue(lock.is_dir(), "Recovery removed the lock after its heartbeat")
+                            return
                         if public_state == "repair-race":
                             result = swift_regression.run_fixture(self.executable, "lock-repair-race", root)
                             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -174,3 +182,8 @@ class ClaudeLifecycleRegressions(unittest.TestCase):
 
     def test_repair_expires_released_directory_without_republishing_it(self):
         self.check_crash_with_native_replacement("release", "released")
+
+    def test_late_heartbeat_prevents_recovery(self):
+        for phase in ("cleanup", "swap"):
+            with self.subTest(phase=phase):
+                self.check_crash_with_native_replacement("release", "late-heartbeat:" + phase)

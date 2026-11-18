@@ -37,6 +37,13 @@ func rmdir(_ path: UnsafePointer<CChar>) -> Int32 {
     return Darwin.rmdir(path)
 }
 
+func unlinkat(_ parent: Int32, _ path: UnsafePointer<CChar>, _ flags: Int32) -> Int32 {
+    if ClaudeLifecycleSignals.lateHeartbeat == "cleanup", String(cString: path).contains(".retiring-") {
+        ClaudeLifecycleSignals.touchPublicLock(parent: parent)
+    }
+    return Darwin.unlinkat(parent, path, flags)
+}
+
 private enum ClaudeLifecycleSignals {
     static var storeReached = false
     static var searchList: ((UnsafeMutablePointer<CFArray?>) -> OSStatus)?
@@ -45,6 +52,16 @@ private enum ClaudeLifecycleSignals {
     static var nativeLock: Int32 = -1
     static var crashOnSwap = false
     static var replaceOnRepair = false
+    static var lateHeartbeat: String?
+    static var heartbeatReached = false
+
+    static func touchPublicLock(parent: Int32) {
+        lateHeartbeat = nil
+        let directory = Darwin.openat(parent, ".storage-write.lock", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard directory >= 0 else { return }
+        defer { _ = Darwin.close(directory) }
+        heartbeatReached = Darwin.futimes(directory, nil) == 0
+    }
 
     static func replaceAtRepairDestination(parent: Int32, path: UnsafePointer<CChar>) {
         guard replaceOnRepair else { return }
@@ -57,8 +74,10 @@ private enum ClaudeLifecycleSignals {
         _ = readLine()
     }
 
-    static func afterRename(_ flags: UInt32, _ result: Int32) {
-        if crashOnSwap, flags == UInt32(RENAME_SWAP), result == 0 { _exit(86) }
+    static func afterRename(_ flags: UInt32, _ result: Int32, parent: Int32) {
+        guard flags == UInt32(RENAME_SWAP), result == 0 else { return }
+        if crashOnSwap { _exit(86) }
+        if lateHeartbeat == "swap" { touchPublicLock(parent: parent) }
     }
 
     static func replaceExpiredLock(at parent: Int32, path: UnsafePointer<CChar>) {
@@ -103,6 +122,10 @@ enum Lifecycle$Claude {
                 let lock = try StorageLock$Claude(path: lockPath, lifetime: 1)
                 try expect(lock.isHeld, "The expired retirement blocked acquisition")
                 lock.release()
+            case "lock-late-heartbeat":
+                ClaudeLifecycleSignals.lateHeartbeat = args[1]
+                try preservesNativeLock(lifetime: 1)
+                try expect(ClaudeLifecycleSignals.heartbeatReached, "Fixture did not renew the native lease")
             case "usage":
                 try await usage(mode: args[1])
             default:
