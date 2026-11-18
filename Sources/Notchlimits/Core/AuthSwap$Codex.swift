@@ -262,6 +262,9 @@ enum AuthSwap$Codex {
         }
         let saved = try storage(at: snapshot)
         let retained = try storage(at: original)
+        // Discovery can route the primary directly to the recovery copy.
+        // That route already owns the credentials, so there is nothing to delete.
+        guard saved.home.path != retained.home.path else { return false }
         guard saved.mode != .ephemeral else { throw Failure.busy }
         try requireIdle(saved)
         try requireIdle(retained)
@@ -279,6 +282,8 @@ enum AuthSwap$Codex {
         guard let retainedRecord, AuthStorage$Codex.sameCredentials(savedRecord.data, retainedRecord.data) else {
             return false
         }
+        guard savedRecord.backend != .file || retainedRecord.backend != .file
+                || !savedOwner.isSameDirectory(as: retainedOwner) else { return false }
         // An exact match keeps the existing route and its removal guard, even
         // if Keychain refuses to clear the private copy this time.
         onDuplicate()

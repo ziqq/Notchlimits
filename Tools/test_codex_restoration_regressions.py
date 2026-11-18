@@ -81,8 +81,8 @@ scenarios.append("compensation-logins:both:locked")
 for outcome in ("unchanged", "logged-out", "cleanup-refused", "aliased-root", "replaced", "replaced-alias",
                 "replaced-managed-same", "replaced-managed-distinct", "relocated-owner", "relocated-managed",
                 "relocated-primary", "relocated-primary-removed-alias", "relocated-primary-removed-alias-switch",
-                "non-directory"):
+                "relocated-primary-removed-alias-self", "non-directory"):
     scenarios.append(f"unreadable-original:{outcome}")
-assert len(scenarios) == len(set(scenarios)) == 163
+assert len(scenarios) == len(set(scenarios)) == 164
 for scenario in scenarios:
     setattr(CodexRestorationRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"), scenario_test(scenario))

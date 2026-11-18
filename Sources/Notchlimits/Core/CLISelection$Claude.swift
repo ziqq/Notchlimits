@@ -110,8 +110,11 @@ enum CLISelection$Claude {
         let startups: [URL]
         switch shell {
         case "zsh":
-            let directory = try zshStartupDirectory(home: home)
-            startups = [directory.appendingPathComponent(".zshrc")]
+            let interactive = try zshStartupDirectory(home: home, login: false)
+            let login = try zshStartupDirectory(home: home, login: true)
+            startups = (interactive == login ? [interactive] : [interactive, login]).map {
+                $0.appendingPathComponent(".zshrc")
+            }
         case "bash":
             let candidates = [".bash_profile", ".bash_login", ".profile"].map { home.appendingPathComponent($0) }
             let login = candidates.first { FileManager.default.fileExists(atPath: $0.path) } ?? candidates[0]
@@ -216,7 +219,7 @@ enum CLISelection$Claude {
         }
     }
 
-    private static func zshStartupDirectory(home: URL) throws -> URL {
+    private static func zshStartupDirectory(home: URL, login: Bool) throws -> URL {
         let probeDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("notchlimits-zsh-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: probeDirectory, withIntermediateDirectories: false,
@@ -225,12 +228,21 @@ enum CLISelection$Claude {
         let output = probeDirectory.appendingPathComponent("dotdir")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        // Evaluate .zshenv with interactive options before running any .zshrc.
-        process.arguments = ["-fi", "-c", #"""
+        // Resolve the .zshrc location without running the .zshrc itself.
+        process.arguments = [login ? "-fil" : "-fi", "-c", #"""
             setopt rcs
             if [[ -r "${ZDOTDIR-$HOME}/.zshenv" ]]; then
                 builtin source "${ZDOTDIR-$HOME}/.zshenv"
             fi
+            if [[ -o login ]]; then
+                if [[ -o rcs && -o globalrcs && -r /etc/zprofile ]]; then
+                    builtin source /etc/zprofile
+                fi
+                if [[ -o rcs && -r "${ZDOTDIR-$HOME}/.zprofile" ]]; then
+                    builtin source "${ZDOTDIR-$HOME}/.zprofile"
+                fi
+            fi
+            unsetopt rcs
             builtin print -rn -- "${ZDOTDIR-$HOME}" >| "$1"
             """#, "notchlimits", output.path]
         var environment = ProcessInfo.processInfo.environment

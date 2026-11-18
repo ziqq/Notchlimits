@@ -109,7 +109,7 @@ enum Lifecycle$Claude {
             case "cli-removed":
                 try cliRemoved(mode: args[1])
             case "dotdir":
-                try dotdir(configured: args[1] != "default", interactiveOnly: args[1] == "interactive")
+                try dotdir(mode: args[1])
             case "lock-syscall":
                 try lockSyscall(recovering: args[1] == "recover")
             case "lock-crash-swap":
@@ -387,34 +387,41 @@ enum Lifecycle$Claude {
     }
 
     @MainActor
-    private static func dotdir(configured: Bool, interactiveOnly: Bool) throws {
+    private static func dotdir(mode: String) throws {
         Fixture.claudeEntries = [:]
         let (account, profile) = try profile(file: true)
         let manager = Foundation.FileManager.default
         let dotfiles = Fixture.root.appendingPathComponent("dotfiles")
         try manager.createDirectory(at: dotfiles, withIntermediateDirectories: true)
-        if configured {
-            let assignment = interactiveOnly ? "if [[ -o interactive ]]; then ZDOTDIR=$HOME/dotfiles; fi\n" : "ZDOTDIR=$HOME/dotfiles\n"
-            try Data(assignment.utf8).write(to: Fixture.root.appendingPathComponent(".zshenv"))
+        if mode != "default" {
+            let assignment: String
+            switch mode {
+            case "interactive": assignment = "if [[ -o interactive ]]; then ZDOTDIR=$HOME/dotfiles; fi\n"
+            case "login": assignment = "if [[ -o login ]]; then ZDOTDIR=$HOME/dotfiles; fi\n"
+            default: assignment = "ZDOTDIR=$HOME/dotfiles\n"
+            }
+            let startup = mode == "login" ? ".zprofile" : ".zshenv"
+            try Data(assignment.utf8).write(to: Fixture.root.appendingPathComponent(startup))
             try Data("# existing interactive setup\n".utf8).write(to: dotfiles.appendingPathComponent(".zshrc"))
         }
         try switchTo(account)
         let fake = dotfiles.appendingPathComponent("claude")
         try Data("#!/bin/sh\nprintf '%s\\n' \"$CLAUDE_CONFIG_DIR\"\n".utf8).write(to: fake)
         try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fake.path)
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-i", "-c", "claude"]
-        process.environment = ["HOME": Fixture.root.path, "PATH": dotfiles.path + ":/usr/bin:/bin", "TERM": "dumb"]
-        let out = Pipe()
-        process.standardOutput = out
-        process.standardError = Pipe()
-        try process.run()
-        process.waitUntilExit()
-        let result = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        print("Configured zsh dotdir=\(configured), Claude switch returned success, actual shell route matches=\(result == profile.path + "\n")")
-        try expect(process.terminationStatus == 0 && result == profile.path + "\n",
-                   "New interactive zsh ignored a CLI selection reported successful by the switch")
+        for flags in mode == "login" ? ["-il", "-i"] : ["-i"] {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = [flags, "-c", "claude"]
+            process.environment = ["HOME": Fixture.root.path, "PATH": dotfiles.path + ":/usr/bin:/bin", "TERM": "dumb"]
+            let out = Pipe()
+            process.standardOutput = out
+            process.standardError = Pipe()
+            try process.run()
+            process.waitUntilExit()
+            let result = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            try expect(process.terminationStatus == 0 && result == profile.path + "\n",
+                       "New zsh \(flags) ignored a CLI selection reported successful by the switch")
+        }
     }
 
     @MainActor

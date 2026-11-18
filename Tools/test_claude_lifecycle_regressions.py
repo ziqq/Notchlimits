@@ -92,6 +92,9 @@ class ClaudeLifecycleRegressions(unittest.TestCase):
     def test_audit_zsh_interactive_dotdir(self):
         self.check_scenario("dotdir:interactive")
 
+    def test_zsh_login_profile_can_choose_a_different_dotdir(self):
+        self.check_scenario("dotdir:login")
+
     def test_audit_rollback_empty_bootstrap(self):
         self.check_scenario("cli-removed:rollback-empty")
 

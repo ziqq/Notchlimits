@@ -324,6 +324,23 @@ enum Restoration$Codex {
                 try expect(before == 1 && Fixture.codexKeychain[pendingKey] == original,
                            "The first scan did not leave exactly one column after denied cleanup")
                 try manager.removeItem(at: backup)
+                if outcome == "relocated-primary-removed-alias-self" {
+                    try expect(AuthSwap$Codex.activeColumnID == AuthSwap$Codex.defaultColumnID,
+                               "Fixture must route the primary home directly")
+                    try manager.moveItem(at: relocated, to: Fixture.root.appendingPathComponent("previous-native"))
+                    try manager.createSymbolicLink(at: relocated, withDestinationURL: pending.home)
+                    try expect(Fixture.codexKey(relocated) == pendingKey
+                               && (try AuthSwap$Codex.authData(columnID: AuthSwap$Codex.defaultColumnID, home: relocated)) == original,
+                               "Fixture did not route the native login to the private copy")
+                    Fixture.denyCodexDeleteAccount = nil
+                    let scans = try (0..<2).map { _ in try visibleLogins().filter { $0 == original }.count }
+                    try expect(scans == [1, 1] && Fixture.codexKeychain[pendingKey] == original,
+                               "Discovery deleted the current primary credentials while comparing the namespace with itself")
+                    Fixture.codexHome = native.path
+                    try expect(try visibleLogins().filter { $0 == original }.count == 1,
+                               "Moving the primary again hid the retained login")
+                    return
+                }
                 if outcome == "relocated-primary-removed-alias-switch" {
                     try AuthSwap$Codex.activate(columnID: "codex:selected", home: selected)
                     try expect(AuthSwap$Codex.activeColumnID == "codex:selected"
