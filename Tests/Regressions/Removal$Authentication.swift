@@ -13,6 +13,8 @@ private enum AuditSignals {
         try managed(takeover: parts[1] == "lost", bootstrap: parts[2])
       } else if parts[0] == "claude" {
         try claude(takeover: parts[1] == "takeover", denied: parts[2] == "denied")
+      } else if parts[0] == "file-rollback" {
+        try fileToAuto(state: parts[1])
       } else if parts[0] == "metadata" {
         try metadata(
           mode: parts[1], failure: parts.last != "stable",
@@ -164,6 +166,47 @@ private enum AuditSignals {
       try expect(success, "stable managed removal failed")
     }
   }
+  static func fileToAuto(state: String) throws {
+    let home = ProfileDirectories.codexRoot.appendingPathComponent("account")
+    try Cleanup$Authentication.login(home, name: "original", mode: "file")
+    let original = try Cleanup$Authentication.bytes(home, mode: "file")!
+    guard let account = Discovery$Real().discover().first(where: {
+      $0.id == AuthSwap$Codex.profileColumnID(home.lastPathComponent)
+    }) else { throw Failure(description: "Original login was not discovered") }
+    var staged: URL?
+    CleanupSignals.moved = { from, to in
+      guard from.path == home.path && to.lastPathComponent.hasPrefix(".removed-") else { return }
+      CleanupSignals.moved = nil
+      staged = to
+      if state == "login" {
+        try! Cleanup$Authentication.login(home, name: "replacement", mode: "auto")
+      } else {
+        try! manager.createDirectory(at: home, withIntermediateDirectories: true)
+        try! Fixture.codexMode(home, "auto")
+        if state == "denied" { AuditSignals.blockedKey = Fixture.codexKey(home) }
+      }
+      Fixture.denyCredentialFileRemovalPath = to.appendingPathComponent("auth.json").path
+    }
+    let removal = Result { try AccountRemoval.remove(account) }
+    guard case .failure = removal, let staged else {
+      throw Failure(description: "Fixture did not trigger a refused removal after the profile was re-added")
+    }
+    if state == "empty" {
+      try expect(try AuthSwap$Codex.authData(home: home) == original,
+                 "Rollback did not restore the original login into an empty profile")
+      return
+    }
+    if state == "login" {
+      let fresh = try Cleanup$Authentication.bytes(home, mode: "auto")
+      try expect(fresh != nil && fresh != original && (try AuthSwap$Codex.authData(home: home)) == fresh,
+                 "The re-added Keychain login changed during rollback")
+      Fixture.denyCodexRead = true
+    }
+    let fallback = try AuthSwap$Codex.authData(home: home)
+    try expect(fallback == nil && (try Cleanup$Authentication.bytes(staged, mode: "file")) == original,
+               "Rollback installed the staged file grant into a profile without a proven empty Keychain")
+  }
+
   static func metadata(
     mode: String, failure: Bool, replacement: Bool = false, unreadable: Bool = false
   ) throws {

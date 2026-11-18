@@ -193,6 +193,7 @@ enum AccountRemoval {
                         try keyring?.validateFiles()
                         try withProfileDirectory(managed ? directory : nil, root: root, expectedOwner: account.codexHomeOwner,
                                                  rollbackFile: { retainsOriginalFile = $0 },
+                                                 canRestoreCodexAuth: AuthStorage$Codex.canRestoreProfileAuth,
                                                  restoredFileOwner: AuthSwap$Codex.recordRestoredFileOwner) { directory in
                             try removal.delete(fileHome: directory)
                         }
@@ -220,6 +221,7 @@ enum AccountRemoval {
                                              move: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) },
                                              expectedOwner: DirectoryIdentity? = nil,
                                              rollbackFile: ((Bool) -> Void)? = nil,
+                                             canRestoreCodexAuth: ((URL, Int32) -> Bool)? = nil,
                                              restoredFileOwner: ((Int32, Int32) -> Void)? = nil,
                                              restoredClaudeFileOwner: ((Int32, Int32) -> Void)? = nil,
                                              operation: (URL?) throws -> Void) throws {
@@ -268,6 +270,7 @@ enum AccountRemoval {
                 // for OAuth locks. Restore missing entries atomically, keeping
                 // replacement credentials and all native lock owners untouched.
                 try restoreContents(from: removed, to: directory,
+                                    canRestoreCodexAuth: canRestoreCodexAuth,
                                     authFileRestored: {
                                         rollbackFile?(true)
                                         restoredFileOwner?($0, $1)
@@ -280,6 +283,7 @@ enum AccountRemoval {
 
     private static func restoreContents(from source: URL, to destination: URL,
                                         isProfileRoot: Bool = true,
+                                        canRestoreCodexAuth: ((URL, Int32) -> Bool)? = nil,
                                         authFileRestored: ((Int32, Int32) -> Void)? = nil,
                                         claudeFileRestored: ((Int32, Int32) -> Void)? = nil) throws {
         let sourceFD = open(source.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
@@ -296,6 +300,8 @@ enum AccountRemoval {
         }
         var restoredAuth: stat?
         for name in names {
+            if isProfileRoot && (name == "auth.json" || name == "config.toml"),
+               canRestoreCodexAuth?(destination, destinationFD) == false { continue }
             // A new CLI file login uses implicit file storage when it has no
             // config. Keep the old settings staged instead of hiding that login
             // behind its previous owner's Keychain record.

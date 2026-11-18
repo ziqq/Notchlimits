@@ -142,6 +142,23 @@ struct AuthStorage$Codex {
         else { try files.validate() }
     }
 
+    /// A re-added profile can already be signed in without an auth.json file.
+    static func canRestoreProfileAuth(at destination: URL, descriptor: Int32) -> Bool {
+        guard let owner = DirectoryIdentity.capture(descriptor: descriptor), owner.matches(destination),
+              let storage = try? Self(home: destination), storage.mode != .ephemeral else { return false }
+        do {
+            try validateMutation(homes: [storage.home], includesKeyring: storage.mode.usesKeyring) {
+                guard try configuredMode(home: storage.home) == storage.mode,
+                      !storage.mode.usesKeyring || storage.keyringStatus() == errSecItemNotFound else {
+                    throw Failure.settings
+                }
+            }
+            return owner.matches(destination)
+        } catch {
+            return false
+        }
+    }
+
     fileprivate struct KeyringRevision: Equatable {
         let reference: Data
         let modified: Date

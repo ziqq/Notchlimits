@@ -49,6 +49,7 @@ scenarios += ["managed:stable:absent", "managed:stable:bootstrap", "managed:lost
 for mode in ("keyring", "auto"):
     scenarios += [f"metadata:{mode}:unreadable:stable", f"metadata:{mode}:unreadable:fail",
                   f"opaque:{mode}:stable", f"opaque:{mode}:fail"]
-assert len(scenarios) == len(set(scenarios)) == 35
+scenarios += [f"file-rollback:{state}" for state in ("login", "denied", "empty")]
+assert len(scenarios) == len(set(scenarios)) == 38
 for scenario in scenarios:
     setattr(AuthenticationRemovalRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"), scenario_test(scenario))

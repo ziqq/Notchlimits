@@ -324,6 +324,28 @@ enum Restoration$Codex {
                 try expect(before == 1 && Fixture.codexKeychain[pendingKey] == original,
                            "The first scan did not leave exactly one column after denied cleanup")
                 try manager.removeItem(at: backup)
+                if outcome == "relocated-primary-removed-alias-unrelated-removal" {
+                    try manager.createSymbolicLink(at: backup, withDestinationURL: selected)
+                    let selectedKey = Fixture.codexKey(selected)
+                    let accounts = Discovery$Real().discover()
+                    guard let selectedLogin = Fixture.codexKeychain[selectedKey],
+                          let account = accounts.first(where: { $0.id == AuthSwap$Codex.profileColumnID(selected.lastPathComponent) }),
+                          let primary = accounts.first(where: { $0.id == AuthSwap$Codex.defaultColumnID }) else {
+                        throw Failure(description: "Discovery missed an independent login")
+                    }
+                    let primaryRemoval = Result { try AccountRemoval.remove(primary) }
+                    try expect(selectedLogin != original && Fixture.codexKeychain[pendingKey] == original
+                               && (try AuthSwap$Codex.authData(columnID: primary.id, home: relocated)) == original,
+                               "Removing the primary changed an active or pending login despite denied cleanup")
+                    if case .success = primaryRemoval {
+                        throw Failure(description: "Primary removal ignored its pending copy")
+                    }
+                    try AccountRemoval.remove(account)
+                    try expect(Fixture.codexKeychain[selectedKey] == nil && Fixture.codexKeychain[pendingKey] == original
+                               && (try AuthSwap$Codex.authData(columnID: primary.id, home: relocated)) == original,
+                               "Removing the independent profile affected primary recovery")
+                    return
+                }
                 if outcome == "relocated-primary-removed-alias-self" {
                     try expect(AuthSwap$Codex.activeColumnID == AuthSwap$Codex.defaultColumnID,
                                "Fixture must route the primary home directly")

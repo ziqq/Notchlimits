@@ -246,9 +246,12 @@ enum AuthSwap$Codex {
     private static func hasPendingRecovery(for home: URL) -> Bool {
         let entries = recoveredBackups
         return entries.values.contains { entry in
-            guard let original = entry["pendingOn"], let path = entries[original]?["home"] else { return false }
-            return matchedPrimaryRecovery(entry)?["home"] == home.path
-                || path == home.path || homeKey(URL(fileURLWithPath: path)) == home.path
+            guard let original = entry["pendingOn"] else { return false }
+            if let primary = matchedPrimaryRecovery(entry) {
+                return primary["home"] == home.path
+            }
+            guard let path = entries[original]?["home"] else { return false }
+            return path == home.path || homeKey(URL(fileURLWithPath: path)) == home.path
         }
     }
 
