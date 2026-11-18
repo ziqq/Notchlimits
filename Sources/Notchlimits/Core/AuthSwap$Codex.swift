@@ -173,7 +173,7 @@ enum AuthSwap$Codex {
         var entries = previous
         for (id, entry) in previous {
             guard let originalID = entry["pendingOn"], let snapshot = recoveredBackupHome(entry),
-                  let original = previous[originalID],
+                  let original = matchedPrimaryRecovery(entry) ?? previous[originalID],
                   let originalPath = original["home"], let originalOwner = original["owner"] else { continue }
             let originalURL = URL(fileURLWithPath: originalPath, isDirectory: true)
             let canonical = URL(fileURLWithPath: homeKey(originalURL), isDirectory: true)
@@ -210,9 +210,14 @@ enum AuthSwap$Codex {
             do {
                 if try discardDuplicateRecovery(at: snapshot, matching: entry, retainedAt: originalHome, matching: retained,
                                                 onDuplicate: {
-                    guard !isPrimaryRoute else { return }
-                    entries[retainedID] = retained
-                    entries[id]?["pendingOn"] = retainedID
+                    if isPrimaryRoute {
+                        // A later retry must still find the primary after the old alias is removed.
+                        entries[id]?["matchedPrimaryHome"] = canonical.path
+                        entries[id]?["matchedPrimaryOwner"] = currentOwner
+                    } else {
+                        entries[retainedID] = retained
+                        entries[id]?["pendingOn"] = retainedID
+                    }
                 }) {
                     entries[id] = nil
                 } else {
@@ -229,11 +234,18 @@ enum AuthSwap$Codex {
         }
     }
 
+    private static func matchedPrimaryRecovery(_ entry: [String: String]) -> [String: String]? {
+        guard let path = entry["matchedPrimaryHome"], let owner = entry["matchedPrimaryOwner"],
+              path == homeKey(liveHome(columnID: defaultColumnID, home: baseHome)) else { return nil }
+        return ["home": path, "owner": owner]
+    }
+
     private static func hasPendingRecovery(for home: URL) -> Bool {
         let entries = recoveredBackups
         return entries.values.contains { entry in
             guard let original = entry["pendingOn"], let path = entries[original]?["home"] else { return false }
-            return path == home.path || homeKey(URL(fileURLWithPath: path)) == home.path
+            return matchedPrimaryRecovery(entry)?["home"] == home.path
+                || path == home.path || homeKey(URL(fileURLWithPath: path)) == home.path
         }
     }
 

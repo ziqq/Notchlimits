@@ -4,6 +4,7 @@ import select
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 import swift_regression
@@ -21,7 +22,10 @@ class ClaudeLifecycleRegressions(unittest.TestCase):
             "func SecKeychainCopySearchList(_ result: UnsafeMutablePointer<CFArray?>) -> OSStatus {":
                 "if let searchList = ClaudeLifecycleSignals.searchList { return searchList(result) }",
             "_ to: UnsafePointer<CChar>, _ flags: UInt32) -> Int32 {":
-                """if flags == UInt32(RENAME_SWAP) { ClaudeLifecycleSignals.replaceExpiredLock(at: fromFD, path: from) }
+                """if flags == UInt32(RENAME_SWAP) {
+        if !ClaudeLifecycleSignals.replaceOnRepair { ClaudeLifecycleSignals.replaceExpiredLock(at: fromFD, path: from) }
+        ClaudeLifecycleSignals.replaceAtRepairDestination(parent: toFD, path: to)
+    }
     ClaudeLifecycleSignals.beforeRename(flags)
     if ClaudeLifecycleSignals.selectionRenameRefused(String(cString: from)) { return -1 }""",
         }
@@ -115,7 +119,13 @@ class ClaudeLifecycleRegressions(unittest.TestCase):
                         original = os.fstat(native).st_ino
                         out, err = child.communicate(b"go\n", timeout=10)
                         self.assertEqual(child.returncode, 86, (out, err))
-                        self.assertNotEqual(lock.stat().st_ino, original, "The fixture did not displace the native lock")
+                        placeholder = lock.stat().st_ino
+                        self.assertNotEqual(placeholder, original, "The fixture did not displace the native lock")
+                        if public_state == "repair-race":
+                            result = swift_regression.run_fixture(self.executable, "lock-repair-race", root)
+                            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                            self.assertEqual(lock.stat().st_ino, placeholder)
+                            return
                         if public_state != "marked":
                             lock.rmdir()
                         if public_state == "occupied":
@@ -125,11 +135,23 @@ class ClaudeLifecycleRegressions(unittest.TestCase):
                             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                             self.assertEqual(lock.stat().st_ino, successor)
                             lock.rmdir()
-                        result = swift_regression.run_fixture(self.executable, "lock-native-owner", root)
+                        if public_state == "released":
+                            os.close(native)
+                            native = -1
+                        result = swift_regression.run_fixture(self.executable, "lock-native-owner:short", root)
                         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                        self.assertEqual(lock.stat().st_ino, original)
+                        if public_state == "marked":
+                            self.assertEqual(lock.stat().st_ino, placeholder)
+                        else:
+                            self.assertFalse(lock.exists(), "Recovery republished the displaced CLI directory")
+                        if public_state == "released":
+                            time.sleep(1.1)
+                            result = swift_regression.run_fixture(self.executable, "lock-available", root)
+                            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                            self.assertFalse(any(".retiring-" in path.name for path in lock.parent.iterdir()))
                     finally:
-                        os.close(native)
+                        if native >= 0:
+                            os.close(native)
                 finally:
                     if child.poll() is None:
                         child.kill()
@@ -141,8 +163,14 @@ class ClaudeLifecycleRegressions(unittest.TestCase):
     def test_interrupted_recovery_restores_native_exclusion(self):
         self.check_crash_with_native_replacement("recover")
 
-    def test_interrupted_release_restores_native_lock_after_placeholder_is_removed(self):
+    def test_interrupted_release_defers_after_placeholder_is_removed(self):
         self.check_crash_with_native_replacement("release", "absent")
 
-    def test_interrupted_release_preserves_a_new_owner_before_restoring_the_displaced_lock(self):
+    def test_interrupted_release_preserves_a_new_owner_and_defers_after_release(self):
         self.check_crash_with_native_replacement("release", "occupied")
+
+    def test_repair_never_displaces_a_successor_at_the_swap_boundary(self):
+        self.check_crash_with_native_replacement("release", "repair-race")
+
+    def test_repair_expires_released_directory_without_republishing_it(self):
+        self.check_crash_with_native_replacement("release", "released")

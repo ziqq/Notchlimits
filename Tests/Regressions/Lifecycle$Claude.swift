@@ -44,6 +44,12 @@ private enum ClaudeLifecycleSignals {
     static var replacingLock: String?
     static var nativeLock: Int32 = -1
     static var crashOnSwap = false
+    static var replaceOnRepair = false
+
+    static func replaceAtRepairDestination(parent: Int32, path: UnsafePointer<CChar>) {
+        guard replaceOnRepair else { return }
+        replaceExpiredLock(at: parent, path: path)
+    }
 
     static func beforeRename(_ flags: UInt32) {
         guard crashOnSwap, flags == UInt32(RENAME_SWAP) else { return }
@@ -90,7 +96,13 @@ enum Lifecycle$Claude {
             case "lock-crash-swap":
                 try crashAfterLockSwap(recovering: args[1] == "recover")
             case "lock-native-owner":
-                try preservesNativeLock()
+                try preservesNativeLock(lifetime: args.count > 1 ? 1 : 15)
+            case "lock-repair-race":
+                try repairRace()
+            case "lock-available":
+                let lock = try StorageLock$Claude(path: lockPath, lifetime: 1)
+                try expect(lock.isHeld, "The expired retirement blocked acquisition")
+                lock.release()
             case "usage":
                 try await usage(mode: args[1])
             default:
@@ -199,11 +211,16 @@ enum Lifecycle$Claude {
         let native = ClaudeLifecycleSignals.nativeLock
         try expect(native >= 0, "CLI did not acquire its replacement lock at the syscall boundary")
         defer { _ = Darwin.close(native) }
-        var owner = stat(), current = stat()
-        let intact = Darwin.fstat(native, &owner) == 0 && Darwin.lstat(path.path, &current) == 0
-            && owner.st_dev == current.st_dev && owner.st_ino == current.st_ino
-        print("Native Claude lock intact: \(intact), recovery admitted: \(admitted)")
-        try expect(intact && !admitted, "Notchlimits removed a fresh native lock or recovered while CLI owned it")
+        var owner = stat()
+        try expect(Darwin.fstat(native, &owner) == 0,
+                   "Could not read the native directory")
+        let files = try Foundation.FileManager.default.contentsOfDirectory(atPath: directory.path)
+        try expect(!admitted && files.contains(where: {
+            var entry = stat()
+            return Darwin.lstat(directory.appendingPathComponent($0).path, &entry) == 0
+                && entry.st_dev == owner.st_dev && entry.st_ino == owner.st_ino
+        }), "Notchlimits removed a fresh native lock or recovered while CLI owned it")
+        try expect(Foundation.FileManager.default.fileExists(atPath: path.path), "The native lock path became vacant")
     }
 
     private static func crashAfterLockSwap(recovering: Bool) throws {
@@ -223,13 +240,29 @@ enum Lifecycle$Claude {
         throw Failure(description: "Fixture did not reach the swap")
     }
 
-    private static func preservesNativeLock() throws {
-        let directory = Fixture.root.appendingPathComponent("claude-lock")
+    private static var lockPath: URL {
+        Fixture.root.appendingPathComponent("claude-lock/.storage-write.lock")
+    }
+
+    private static func preservesNativeLock(lifetime: TimeInterval = 15) throws {
         do {
-            let owner = try StorageLock$Claude(directory: directory)
+            let owner = try StorageLock$Claude(path: lockPath, lifetime: lifetime)
             owner.release()
             throw Failure(description: "Restart acquired the lock while a native owner was still active")
         } catch StorageLock$Claude.Failure.busy {}
+    }
+
+    private static func repairRace() throws {
+        ClaudeLifecycleSignals.replaceOnRepair = true
+        ClaudeLifecycleSignals.replacingLock = lockPath.path
+        try preservesNativeLock()
+        let successor = ClaudeLifecycleSignals.nativeLock
+        guard successor >= 0 else { return }
+        defer { _ = Darwin.close(successor) }
+        var held = stat(), publicInfo = stat()
+        try expect(Darwin.fstat(successor, &held) == 0 && Darwin.lstat(lockPath.path, &publicInfo) == 0
+                   && held.st_dev == publicInfo.st_dev && held.st_ino == publicInfo.st_ino,
+                   "Recovery moved the new native lock from the public path")
     }
 
     @MainActor

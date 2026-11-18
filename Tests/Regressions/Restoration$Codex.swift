@@ -292,7 +292,8 @@ enum Restoration$Codex {
         try expect(reached && refused && Fixture.codexKeychain[backupKey] == original
                    && Fixture.codexKeychain[nativeKey] == foreign,
                    "The fixture did not retain the unchanged original backup")
-        let relocatedIntoPrimary = outcome == "relocated-primary"
+        let removedPrimaryAlias = outcome == "relocated-primary-removed-alias"
+        let relocatedIntoPrimary = outcome == "relocated-primary" || removedPrimaryAlias
         let relocatedIntoManaged = outcome == "relocated-managed"
         if outcome == "relocated-owner" || relocatedIntoManaged || relocatedIntoPrimary || outcome == "non-directory" {
             guard let pending = AuthSwap$Codex.recoveredBackupHomes().first(where: { $0.home != backup }) else {
@@ -316,6 +317,20 @@ enum Restoration$Codex {
             if relocatedIntoPrimary {
                 Fixture.codexHome = relocated.path
                 Fixture.codexKeychain[Fixture.codexKey(relocated)] = original
+            }
+            if removedPrimaryAlias {
+                Fixture.denyCodexDeleteAccount = pendingKey
+                let before = try visibleLogins().filter { $0 == original }.count
+                try expect(before == 1 && Fixture.codexKeychain[pendingKey] == original,
+                           "The first scan did not leave exactly one column after denied cleanup")
+                try manager.removeItem(at: backup)
+                Fixture.denyCodexDeleteAccount = nil
+                let after = try visibleLogins().filter { $0 == original }.count
+                print("Login columns before and after unlinking the alias: \(before), \(after)")
+                try expect(after == 1 && Fixture.codexKeychain[pendingKey] == nil
+                           && Fixture.codexKeychain[Fixture.codexKey(relocated)] == original,
+                           "Removing an obsolete alias published a duplicate of the still-live primary login")
+                return
             }
             let scans = try (0..<3).map { _ in try visibleLogins().filter { $0 == original }.count }
             print("Saved login visible columns for \(outcome): \(scans)")
