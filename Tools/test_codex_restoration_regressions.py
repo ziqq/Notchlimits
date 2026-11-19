@@ -31,6 +31,17 @@ class CodexRestorationRegressions(unittest.TestCase):
             "if Fixture.failCodexFileWrite && URL(fileURLWithPath: path).lastPathComponent.hasPrefix":
                 "RestorationSignals.attributes?(path)\n        if Fixture.failCodexFileWrite && URL(fileURLWithPath: path).lastPathComponent.hasPrefix",
         }
+        deletion = "        Fixture.codexKeychain[key] = nil\n        return errSecSuccess"
+        boundaries[deletion] = deletion.replace(
+            "return errSecSuccess", "RestorationSignals.afterDelete?(key)\n        return errSecSuccess",
+        )
+        keychain_add = """func SecItemAdd(_ attributes: CFDictionary, _ result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus {
+    if (attributes as NSDictionary)[kSecAttrService as String] as? String == "Codex Auth" {
+        let key = (attributes as NSDictionary)[kSecAttrAccount as String] as! String
+        guard !Fixture.denyCodexWrite && key != Fixture.denyCodexWriteAccount else { return errSecAuthFailed }"""
+        boundaries[keychain_add] = (
+            keychain_add + "\n        guard Fixture.codexKeychain[key] == nil else { return errSecDuplicateItem }"
+        )
         for before, after in boundaries.items():
             assert support.count(before) == 1, before
             support = support.replace(before, after)
@@ -81,9 +92,11 @@ scenarios.append("compensation-logins:both:locked")
 for outcome in ("unchanged", "logged-out", "cleanup-refused", "aliased-root", "replaced", "replaced-alias",
                 "replaced-managed-same", "replaced-managed-distinct", "relocated-owner", "relocated-managed",
                 "relocated-primary", "relocated-primary-removed-alias", "relocated-primary-removed-alias-switch",
-                "relocated-primary-removed-alias-self", "relocated-primary-removed-alias-during-read", "relocated-primary-removed-alias-unrelated-removal",
+                "relocated-primary-removed-alias-self", "relocated-primary-removed-alias-during-read",
+                "relocated-primary-removed-alias-during-delete", "relocated-primary-removed-alias-during-delete-reoccupied",
+                "relocated-primary-removed-alias-unrelated-removal",
                 "non-directory"):
     scenarios.append(f"unreadable-original:{outcome}")
-assert len(scenarios) == len(set(scenarios)) == 166
+assert len(scenarios) == len(set(scenarios)) == 168
 for scenario in scenarios:
     setattr(CodexRestorationRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"), scenario_test(scenario))

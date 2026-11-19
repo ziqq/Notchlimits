@@ -1,5 +1,6 @@
 private enum AuditSignals {
   static var beforeFileRestore: (() -> Void)?
+  static var afterConfigRestore: ((Int32) -> Void)?
   static var deleted: ((String) -> Void)?
   static var blockedKey: String?
   static var read: ((String) -> Void)?
@@ -169,6 +170,12 @@ private enum AuditSignals {
   }
   static func fileToAuto(state: String) throws {
     let home = ProfileDirectories.codexRoot.appendingPathComponent("account")
+    let configConflict = state == "config-conflict"
+    if configConflict {
+      let system = Fixture.root.appendingPathComponent("system")
+      try manager.createDirectory(at: system, withIntermediateDirectories: true)
+      try Data("cli_auth_credentials_store = 'auto'\n".utf8).write(to: system.appendingPathComponent("config.toml"))
+    }
     try Cleanup$Authentication.login(home, name: "original", mode: "file")
     let original = try Cleanup$Authentication.bytes(home, mode: "file")!
     guard let account = Discovery$Real().discover().first(where: {
@@ -186,14 +193,27 @@ private enum AuditSignals {
         try! Fixture.codexMode(home, "auto")
         if state == "denied" { AuditSignals.blockedKey = Fixture.codexKey(home) }
       }
-      if state == "during-rename" {
+      if state == "during-rename" || configConflict {
+        if configConflict { try! manager.removeItem(at: home.appendingPathComponent("config.toml")) }
         let key = Fixture.codexKey(home)
         let elsewhere = Fixture.root.appendingPathComponent("native-new-login")
         try! Cleanup$Authentication.login(elsewhere, name: "replacement", mode: "auto")
         let newLogin = try! Cleanup$Authentication.bytes(elsewhere, mode: "auto")!
-        AuditSignals.beforeFileRestore = {
+        let publishLogin = {
           Fixture.codexKeychain[key] = newLogin
           try! Data("updated-keychain".utf8).write(to: Fixture.classicKeychainDatabase(), options: .atomic)
+        }
+        if configConflict {
+          AuditSignals.afterConfigRestore = { descriptor in
+            let file = Darwin.openat(descriptor, "config.toml", O_WRONLY | O_CREAT | O_EXCL, 0o600)
+            precondition(file >= 0, "Fixture could not recreate the staged config")
+            let handle = FileHandle(fileDescriptor: file, closeOnDealloc: true)
+            try! handle.write(contentsOf: Data("# Concurrent staged settings\n".utf8))
+            try! handle.close()
+            publishLogin()
+          }
+        } else {
+          AuditSignals.beforeFileRestore = publishLogin
         }
       }
       Fixture.denyCredentialFileRemovalPath = to.appendingPathComponent("auth.json").path
@@ -210,7 +230,20 @@ private enum AuditSignals {
     if state == "during-rename" {
       try expect(AuditSignals.beforeFileRestore == nil, "Did not reach the file publication syscall")
     }
-    if state == "login" || state == "during-rename" {
+    if configConflict {
+      try expect(AuditSignals.afterConfigRestore == nil, "Did not publish the original configuration")
+      try expect(!manager.fileExists(atPath: home.appendingPathComponent("config.toml").path)
+                   && !manager.fileExists(atPath: home.appendingPathComponent("auth.json").path),
+                 "Rollback left the previous storage mode or login active")
+      let stagedConfig = try String(contentsOf: staged.appendingPathComponent("config.toml"))
+      try expect(stagedConfig == "# Concurrent staged settings\n", "Rollback overwrote the concurrent staged config")
+      let stagedNames = try manager.contentsOfDirectory(atPath: staged.path)
+      try expect(stagedNames.contains { name in
+        name.hasPrefix(".rollback-") && name.hasSuffix("-config.toml")
+          && (try? String(contentsOf: staged.appendingPathComponent(name))) == "cli_auth_credentials_store = \"file\"\n"
+      }, "Rollback did not preserve the withdrawn config separately")
+    }
+    if state == "login" || state == "during-rename" || configConflict {
       let fresh = try Cleanup$Authentication.bytes(home, mode: "auto")
       try expect(fresh != nil && fresh != original && (try AuthSwap$Codex.authData(home: home)) == fresh,
                  "The re-added Keychain login changed during rollback")

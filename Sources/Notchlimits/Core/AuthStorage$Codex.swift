@@ -698,7 +698,24 @@ struct AuthStorage$Codex {
         return first == second
     }
 
-    private func restoreFile(_ data: Data, at file: URL) throws {
+    /// Restore the deleted copy without updating a login created in its place.
+    func restoreRecoveryRecordIfAbsent(_ record: Record, validating: @escaping () throws -> Void) throws -> Bool {
+        if record.backend == .file {
+            return try restoreFile(record.data, at: file, validating: validating)
+        }
+        var item = query
+        item[kSecValueData as String] = record.data
+        let status = try Self.withKeychainAccess {
+            try validating()
+            return SecItemAdd(item as CFDictionary, nil)
+        }
+        if status == errSecDuplicateItem { return false }
+        guard status == errSecSuccess else { throw Failure.keychain(status) }
+        return true
+    }
+
+    @discardableResult
+    private func restoreFile(_ data: Data, at file: URL, validating: (() throws -> Void)? = nil) throws -> Bool {
         var template = Array(file.deletingLastPathComponent()
             .appendingPathComponent(".auth-restore-XXXXXX").path.utf8CString)
         let descriptor = mkstemp(&template)
@@ -710,8 +727,10 @@ struct AuthStorage$Codex {
         try handle.close()
         // Publish only a complete private backup. A CLI login that appeared
         // during Keychain deletion owns the path and must remain untouched.
-        if renameatx_np(AT_FDCWD, prepared, AT_FDCWD, file.path, UInt32(RENAME_EXCL)) == 0 { return }
+        try validating?()
+        if renameatx_np(AT_FDCWD, prepared, AT_FDCWD, file.path, UInt32(RENAME_EXCL)) == 0 { return true }
         guard errno == EEXIST else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        return false
     }
 
     private func loadFile() throws -> Record? {

@@ -28,7 +28,13 @@ class AuthenticationRemovalRegressions(unittest.TestCase):
         AuditSignals.beforeFileRestore = nil
         hook()
     }
-    return Darwin.renameatx_np(fromFD, from, toFD, to, flags)""")
+    let result = Darwin.renameatx_np(fromFD, from, toFD, to, flags)
+    if result == 0 && flags == UInt32(RENAME_EXCL) && String(cString: from) == "config.toml"
+        && String(cString: to) == "config.toml", let hook = AuditSignals.afterConfigRestore {
+        AuditSignals.afterConfigRestore = nil
+        hook(fromFD)
+    }
+    return result""")
         replacements['try super.moveItem(at: srcURL, to: dstURL)'] = (
             'try super.moveItem(at: srcURL, to: dstURL)\n        CleanupSignals.moved?(srcURL, dstURL)')
         for before, after in replacements.items():
@@ -56,7 +62,7 @@ scenarios += ["managed:stable:absent", "managed:stable:bootstrap", "managed:lost
 for mode in ("keyring", "auto"):
     scenarios += [f"metadata:{mode}:unreadable:stable", f"metadata:{mode}:unreadable:fail",
                   f"opaque:{mode}:stable", f"opaque:{mode}:fail"]
-scenarios += [f"file-rollback:{state}" for state in ("login", "denied", "empty", "during-rename")]
-assert len(scenarios) == len(set(scenarios)) == 39
+scenarios += [f"file-rollback:{state}" for state in ("login", "denied", "empty", "during-rename", "config-conflict")]
+assert len(scenarios) == len(set(scenarios)) == 40
 for scenario in scenarios:
     setattr(AuthenticationRemovalRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"), scenario_test(scenario))

@@ -305,9 +305,15 @@ enum AccountRemoval {
             defer { codexFiles.removeAll() }
             // Keychain can change while rename publishes the staged files.
             if codexFiles.contains(where: { !$0.canRestore() }) {
+                var failure: Error?
                 for file in codexFiles.reversed() {
-                    try returnRestoredFile(file.name, original: file.original, from: destinationFD, to: sourceFD)
+                    do {
+                        try returnRestoredFile(file.name, original: file.original, from: destinationFD, to: sourceFD)
+                    } catch {
+                        if failure == nil { failure = error }
+                    }
                 }
+                if let failure { throw failure }
             } else if restoredAuth != nil {
                 authFileRestored?(sourceFD, destinationFD)
             }
@@ -388,13 +394,19 @@ enum AccountRemoval {
             return
         }
         guard sameFile(current, as: original) else { return }
-        guard renameatx_np(destination, name, staged, name, UInt32(RENAME_EXCL)) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        var returnedName = name
+        if renameatx_np(destination, name, staged, returnedName, UInt32(RENAME_EXCL)) != 0 {
+            guard errno == EEXIST else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            // Keep the staged occupant and withdraw our file under a private name.
+            returnedName = ".rollback-" + UUID().uuidString + "-" + name
+            guard renameatx_np(destination, name, staged, returnedName, UInt32(RENAME_EXCL)) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
         }
         // Preserve a replacement caught between the identity check and rename.
-        guard fstatat(staged, name, &current, AT_SYMLINK_NOFOLLOW) == 0,
+        guard fstatat(staged, returnedName, &current, AT_SYMLINK_NOFOLLOW) == 0,
               !sameFile(current, as: original) else { return }
-        if renameatx_np(staged, name, destination, name, UInt32(RENAME_EXCL)) != 0, errno != EEXIST {
+        if renameatx_np(staged, returnedName, destination, name, UInt32(RENAME_EXCL)) != 0, errno != EEXIST {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
     }

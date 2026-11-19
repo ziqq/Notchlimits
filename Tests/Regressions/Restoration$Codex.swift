@@ -7,6 +7,7 @@ private enum RestorationSignals {
     static var attributes: ((String) -> Void)?
     static var unavailableKey: String?
     static var beforeDelete: ((String) -> Void)?
+    static var afterDelete: ((String) -> Void)?
     static var afterNativeFileWrite: (() -> Void)?
 
     static func didWrite(_ key: String) {
@@ -316,11 +317,14 @@ enum Restoration$Codex {
             }
             let primaryAlias = Fixture.root.appendingPathComponent("native-route")
             let retargetDuringRead = outcome == "relocated-primary-removed-alias-during-read"
+            let retargetDuringDelete = outcome.hasPrefix("relocated-primary-removed-alias-during-delete")
+            let reoccupied = outcome.hasSuffix("-reoccupied")
+            let retargetPrimary = retargetDuringRead || retargetDuringDelete
             if relocatedIntoPrimary {
-                if retargetDuringRead {
+                if retargetPrimary {
                     try manager.createSymbolicLink(at: primaryAlias, withDestinationURL: relocated)
                 }
-                Fixture.codexHome = retargetDuringRead ? primaryAlias.path : relocated.path
+                Fixture.codexHome = retargetPrimary ? primaryAlias.path : relocated.path
                 Fixture.codexKeychain[Fixture.codexKey(relocated)] = original
             }
             if removedPrimaryAlias {
@@ -329,25 +333,37 @@ enum Restoration$Codex {
                 try expect(before == 1 && Fixture.codexKeychain[pendingKey] == original,
                            "The first scan did not leave exactly one column after denied cleanup")
                 try manager.removeItem(at: backup)
-                if retargetDuringRead {
+                if retargetPrimary {
                     var retargeted = false
                     let retainedKey = Fixture.codexKey(relocated)
-                    Fixture.denyCodexDeleteAccount = nil
-                    Fixture.beforeCodexSecretRead = { key in
-                        guard key == retainedKey else { return }
-                        Fixture.beforeCodexSecretRead = nil
+                    let retarget = {
                         retargeted = true
                         try! manager.removeItem(at: primaryAlias)
                         try! manager.createSymbolicLink(at: primaryAlias, withDestinationURL: native)
+                    }
+                    Fixture.denyCodexDeleteAccount = nil
+                    if retargetDuringDelete {
+                        RestorationSignals.afterDelete = { key in
+                            guard key == pendingKey else { return }
+                            RestorationSignals.afterDelete = nil
+                            retarget()
+                            if reoccupied { Fixture.codexKeychain[pendingKey] = foreign }
+                        }
+                    } else {
+                        Fixture.beforeCodexSecretRead = { key in
+                            guard key == retainedKey else { return }
+                            Fixture.beforeCodexSecretRead = nil
+                            retarget()
+                        }
                     }
                     _ = Discovery$Real().discover()
                     try expect(retargeted && Fixture.codexKey(primaryAlias) == nativeKey
                                && Fixture.codexKeychain[nativeKey] == foreign
                                && Fixture.codexKeychain[retainedKey] == original,
-                               "Fixture did not retarget the route while the previously visible credentials were being read")
+                               "Fixture did not retarget the route during the duplicate cleanup")
                     let after = try visibleLogins().filter { $0 == original }.count
                     print("Former login visible after retarget: \(after), recovery present: \(Fixture.codexKeychain[pendingKey] != nil)")
-                    try expect(after == 1 && Fixture.codexKeychain[pendingKey] == original,
+                    try expect(after == 1 && Fixture.codexKeychain[pendingKey] == (reoccupied ? foreign : original),
                                "Deduplication deleted recovery after the retained credentials left the primary route")
                     return
                 }
