@@ -22,6 +22,13 @@ class AuthenticationRemovalRegressions(unittest.TestCase):
         '        try super.removeItem(at: url)':'        try super.removeItem(at: url)\n        CleanupSignals.removed?(url)',
         '        Fixture.codexKeychain[key] = (attributes as NSDictionary)[kSecValueData as String] as? Data':'        Fixture.codexKeychain[key] = (attributes as NSDictionary)[kSecValueData as String] as? Data\n        CleanupSignals.written?(key)',
         }
+        replacements["return Darwin.renameatx_np(fromFD, from, toFD, to, flags)"] = (
+            """if flags == UInt32(RENAME_EXCL) && String(cString: from) == "auth.json"
+        && String(cString: to) == "auth.json", let hook = AuditSignals.beforeFileRestore {
+        AuditSignals.beforeFileRestore = nil
+        hook()
+    }
+    return Darwin.renameatx_np(fromFD, from, toFD, to, flags)""")
         replacements['try super.moveItem(at: srcURL, to: dstURL)'] = (
             'try super.moveItem(at: srcURL, to: dstURL)\n        CleanupSignals.moved?(srcURL, dstURL)')
         for before, after in replacements.items():
@@ -49,7 +56,7 @@ scenarios += ["managed:stable:absent", "managed:stable:bootstrap", "managed:lost
 for mode in ("keyring", "auto"):
     scenarios += [f"metadata:{mode}:unreadable:stable", f"metadata:{mode}:unreadable:fail",
                   f"opaque:{mode}:stable", f"opaque:{mode}:fail"]
-scenarios += [f"file-rollback:{state}" for state in ("login", "denied", "empty")]
-assert len(scenarios) == len(set(scenarios)) == 38
+scenarios += [f"file-rollback:{state}" for state in ("login", "denied", "empty", "during-rename")]
+assert len(scenarios) == len(set(scenarios)) == 39
 for scenario in scenarios:
     setattr(AuthenticationRemovalRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"), scenario_test(scenario))

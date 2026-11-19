@@ -193,7 +193,7 @@ enum AccountRemoval {
                         try keyring?.validateFiles()
                         try withProfileDirectory(managed ? directory : nil, root: root, expectedOwner: account.codexHomeOwner,
                                                  rollbackFile: { retainsOriginalFile = $0 },
-                                                 canRestoreCodexAuth: AuthStorage$Codex.canRestoreProfileAuth,
+                                                 codexAuthRestoreCheck: AuthStorage$Codex.profileAuthRestoreCheck,
                                                  restoredFileOwner: AuthSwap$Codex.recordRestoredFileOwner) { directory in
                             try removal.delete(fileHome: directory)
                         }
@@ -221,7 +221,7 @@ enum AccountRemoval {
                                              move: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) },
                                              expectedOwner: DirectoryIdentity? = nil,
                                              rollbackFile: ((Bool) -> Void)? = nil,
-                                             canRestoreCodexAuth: ((URL, Int32) -> Bool)? = nil,
+                                             codexAuthRestoreCheck: ((URL, Int32) -> (() -> Bool)?)? = nil,
                                              restoredFileOwner: ((Int32, Int32) -> Void)? = nil,
                                              restoredClaudeFileOwner: ((Int32, Int32) -> Void)? = nil,
                                              operation: (URL?) throws -> Void) throws {
@@ -270,7 +270,7 @@ enum AccountRemoval {
                 // for OAuth locks. Restore missing entries atomically, keeping
                 // replacement credentials and all native lock owners untouched.
                 try restoreContents(from: removed, to: directory,
-                                    canRestoreCodexAuth: canRestoreCodexAuth,
+                                    codexAuthRestoreCheck: codexAuthRestoreCheck,
                                     authFileRestored: {
                                         rollbackFile?(true)
                                         restoredFileOwner?($0, $1)
@@ -283,7 +283,7 @@ enum AccountRemoval {
 
     private static func restoreContents(from source: URL, to destination: URL,
                                         isProfileRoot: Bool = true,
-                                        canRestoreCodexAuth: ((URL, Int32) -> Bool)? = nil,
+                                        codexAuthRestoreCheck: ((URL, Int32) -> (() -> Bool)?)? = nil,
                                         authFileRestored: ((Int32, Int32) -> Void)? = nil,
                                         claudeFileRestored: ((Int32, Int32) -> Void)? = nil) throws {
         let sourceFD = open(source.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
@@ -299,35 +299,56 @@ enum AccountRemoval {
             return $0 < $1
         }
         var restoredAuth: stat?
+        var codexFiles: [(name: String, original: stat, canRestore: () -> Bool)] = []
+        func finishCodexAuthRestore() throws {
+            guard !codexFiles.isEmpty else { return }
+            defer { codexFiles.removeAll() }
+            // Keychain can change while rename publishes the staged files.
+            if codexFiles.contains(where: { !$0.canRestore() }) {
+                for file in codexFiles.reversed() {
+                    try returnRestoredFile(file.name, original: file.original, from: destinationFD, to: sourceFD)
+                }
+            } else if restoredAuth != nil {
+                authFileRestored?(sourceFD, destinationFD)
+            }
+        }
         for name in names {
-            if isProfileRoot && (name == "auth.json" || name == "config.toml"),
-               canRestoreCodexAuth?(destination, destinationFD) == false { continue }
+            if !authFiles.contains(name) { try finishCodexAuthRestore() }
+            let canRestore: (() -> Bool)?
+            if isProfileRoot && (name == "auth.json" || name == "config.toml"), let codexAuthRestoreCheck {
+                guard let check = codexAuthRestoreCheck(destination, destinationFD) else { continue }
+                canRestore = check
+            } else {
+                canRestore = nil
+            }
             // A new CLI file login uses implicit file storage when it has no
             // config. Keep the old settings staged instead of hiding that login
             // behind its previous owner's Keychain record.
             if isProfileRoot && name == "config.toml" {
                 var current = stat()
                 if fstatat(destinationFD, "auth.json", &current, AT_SYMLINK_NOFOLLOW) == 0 {
-                    guard let restoredAuth, current.st_dev == restoredAuth.st_dev,
-                          current.st_ino == restoredAuth.st_ino, current.st_size == restoredAuth.st_size,
-                          current.st_mtimespec.tv_sec == restoredAuth.st_mtimespec.tv_sec,
-                          current.st_mtimespec.tv_nsec == restoredAuth.st_mtimespec.tv_nsec else { continue }
+                    guard let restoredAuth, sameFile(current, as: restoredAuth) else { continue }
                 } else if errno != ENOENT {
-                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                    let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                    try finishCodexAuthRestore()
+                    throw error
                 }
             }
             // Borrowed renewal leases still own these in the staged directory;
             // the adjacent legacy OAuth lock continues to fence native writers.
             if name.hasPrefix(".oauth_refresh.lock") || name.hasPrefix(".storage-write.lock") { continue }
             var stagedAuth = stat()
-            if isProfileRoot && name == "auth.json",
+            if (isProfileRoot && name == "auth.json") || canRestore != nil,
                fstatat(sourceFD, name, &stagedAuth, AT_SYMLINK_NOFOLLOW) != 0 {
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                try finishCodexAuthRestore()
+                throw error
             }
             if renameatx_np(sourceFD, name, destinationFD, name, UInt32(RENAME_EXCL)) == 0 {
+                if let canRestore { codexFiles.append((name, stagedAuth, canRestore)) }
                 if isProfileRoot && name == "auth.json" {
                     restoredAuth = stagedAuth
-                    authFileRestored?(sourceFD, destinationFD)
+                    if canRestore == nil { authFileRestored?(sourceFD, destinationFD) }
                 }
                 if isProfileRoot && name == ".credentials.json" {
                     AuthStorage$Claude.recordRestoredFileOwner(from: source, to: destination)
@@ -335,7 +356,12 @@ enum AccountRemoval {
                 }
                 continue
             }
-            guard errno == EEXIST else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            guard errno == EEXIST else {
+                let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                try finishCodexAuthRestore()
+                throw error
+            }
+            if canRestore != nil { continue }
             let original = source.appendingPathComponent(name), current = destination.appendingPathComponent(name)
             let old = try original.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             let new = try current.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
@@ -345,6 +371,31 @@ enum AccountRemoval {
             }
             // Existing files belong to the concurrent client. Retain conflicting
             // backups in the hidden directory instead of overwriting either login.
+        }
+        try finishCodexAuthRestore()
+    }
+
+    private static func sameFile(_ current: stat, as original: stat) -> Bool {
+        current.st_dev == original.st_dev && current.st_ino == original.st_ino && current.st_size == original.st_size
+            && current.st_mtimespec.tv_sec == original.st_mtimespec.tv_sec
+            && current.st_mtimespec.tv_nsec == original.st_mtimespec.tv_nsec
+    }
+
+    private static func returnRestoredFile(_ name: String, original: stat, from destination: Int32, to staged: Int32) throws {
+        var current = stat()
+        if fstatat(destination, name, &current, AT_SYMLINK_NOFOLLOW) != 0 {
+            guard errno == ENOENT else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            return
+        }
+        guard sameFile(current, as: original) else { return }
+        guard renameatx_np(destination, name, staged, name, UInt32(RENAME_EXCL)) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        // Preserve a replacement caught between the identity check and rename.
+        guard fstatat(staged, name, &current, AT_SYMLINK_NOFOLLOW) == 0,
+              !sameFile(current, as: original) else { return }
+        if renameatx_np(staged, name, destination, name, UInt32(RENAME_EXCL)) != 0, errno != EEXIST {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
     }
 

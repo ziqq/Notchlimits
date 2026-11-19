@@ -142,21 +142,29 @@ struct AuthStorage$Codex {
         else { try files.validate() }
     }
 
-    /// A re-added profile can already be signed in without an auth.json file.
-    static func canRestoreProfileAuth(at destination: URL, descriptor: Int32) -> Bool {
+    /// Check the same destination before and after restoring the staged files.
+    static func profileAuthRestoreCheck(at destination: URL, descriptor: Int32) -> (() -> Bool)? {
         guard let owner = DirectoryIdentity.capture(descriptor: descriptor), owner.matches(destination),
-              let storage = try? Self(home: destination), storage.mode != .ephemeral else { return false }
-        do {
-            try validateMutation(homes: [storage.home], includesKeyring: storage.mode.usesKeyring) {
-                guard try configuredMode(home: storage.home) == storage.mode,
-                      !storage.mode.usesKeyring || storage.keyringStatus() == errSecItemNotFound else {
-                    throw Failure.settings
+              let initial = try? Self(home: destination), initial.mode != .ephemeral else { return nil }
+        func canRestore() -> Bool {
+            guard owner.matches(destination), let current = try? Self(home: destination),
+                  current.mode != .ephemeral else { return false }
+            // Restoring config.toml can change the effective mode; a Keychain
+            // login in either mode still belongs to the destination owner.
+            let includesKeyring = initial.mode.usesKeyring || current.mode.usesKeyring
+            do {
+                try validateMutation(homes: [current.home], includesKeyring: includesKeyring) {
+                    guard try configuredMode(home: current.home) == current.mode,
+                          !includesKeyring || current.keyringStatus() == errSecItemNotFound else {
+                        throw Failure.settings
+                    }
                 }
+                return owner.matches(destination)
+            } catch {
+                return false
             }
-            return owner.matches(destination)
-        } catch {
-            return false
         }
+        return canRestore() ? canRestore : nil
     }
 
     fileprivate struct KeyringRevision: Equatable {

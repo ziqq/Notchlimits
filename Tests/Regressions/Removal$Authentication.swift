@@ -1,4 +1,5 @@
 private enum AuditSignals {
+  static var beforeFileRestore: (() -> Void)?
   static var deleted: ((String) -> Void)?
   static var blockedKey: String?
   static var read: ((String) -> Void)?
@@ -185,6 +186,16 @@ private enum AuditSignals {
         try! Fixture.codexMode(home, "auto")
         if state == "denied" { AuditSignals.blockedKey = Fixture.codexKey(home) }
       }
+      if state == "during-rename" {
+        let key = Fixture.codexKey(home)
+        let elsewhere = Fixture.root.appendingPathComponent("native-new-login")
+        try! Cleanup$Authentication.login(elsewhere, name: "replacement", mode: "auto")
+        let newLogin = try! Cleanup$Authentication.bytes(elsewhere, mode: "auto")!
+        AuditSignals.beforeFileRestore = {
+          Fixture.codexKeychain[key] = newLogin
+          try! Data("updated-keychain".utf8).write(to: Fixture.classicKeychainDatabase(), options: .atomic)
+        }
+      }
       Fixture.denyCredentialFileRemovalPath = to.appendingPathComponent("auth.json").path
     }
     let removal = Result { try AccountRemoval.remove(account) }
@@ -196,7 +207,10 @@ private enum AuditSignals {
                  "Rollback did not restore the original login into an empty profile")
       return
     }
-    if state == "login" {
+    if state == "during-rename" {
+      try expect(AuditSignals.beforeFileRestore == nil, "Did not reach the file publication syscall")
+    }
+    if state == "login" || state == "during-rename" {
       let fresh = try Cleanup$Authentication.bytes(home, mode: "auto")
       try expect(fresh != nil && fresh != original && (try AuthSwap$Codex.authData(home: home)) == fresh,
                  "The re-added Keychain login changed during rollback")

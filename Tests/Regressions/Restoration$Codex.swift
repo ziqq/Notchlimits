@@ -314,8 +314,13 @@ enum Restoration$Codex {
                 try Fixture.codexMode(relocated, "file")
                 try original.write(to: relocated.appendingPathComponent("auth.json"))
             }
+            let primaryAlias = Fixture.root.appendingPathComponent("native-route")
+            let retargetDuringRead = outcome == "relocated-primary-removed-alias-during-read"
             if relocatedIntoPrimary {
-                Fixture.codexHome = relocated.path
+                if retargetDuringRead {
+                    try manager.createSymbolicLink(at: primaryAlias, withDestinationURL: relocated)
+                }
+                Fixture.codexHome = retargetDuringRead ? primaryAlias.path : relocated.path
                 Fixture.codexKeychain[Fixture.codexKey(relocated)] = original
             }
             if removedPrimaryAlias {
@@ -324,6 +329,28 @@ enum Restoration$Codex {
                 try expect(before == 1 && Fixture.codexKeychain[pendingKey] == original,
                            "The first scan did not leave exactly one column after denied cleanup")
                 try manager.removeItem(at: backup)
+                if retargetDuringRead {
+                    var retargeted = false
+                    let retainedKey = Fixture.codexKey(relocated)
+                    Fixture.denyCodexDeleteAccount = nil
+                    Fixture.beforeCodexSecretRead = { key in
+                        guard key == retainedKey else { return }
+                        Fixture.beforeCodexSecretRead = nil
+                        retargeted = true
+                        try! manager.removeItem(at: primaryAlias)
+                        try! manager.createSymbolicLink(at: primaryAlias, withDestinationURL: native)
+                    }
+                    _ = Discovery$Real().discover()
+                    try expect(retargeted && Fixture.codexKey(primaryAlias) == nativeKey
+                               && Fixture.codexKeychain[nativeKey] == foreign
+                               && Fixture.codexKeychain[retainedKey] == original,
+                               "Fixture did not retarget the route while the previously visible credentials were being read")
+                    let after = try visibleLogins().filter { $0 == original }.count
+                    print("Former login visible after retarget: \(after), recovery present: \(Fixture.codexKeychain[pendingKey] != nil)")
+                    try expect(after == 1 && Fixture.codexKeychain[pendingKey] == original,
+                               "Deduplication deleted recovery after the retained credentials left the primary route")
+                    return
+                }
                 if outcome == "relocated-primary-removed-alias-unrelated-removal" {
                     try manager.createSymbolicLink(at: backup, withDestinationURL: selected)
                     let selectedKey = Fixture.codexKey(selected)

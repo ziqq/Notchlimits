@@ -207,8 +207,13 @@ enum AuthSwap$Codex {
                 retained["owner"] = currentOwner
             }
             guard let originalHome = recoveredBackupHome(retained) else { continue }
+            let retainedRouteIsCurrent = {
+                let route = isPrimaryRoute ? liveHome(columnID: defaultColumnID, home: baseHome) : originalURL
+                return homeKey(route) == originalHome.path
+            }
             do {
                 if try discardDuplicateRecovery(at: snapshot, matching: entry, retainedAt: originalHome, matching: retained,
+                                                retainedRouteIsCurrent: retainedRouteIsCurrent,
                                                 onDuplicate: {
                     if isPrimaryRoute {
                         // A later retry must still find the primary after the old alias is removed.
@@ -257,6 +262,7 @@ enum AuthSwap$Codex {
 
     private static func discardDuplicateRecovery(at snapshot: URL, matching savedEntry: [String: String],
                                                  retainedAt original: URL, matching retainedEntry: [String: String],
+                                                 retainedRouteIsCurrent: @escaping () -> Bool,
                                                  onDuplicate: () -> Void) throws -> Bool {
         guard let savedOwner = DirectoryIdentity.capture(snapshot),
               let retainedOwner = DirectoryIdentity.capture(original),
@@ -281,6 +287,7 @@ enum AuthSwap$Codex {
             try requireStorage(saved, home: snapshot, owner: savedOwner)
             try requireStorage(retained, home: original, owner: retainedOwner)
         }
+        guard retainedRouteIsCurrent() else { throw Failure.busy }
         guard let savedRecord else { return true }
         guard let retainedRecord, AuthStorage$Codex.sameCredentials(savedRecord.data, retainedRecord.data) else {
             return false
@@ -291,6 +298,9 @@ enum AuthSwap$Codex {
         // if Keychain refuses to clear the private copy this time.
         onDuplicate()
         try requireIdleGrant(savedRecord.data)
+        func validateRetainedRoute() throws {
+            guard retainedRouteIsCurrent() else { throw Failure.busy }
+        }
         try saved.delete(validating: {
             try AuthStorage$Codex.validateMutation(homes: [snapshot, original], includesKeyring: includesKeyring,
                                                    tracksDirectoryContents: false) {
@@ -300,7 +310,8 @@ enum AuthSwap$Codex {
                     throw Failure.busy
                 }
             }
-        })
+            try validateRetainedRoute()
+        }, beforeKeyringMutation: validateRetainedRoute)
         return true
     }
 
