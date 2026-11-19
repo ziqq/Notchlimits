@@ -8,6 +8,7 @@ private enum RestorationSignals {
     static var unavailableKey: String?
     static var beforeDelete: ((String) -> Void)?
     static var afterDelete: ((String) -> Void)?
+    static var beforeMove: ((String, String) -> Void)?
     static var afterNativeFileWrite: (() -> Void)?
 
     static func didWrite(_ key: String) {
@@ -319,6 +320,9 @@ enum Restoration$Codex {
             let retargetDuringRead = outcome == "relocated-primary-removed-alias-during-read"
             let retargetDuringDelete = outcome.hasPrefix("relocated-primary-removed-alias-during-delete")
             let reoccupied = outcome.hasSuffix("-reoccupied")
+            let reoccupiedSame = outcome.contains("-reoccupied-same")
+            let deniedUntilRetry = outcome.hasSuffix("-denied-until-retry")
+            let replacesAtDelete = outcome.hasSuffix("-replacement-at-delete")
             let retargetPrimary = retargetDuringRead || retargetDuringDelete
             if relocatedIntoPrimary {
                 if retargetPrimary {
@@ -342,12 +346,43 @@ enum Restoration$Codex {
                         try! manager.createSymbolicLink(at: primaryAlias, withDestinationURL: native)
                     }
                     Fixture.denyCodexDeleteAccount = nil
-                    if retargetDuringDelete {
-                        RestorationSignals.afterDelete = { key in
+                    if replacesAtDelete {
+                        var replaced = false
+                        let replace: (String) -> Void = { key in
                             guard key == pendingKey else { return }
+                            RestorationSignals.beforeDelete = nil
+                            RestorationSignals.beforeMove = nil
+                            replaced = true
+                            Fixture.codexKeychain[pendingKey] = foreign
+                            try! Data("new-keychain-revision".utf8).write(to: Fixture.classicKeychainDatabase(), options: .atomic)
+                        }
+                        RestorationSignals.beforeDelete = replace
+                        RestorationSignals.beforeMove = { key, _ in replace(key) }
+                        _ = Discovery$Real().discover()
+                        try expect(replaced && Fixture.codexKeychain[retainedKey] == original,
+                                   "Fixture did not replace the recovery item at the deletion boundary")
+                        let after = try visibleLogins().filter { $0 == foreign }.count
+                        print("Replacement visible after cleanup: \(after), Keychain still contains replacement: \(Fixture.codexKeychain[pendingKey] == foreign)")
+                        try expect(after == 1 && Fixture.codexKeychain[pendingKey] == foreign,
+                                   "Duplicate cleanup deleted the independent replacement login")
+                        return
+                    }
+                    if retargetDuringDelete {
+                        var deletionKey = pendingKey
+                        RestorationSignals.beforeMove = { key, destination in
+                            if key == pendingKey { deletionKey = destination }
+                        }
+                        RestorationSignals.afterDelete = { key in
+                            guard key == deletionKey else { return }
+                            RestorationSignals.beforeMove = nil
                             RestorationSignals.afterDelete = nil
                             retarget()
                             if reoccupied { Fixture.codexKeychain[pendingKey] = foreign }
+                            if reoccupiedSame { Fixture.codexKeychain[pendingKey] = original }
+                            if deniedUntilRetry {
+                                Fixture.denyCodexWrite = true
+                                Fixture.denyCodexRead = true
+                            }
                         }
                     } else {
                         Fixture.beforeCodexSecretRead = { key in
@@ -361,6 +396,16 @@ enum Restoration$Codex {
                                && Fixture.codexKeychain[nativeKey] == foreign
                                && Fixture.codexKeychain[retainedKey] == original,
                                "Fixture did not retarget the route during the duplicate cleanup")
+                    if deniedUntilRetry {
+                        try expect(Fixture.codexKeychain[pendingKey] == (reoccupiedSame ? original : nil),
+                                   "Fixture did not deny reserve writes")
+                        Fixture.denyCodexWrite = false
+                        Fixture.denyCodexRead = false
+                        let counts = try (0..<3).map { _ in try visibleLogins().filter { $0 == original }.count }
+                        print("Former login visible after restoring Keychain access: \(counts)")
+                        try expect(counts == [1, 1, 1], "Retry lost the detached recovery state after a temporary Keychain outage")
+                        return
+                    }
                     let after = try visibleLogins().filter { $0 == original }.count
                     print("Former login visible after retarget: \(after), recovery present: \(Fixture.codexKeychain[pendingKey] != nil)")
                     try expect(after == 1 && Fixture.codexKeychain[pendingKey] == (reoccupied ? foreign : original),

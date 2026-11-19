@@ -211,6 +211,7 @@ enum AuthSwap$Codex {
                 let route = isPrimaryRoute ? liveHome(columnID: defaultColumnID, home: baseHome) : originalURL
                 return homeKey(route) == originalHome.path
             }
+            let stageID = UUID().uuidString
             do {
                 if try discardDuplicateRecovery(at: snapshot, matching: entry, retainedAt: originalHome, matching: retained,
                                                 retainedRouteIsCurrent: retainedRouteIsCurrent,
@@ -223,8 +224,25 @@ enum AuthSwap$Codex {
                         entries[retainedID] = retained
                         entries[id]?["pendingOn"] = retainedID
                     }
-                }, onDetachedRetainedLogin: {
+                }, onDetachedRetainedLogin: { retry in
                     entries[retainedID] = retained
+                    if retry {
+                        entries[id]?["pendingOn"] = retainedID
+                        entries[id]?["matchedPrimaryHome"] = nil
+                        entries[id]?["matchedPrimaryOwner"] = nil
+                    }
+                }, recordStage: { home in
+                    if let home {
+                        guard let owner = try availableFileOwnerKey(home) else { throw Failure.busy }
+                        var stage = entries[id] ?? entry
+                        stage["home"] = home.path
+                        stage["owner"] = owner
+                        entries[stageID] = stage
+                    } else {
+                        entries[stageID] = nil
+                    }
+                    state["profiles"] = entries
+                    UserDefaults.standard.set(state, forKey: recoveredBackupKey)
                 }) {
                     entries[id] = nil
                 } else {
@@ -266,7 +284,8 @@ enum AuthSwap$Codex {
                                                  retainedAt original: URL, matching retainedEntry: [String: String],
                                                  retainedRouteIsCurrent: @escaping () -> Bool,
                                                  onDuplicate: () -> Void,
-                                                 onDetachedRetainedLogin: () -> Void) throws -> Bool {
+                                                 onDetachedRetainedLogin: (Bool) -> Void,
+                                                 recordStage: (URL?) throws -> Void) throws -> Bool {
         guard let savedOwner = DirectoryIdentity.capture(snapshot),
               let retainedOwner = DirectoryIdentity.capture(original),
               recoveredBackupHome(savedEntry) == snapshot, recoveredBackupHome(retainedEntry) == original else {
@@ -304,18 +323,65 @@ enum AuthSwap$Codex {
         func validateRetainedRoute() throws {
             guard retainedRouteIsCurrent() else { throw Failure.busy }
         }
-        try saved.delete(validating: {
-            try AuthStorage$Codex.validateMutation(homes: [snapshot, original], includesKeyring: includesKeyring,
+        func validateDuplicate(_ candidate: AuthStorage$Codex, owner: DirectoryIdentity) throws {
+            try AuthStorage$Codex.validateMutation(homes: [candidate.home, original], includesKeyring: includesKeyring,
                                                    tracksDirectoryContents: false) {
-                if saved.mode.usesKeyring, try saved.load(backend: .file) != nil { throw Failure.busy }
-                guard try checkedRecord(savedRecord, storage: saved, home: snapshot, owner: savedOwner).matches,
+                if candidate.mode.usesKeyring, try candidate.load(backend: .file) != nil { throw Failure.busy }
+                guard try checkedRecord(savedRecord, storage: candidate, home: candidate.home, owner: owner).matches,
                       try checkedRecord(retainedRecord, storage: retained, home: original, owner: retainedOwner).matches else {
                     throw Failure.busy
                 }
             }
             try validateRetainedRoute()
-        }, beforeKeyringMutation: validateRetainedRoute)
-        if retainedRouteIsCurrent(), retainedOwner.matches(original) { return true }
+        }
+        if savedRecord.backend == .keyring {
+            let staging = snapshot.deletingLastPathComponent()
+                .appendingPathComponent(".duplicate-" + UUID().uuidString, isDirectory: true)
+            guard mkdir(staging.path, 0o700) == 0 else { throw Failure.busy }
+            let staged = try AuthStorage$Codex(home: staging, mode: .keyring)
+            let config = staged.home.appendingPathComponent("config.toml")
+            let settings = Data("cli_auth_credentials_store = \"keyring\"\n".utf8)
+            guard let stageOwner = DirectoryIdentity.capture(staged.home) else { throw Failure.busy }
+            var stageHasItem = false
+            defer {
+                if !stageHasItem, stageOwner.matches(staged.home),
+                   (try? staged.load(verifyingOwner: true) == nil) == true,
+                   (try? staged.load(backend: .file) == nil) == true,
+                   (try? Data(contentsOf: config)) == settings {
+                    try? recordStage(nil)
+                    if unlink(config.path) == 0 { _ = rmdir(staging.path) }
+                }
+            }
+            try settings.write(to: config, options: .withoutOverwriting)
+            // Register before moving the item so discovery can resume a cut transaction.
+            try recordStage(staged.home)
+            guard try saved.moveRecoveryKeychainItem(to: staged, validating: {
+                try validateDuplicate(saved, owner: savedOwner)
+            }) else { throw Failure.busy }
+            stageHasItem = true
+            do {
+                // Updating the account name retains a concurrent secret update.
+                // Delete only after reading the item in the private namespace.
+                try staged.delete(validating: {
+                    try validateDuplicate(staged, owner: stageOwner)
+                }, beforeKeyringMutation: validateRetainedRoute)
+                stageHasItem = false
+            } catch {
+                if (try? staged.moveRecoveryKeychainItem(to: saved, validating: {
+                    try requireStorage(staged, home: staged.home, owner: stageOwner)
+                    try requireStorage(saved, home: snapshot, owner: savedOwner)
+                    guard try saved.load(backend: .file) == nil else { throw Failure.busy }
+                })) == true { stageHasItem = false }
+                throw error
+            }
+        } else {
+            try saved.delete(validating: { try validateDuplicate(saved, owner: savedOwner) })
+        }
+        if retainedRouteIsCurrent(), retainedOwner.matches(original) {
+            guard let current = try saved.load(verifyingOwner: true) else { return true }
+            if AuthStorage$Codex.sameCredentials(current.data, savedRecord.data) { throw Failure.busy }
+            return false
+        }
 
         // The route can change while the deletion is in flight. Restore the
         // copy exclusively, then let discovery reconcile the new route.
@@ -324,8 +390,22 @@ enum AuthSwap$Codex {
             if saved.mode.usesKeyring, try saved.load(backend: .file) != nil { throw Failure.busy }
         }
         if restored == true { throw Failure.busy }
-        if (try? checkedRecord(retainedRecord, storage: retained, home: original, owner: retainedOwner).matches) == true {
-            onDetachedRetainedLogin()
+        if (try? checkedRecord(savedRecord, storage: saved, home: snapshot, owner: savedOwner).matches) == true {
+            // Another writer already restored the same login.
+            if retainedRouteIsCurrent() { throw Failure.busy }
+            return false
+        }
+        let retainedMatches: Bool
+        do {
+            retainedMatches = try checkedRecord(retainedRecord, storage: retained, home: original, owner: retainedOwner).matches
+        } catch {
+            // A temporary Keychain denial still leaves the detached namespace.
+            try requireStorage(retained, home: original, owner: retainedOwner)
+            onDetachedRetainedLogin(true)
+            throw Failure.busy
+        }
+        if retainedMatches {
+            onDetachedRetainedLogin(false)
         } else {
             let mode: AuthStorage$Codex.Mode = savedRecord.backend == .file ? .file : .keyring
             let recovery = ProfileDirectories.codexRoot.appendingPathComponent("recovered-" + UUID().uuidString, isDirectory: true)

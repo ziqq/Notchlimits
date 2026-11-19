@@ -42,6 +42,8 @@ class CodexRestorationRegressions(unittest.TestCase):
         boundaries[keychain_add] = (
             keychain_add + "\n        guard Fixture.codexKeychain[key] == nil else { return errSecDuplicateItem }"
         )
+        move = "            Fixture.codexKeychain[destination] = Fixture.codexKeychain.removeValue(forKey: key)"
+        boundaries[move] = "            RestorationSignals.beforeMove?(key, destination)\n" + move
         for before, after in boundaries.items():
             assert support.count(before) == 1, before
             support = support.replace(before, after)
@@ -94,9 +96,13 @@ for outcome in ("unchanged", "logged-out", "cleanup-refused", "aliased-root", "r
                 "relocated-primary", "relocated-primary-removed-alias", "relocated-primary-removed-alias-switch",
                 "relocated-primary-removed-alias-self", "relocated-primary-removed-alias-during-read",
                 "relocated-primary-removed-alias-during-delete", "relocated-primary-removed-alias-during-delete-reoccupied",
+                "relocated-primary-removed-alias-during-delete-reoccupied-same",
+                "relocated-primary-removed-alias-during-delete-reoccupied-same-denied-until-retry",
+                "relocated-primary-removed-alias-during-delete-denied-until-retry",
+                "relocated-primary-removed-alias-during-delete-replacement-at-delete",
                 "relocated-primary-removed-alias-unrelated-removal",
                 "non-directory"):
     scenarios.append(f"unreadable-original:{outcome}")
-assert len(scenarios) == len(set(scenarios)) == 168
+assert len(scenarios) == len(set(scenarios)) == 172
 for scenario in scenarios:
     setattr(CodexRestorationRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"), scenario_test(scenario))

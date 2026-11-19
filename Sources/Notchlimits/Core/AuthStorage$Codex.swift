@@ -698,6 +698,17 @@ struct AuthStorage$Codex {
         return first == second
     }
 
+    /// A move preserves the item even if a writer updated its data during admission.
+    func moveRecoveryKeychainItem(to destination: Self, validating: () throws -> Void) throws -> Bool {
+        let status = try Self.withKeychainAccess {
+            try validating()
+            return SecItemUpdate(query as CFDictionary, [kSecAttrAccount as String: destination.account] as CFDictionary)
+        }
+        if status == errSecDuplicateItem || status == errSecItemNotFound { return false }
+        guard status == errSecSuccess else { throw Failure.keychain(status) }
+        return true
+    }
+
     /// Restore the deleted copy without updating a login created in its place.
     func restoreRecoveryRecordIfAbsent(_ record: Record, validating: @escaping () throws -> Void) throws -> Bool {
         if record.backend == .file {
