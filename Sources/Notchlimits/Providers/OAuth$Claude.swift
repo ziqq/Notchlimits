@@ -9,7 +9,7 @@ import Foundation
 /// Токен обновления может ротироваться: если в ответе пришёл новый, прежний
 /// перестаёт действовать, поэтому результат обязательно пишется обратно в
 /// Keychain — иначе мы сломаем вход самого CLI.
-enum ClaudeOAuth {
+enum OAuth$Claude {
 
     static let tokenURL = URL(string: "https://platform.claude.com/v1/oauth/token")!
     static let clientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -35,6 +35,7 @@ enum ClaudeOAuth {
     }
 
     static func refresh(refreshToken: String, scopes: [String]) async -> Outcome {
+        guard !Task.isCancelled else { return .unavailable }
         let body: [String: Any] = [
             "grant_type": "refresh_token",
             "refresh_token": refreshToken,
@@ -42,7 +43,7 @@ enum ClaudeOAuth {
             "scope": (scopes.isEmpty ? defaultScopes : scopes).joined(separator: " ")
         ]
 
-        switch await HTTPClient.shared.post(tokenURL, headers: ["Accept": "application/json"], json: body) {
+        switch await HTTPClient.shared.post(tokenURL, headers: ["Accept": "application/json"], json: body, retry: false) {
         case .failure:
             return .unavailable
         case .success(let response):
@@ -50,9 +51,12 @@ enum ClaudeOAuth {
             case 200:
                 guard let tokens = parse(response.data, now: Date()) else { return .unavailable }
                 return .success(tokens)
-            // 400 invalid_grant приходит именно так, когда токен уже отозван.
             case 400, 401, 403:
-                return .rejected
+                // A proxy, regional restriction or missing scope is not a revoked grant.
+                let root = (try? JSONSerialization.jsonObject(with: response.data)) as? [String: Any]
+                let code = (root?["error"] as? String)
+                    ?? ((root?["error"] as? [String: Any])?["type"] as? String)
+                return code == "invalid_grant" ? .rejected : .unavailable
             default:
                 return .unavailable
             }
