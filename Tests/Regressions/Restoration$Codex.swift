@@ -9,6 +9,8 @@ private enum RestorationSignals {
     static var beforeDelete: ((String) -> Void)?
     static var afterDelete: ((String) -> Void)?
     static var beforeMove: ((String, String) -> Void)?
+    static var afterMove: ((String, String) -> Void)?
+    static var keychainDenied = false
     static var afterNativeFileWrite: (() -> Void)?
 
     static func didWrite(_ key: String) {
@@ -39,6 +41,7 @@ enum Restoration$Codex {
                 try compensationLogins(both: parts[1] == "both", fileBackup: parts.count > 2 && parts[2] == "file", denied: parts.count > 2 && parts[2] == "denied",
                                        unavailable: parts.count > 2 && parts[2] == "locked")
             case "unreadable-original": try unreadableOriginal(outcome: parts[1])
+            case "restart-child": try restartChild(denied: parts[1] == "denied")
             case "migration": try backupMigration(operation: parts[1], mode: parts[2], phase: parts[3])
             case "routing": try routing(returning: parts[1] == "return", foreign: parts[2] == "foreign")
             default: try restoration(kind: parts[0], mode: parts[1], phase: parts[2], change: parts[3])
@@ -346,6 +349,59 @@ enum Restoration$Codex {
                         try! manager.createSymbolicLink(at: primaryAlias, withDestinationURL: native)
                     }
                     Fixture.denyCodexDeleteAccount = nil
+                    if outcome.contains("-restart-") {
+                        var stageKey = ""
+                        let replacementHome = Fixture.root.appendingPathComponent("replacement-for-restart")
+                        try Fixture.codexLogin(replacementHome, account: "replacement-after-move", mode: "keyring")
+                        let replacement = Fixture.codexKeychain[Fixture.codexKey(replacementHome)]!
+                        Fixture.codexKeychain[Fixture.codexKey(replacementHome)] = nil
+                        let cut = {
+                            let stable = outcome.hasSuffix("-stable")
+                            let targetSource = outcome.hasSuffix("-source")
+                            let targetStage = outcome.hasSuffix("-stage")
+                            if targetSource || targetStage {
+                                let target = targetSource ? pending.home : AuthSwap$Codex.recoveredBackupHomes().first {
+                                    Fixture.codexKey($0.home) == stageKey
+                                }!.home
+                                try! manager.removeItem(at: primaryAlias)
+                                try! manager.createSymbolicLink(at: primaryAlias, withDestinationURL: target)
+                            } else if !stable {
+                                retarget()
+                            }
+                            if outcome.contains("-rewrite") {
+                                Fixture.codexKeychain[pendingKey] = original
+                            }
+                            if outcome.contains("-replace") {
+                                Fixture.codexKeychain[pendingKey] = replacement
+                            }
+                            let values: [String: Any] = [
+                                "defaults": UserDefaults.standard.dictionaryRepresentation(),
+                                "keychain": Fixture.codexKeychain, "home": primaryAlias.path,
+                                "original": original,
+                                "primary": targetSource && outcome.contains("-replace") ? replacement
+                                    : stable || targetSource || targetStage ? original : foreign,
+                                "replacement": replacement,
+                                "expectsReplacement": outcome.contains("-replace")
+                            ]
+                            let data = try! PropertyListSerialization.data(fromPropertyList: values, format: .binary, options: 0)
+                            try! data.write(to: Fixture.root.appendingPathComponent("cleanup-restart.plist"), options: .atomic)
+                            _exit(86)
+                        }
+                        RestorationSignals.beforeMove = { source, destination in
+                            if source == pendingKey {
+                                stageKey = destination
+                                if outcome.contains("-restart-admission") { cut() }
+                            }
+                        }
+                        RestorationSignals.afterMove = { source, _ in
+                            if source == pendingKey && outcome.contains("-restart-move") { cut() }
+                        }
+                        RestorationSignals.afterDelete = { key in
+                            if key == stageKey && outcome.contains("-restart-delete") { cut() }
+                        }
+                        _ = Discovery$Real().discover()
+                        throw Failure(description: "Fixture missed the requested process cut")
+                    }
                     if replacesAtDelete {
                         var replaced = false
                         let replace: (String) -> Void = { key in
@@ -376,7 +432,15 @@ enum Restoration$Codex {
                             guard key == deletionKey else { return }
                             RestorationSignals.beforeMove = nil
                             RestorationSignals.afterDelete = nil
-                            retarget()
+                            if outcome.hasSuffix("-final-read") {
+                                Fixture.beforeCodexSecretRead = { key in
+                                    guard key == pendingKey else { return }
+                                    Fixture.beforeCodexSecretRead = nil
+                                    retarget()
+                                }
+                            } else {
+                                retarget()
+                            }
                             if reoccupied { Fixture.codexKeychain[pendingKey] = foreign }
                             if reoccupiedSame { Fixture.codexKeychain[pendingKey] = original }
                             if deniedUntilRetry {
@@ -748,6 +812,33 @@ enum Restoration$Codex {
         }
         try expect(attempt() && (try AuthSwap$Codex.authData(home: native)) == fresh,
                    "A retry did not restore the configured replacement login")
+    }
+
+    private static func restartChild(denied: Bool) throws {
+        let data = try Data(contentsOf: Fixture.root.appendingPathComponent("cleanup-restart.plist"))
+        let state = try PropertyListSerialization.propertyList(from: data, format: nil) as! [String: Any]
+        for (key, value) in state["defaults"] as! [String: Any] { UserDefaults.standard.set(value, forKey: key) }
+        Fixture.codexKeychain = state["keychain"] as! [String: Data]
+        Fixture.codexHome = state["home"] as? String
+        let original = state["original"] as! Data
+        let primary = state["primary"] as! Data
+        let replacement = state["replacement"] as! Data
+        if denied {
+            RestorationSignals.keychainDenied = true
+            _ = Discovery$Real().discover()
+            _ = Discovery$Real().discover()
+            RestorationSignals.keychainDenied = false
+        }
+        let actualPrimary = try AuthSwap$Codex.authData(home: AuthSwap$Codex.baseHome)
+        try expect(actualPrimary == primary, "Restart changed the newly selected primary login")
+        let scans = try (0..<3).map { _ in try visibleLogins() }
+        let originalCounts = scans.map { $0.filter { $0 == original }.count }
+        let replacementCounts = scans.map { $0.filter { $0 == replacement }.count }
+        print("Restart old columns: \(originalCounts); replacement columns: \(replacementCounts)")
+        try expect(originalCounts == [1, 1, 1], "Restart lost or duplicated the former login")
+        if (state["expectsReplacement"] as? Bool) == true {
+            try expect(replacementCounts == [1, 1, 1], "Restart lost or duplicated the independently re-added login")
+        }
     }
 
     private static func visibleLogins() throws -> [Data] {

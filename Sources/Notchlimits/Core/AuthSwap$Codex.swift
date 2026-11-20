@@ -171,9 +171,11 @@ enum AuthSwap$Codex {
         var state = recoveredBackupState
         let previous = recoveredBackups
         var entries = previous
-        for (id, entry) in previous {
+        let resumed = resumeDuplicateCleanups(in: &entries, managedDirectories: managedDirectories)
+        let pending = entries
+        for (id, entry) in pending where !resumed.contains(id) {
             guard let originalID = entry["pendingOn"], let snapshot = recoveredBackupHome(entry),
-                  let original = matchedPrimaryRecovery(entry) ?? previous[originalID],
+                  let original = matchedPrimaryRecovery(entry) ?? pending[originalID],
                   let originalPath = original["home"], let originalOwner = original["owner"] else { continue }
             let originalURL = URL(fileURLWithPath: originalPath, isDirectory: true)
             let canonical = URL(fileURLWithPath: homeKey(originalURL), isDirectory: true)
@@ -237,12 +239,19 @@ enum AuthSwap$Codex {
                         var stage = entries[id] ?? entry
                         stage["home"] = home.path
                         stage["owner"] = owner
+                        stage["cleanupSource"] = id
+                        stage["cleanupRetainedHome"] = retained["home"]
+                        stage["cleanupRetainedOwner"] = retained["owner"]
+                        stage["cleanupRetainedID"] = UUID().uuidString
                         entries[stageID] = stage
+                        state["profiles"] = entries
+                        UserDefaults.standard.set(state, forKey: recoveredBackupKey)
+                        guard UserDefaults.standard.synchronize() else { throw Failure.busy }
                     } else {
+                        // Keep the checkpoint on disk until the outer decision
+                        // has committed, even if the empty stage is removed.
                         entries[stageID] = nil
                     }
-                    state["profiles"] = entries
-                    UserDefaults.standard.set(state, forKey: recoveredBackupKey)
                 }) {
                     entries[id] = nil
                 } else {
@@ -253,10 +262,91 @@ enum AuthSwap$Codex {
                 continue
             }
         }
-        if entries != previous {
+        if entries != recoveredBackups {
             state["profiles"] = entries
             UserDefaults.standard.set(state, forKey: recoveredBackupKey)
         }
+    }
+
+    /// An interrupted cleanup still owns one decision across its source,
+    /// staged copy and the namespace that was supposed to retain the login.
+    private static func resumeDuplicateCleanups(in entries: inout [String: [String: String]],
+                                                managedDirectories: [URL]) -> Set<String> {
+        var resumed: Set<String> = []
+        for (stageID, stage) in entries {
+            guard let sourceID = stage["cleanupSource"], let retainedID = stage["cleanupRetainedID"],
+                  let retainedPath = stage["cleanupRetainedHome"], let retainedOwner = stage["cleanupRetainedOwner"]
+            else { continue }
+            resumed.formUnion([sourceID, stageID])
+            let retained = ["home": retainedPath, "owner": retainedOwner]
+            let source = entries[sourceID]
+            let homes = [source, stage, retained].compactMap { $0.flatMap(recoveredBackupHome) }
+            func credentials(_ entry: [String: String]?) throws -> Data? {
+                guard let entry, let home = recoveredBackupHome(entry) else { return nil }
+                let data = try storage(at: home).load(verifyingOwner: true)?.data
+                guard recoveredBackupHome(entry) == home else { throw Failure.busy }
+                return data
+            }
+            var sourceData: Data?, stageData: Data?, retainedData: Data?
+            do {
+                try AuthStorage$Codex.validateMutation(homes: homes, includesKeyring: true, tracksDirectoryContents: false) {
+                    sourceData = try credentials(source)
+                    stageData = try credentials(stage)
+                    retainedData = try credentials(retained)
+                }
+            } catch {
+                continue
+            }
+            let primaryPath = homeKey(liveHome(columnID: defaultColumnID, home: baseHome))
+            let retainedIsPrimary = primaryPath == retainedPath
+            let retainedIsManaged = managedDirectories.contains { homeKey($0) == retainedPath }
+            let isRetainedVisible = retainedIsPrimary || retainedIsManaged
+            let hasRetainedCopy = retainedData != nil && [sourceData, stageData].contains {
+                AuthStorage$Codex.sameCredentials($0, retainedData)
+            }
+            let registeredRetained = entries.first {
+                $0.key != sourceID && $0.key != stageID && $0.value["pendingOn"] == nil
+                    && $0.value["home"] == retainedPath && $0.value["owner"] == retainedOwner
+            }?.key
+            let retainedTargetID = registeredRetained ?? retainedID
+            let primaryCopy = [(sourceID, source, sourceData), (stageID, stage, stageData)]
+                .first { $0.1?["home"] == primaryPath && $0.2 != nil }
+            if retainedData != nil, !isRetainedVisible, !hasRetainedCopy, registeredRetained == nil {
+                entries[retainedTargetID] = retained
+            }
+            func reconciled(_ entry: [String: String]?, data: Data?, matchingSource: Bool = false) -> [String: String]? {
+                guard let entry, let data, let path = entry["home"], let owner = entry["owner"] else { return nil }
+                var result = ["home": path, "owner": owner]
+                if isRoutedRecoveryHome(URL(fileURLWithPath: path)) { return result }
+                if let (primaryID, primary, primaryData) = primaryCopy,
+                   AuthStorage$Codex.sameCredentials(data, primaryData) {
+                    result["pendingOn"] = primaryID
+                    result["matchedPrimaryHome"] = primary?["home"]
+                    result["matchedPrimaryOwner"] = primary?["owner"]
+                } else if (isRetainedVisible || registeredRetained != nil),
+                   AuthStorage$Codex.sameCredentials(data, retainedData) {
+                    result["pendingOn"] = retainedTargetID
+                    if retainedIsPrimary {
+                        result["matchedPrimaryHome"] = retainedPath
+                        result["matchedPrimaryOwner"] = retainedOwner
+                    }
+                } else if matchingSource, AuthStorage$Codex.sameCredentials(data, sourceData) {
+                    result["pendingOn"] = sourceID
+                }
+                return result
+            }
+            if retainedIsManaged, !retainedIsPrimary, hasRetainedCopy, registeredRetained == nil {
+                entries[retainedTargetID] = retained
+            }
+            entries[sourceID] = reconciled(source, data: sourceData)
+            entries[stageID] = reconciled(stage, data: stageData, matchingSource: true)
+        }
+        return resumed
+    }
+
+    private static func isRoutedRecoveryHome(_ home: URL) -> Bool {
+        let native = baseHome
+        return home.path == homeKey(native) || home.path == homeKey(liveHome(columnID: defaultColumnID, home: native))
     }
 
     private static func matchedPrimaryRecovery(_ entry: [String: String]) -> [String: String]? {
@@ -295,7 +385,7 @@ enum AuthSwap$Codex {
         let retained = try storage(at: original)
         // Discovery can route the primary directly to the recovery copy.
         // That route already owns the credentials, so there is nothing to delete.
-        guard saved.home.path != retained.home.path else { return false }
+        guard saved.home.path != retained.home.path, !isRoutedRecoveryHome(saved.home) else { return false }
         guard saved.mode != .ephemeral else { throw Failure.busy }
         try requireIdle(saved)
         try requireIdle(retained)
@@ -333,6 +423,7 @@ enum AuthSwap$Codex {
                 }
             }
             try validateRetainedRoute()
+            guard !isRoutedRecoveryHome(candidate.home) else { throw Failure.busy }
         }
         if savedRecord.backend == .keyring {
             let staging = snapshot.deletingLastPathComponent()
@@ -364,7 +455,10 @@ enum AuthSwap$Codex {
                 // Delete only after reading the item in the private namespace.
                 try staged.delete(validating: {
                     try validateDuplicate(staged, owner: stageOwner)
-                }, beforeKeyringMutation: validateRetainedRoute)
+                }, beforeKeyringMutation: {
+                    try validateRetainedRoute()
+                    guard !isRoutedRecoveryHome(staged.home) else { throw Failure.busy }
+                })
                 stageHasItem = false
             } catch {
                 if (try? staged.moveRecoveryKeychainItem(to: saved, validating: {
@@ -378,9 +472,12 @@ enum AuthSwap$Codex {
             try saved.delete(validating: { try validateDuplicate(saved, owner: savedOwner) })
         }
         if retainedRouteIsCurrent(), retainedOwner.matches(original) {
-            guard let current = try saved.load(verifyingOwner: true) else { return true }
-            if AuthStorage$Codex.sameCredentials(current.data, savedRecord.data) { throw Failure.busy }
-            return false
+            let loaded = Result { try saved.load(verifyingOwner: true) }
+            if retainedRouteIsCurrent(), retainedOwner.matches(original) {
+                guard let current = try loaded.get() else { return true }
+                if AuthStorage$Codex.sameCredentials(current.data, savedRecord.data) { throw Failure.busy }
+                return false
+            }
         }
 
         // The route can change while the deletion is in flight. Restore the

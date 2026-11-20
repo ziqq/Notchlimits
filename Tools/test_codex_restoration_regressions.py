@@ -1,3 +1,4 @@
+from itertools import product
 import pathlib
 import sys
 import tempfile
@@ -16,7 +17,7 @@ class CodexRestorationRegressions(unittest.TestCase):
         support = (swift_regression.FIXTURES / "Authentication.swift").read_text().split("\n@main\n", 1)[0]
         boundaries = {
             "guard let data = Fixture.codexKeychain[key] else { return errSecItemNotFound }":
-                """if key == RestorationSignals.unavailableKey { return errSecInteractionNotAllowed }
+                """if RestorationSignals.keychainDenied || key == RestorationSignals.unavailableKey { return errSecInteractionNotAllowed }
         guard let data = Fixture.codexKeychain[key] else { return errSecItemNotFound }""",
             "func SecItemDelete(_ query: CFDictionary) -> OSStatus {":
                 """func SecItemDelete(_ query: CFDictionary) -> OSStatus {
@@ -43,7 +44,11 @@ class CodexRestorationRegressions(unittest.TestCase):
             keychain_add + "\n        guard Fixture.codexKeychain[key] == nil else { return errSecDuplicateItem }"
         )
         move = "            Fixture.codexKeychain[destination] = Fixture.codexKeychain.removeValue(forKey: key)"
-        boundaries[move] = "            RestorationSignals.beforeMove?(key, destination)\n" + move
+        boundaries[move] = "            RestorationSignals.beforeMove?(key, destination)\n" + move + "\n            RestorationSignals.afterMove?(key, destination)"
+        database = "        try Data().write(to: path, options: .withoutOverwriting)\n        codexDatabase = path"
+        boundaries[database] = ("        if !Foundation.FileManager.default.fileExists(atPath: path.path) {\n"
+                                "            try Data().write(to: path, options: .withoutOverwriting)\n"
+                                "        }\n        codexDatabase = path")
         for before, after in boundaries.items():
             assert support.count(before) == 1, before
             support = support.replace(before, after)
@@ -97,12 +102,36 @@ for outcome in ("unchanged", "logged-out", "cleanup-refused", "aliased-root", "r
                 "relocated-primary-removed-alias-self", "relocated-primary-removed-alias-during-read",
                 "relocated-primary-removed-alias-during-delete", "relocated-primary-removed-alias-during-delete-reoccupied",
                 "relocated-primary-removed-alias-during-delete-reoccupied-same",
+                "relocated-primary-removed-alias-during-delete-final-read",
                 "relocated-primary-removed-alias-during-delete-reoccupied-same-denied-until-retry",
                 "relocated-primary-removed-alias-during-delete-denied-until-retry",
                 "relocated-primary-removed-alias-during-delete-replacement-at-delete",
                 "relocated-primary-removed-alias-unrelated-removal",
                 "non-directory"):
     scenarios.append(f"unreadable-original:{outcome}")
-assert len(scenarios) == len(set(scenarios)) == 172
+assert len(scenarios) == len(set(scenarios)) == 173
 for scenario in scenarios:
     setattr(CodexRestorationRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"), scenario_test(scenario))
+
+
+def restart_test(cut):
+    def test(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-codex-restart-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            scenario = "unreadable-original:relocated-primary-removed-alias-during-delete-restart-" + cut
+            before = swift_regression.run_fixture(self.executable, scenario, root)
+            self.assertEqual(before.returncode, 86, before.stdout + before.stderr)
+            mode = "denied" if "-denied-" in cut else "available"
+            after = swift_regression.run_fixture(self.executable, "restart-child:" + mode, root)
+            self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
+    return test
+
+
+restart_cases = list(product(("admission", "move", "delete"), ("unchanged", "rewrite", "replace"),
+                             ("available", "denied"), ("stable", "retarget")))
+for keychain in ("available", "denied"):
+    restart_cases += [("move", "rewrite", keychain, "stage"), ("move", "rewrite", keychain, "source"),
+                      ("move", "replace", keychain, "source"), ("delete", "rewrite", keychain, "source")]
+for case in restart_cases:
+    cut = "-".join(case)
+    setattr(CodexRestorationRegressions, "test_restart_" + cut.replace("-", "_"), restart_test(cut))
