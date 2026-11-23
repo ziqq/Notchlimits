@@ -114,15 +114,15 @@ for scenario in scenarios:
     setattr(CodexRestorationRegressions, "test_" + scenario.replace(":", "_").replace("-", "_"), scenario_test(scenario))
 
 
-def restart_test(cut):
+def restart_test(cut, *conditions):
     def test(self):
         with tempfile.TemporaryDirectory(prefix="notchlimits-codex-restart-", dir="/private/tmp") as directory:
             root = pathlib.Path(directory)
             scenario = "unreadable-original:relocated-primary-removed-alias-during-delete-restart-" + cut
             before = swift_regression.run_fixture(self.executable, scenario, root)
             self.assertEqual(before.returncode, 86, before.stdout + before.stderr)
-            mode = "denied" if "-denied-" in cut else "available"
-            after = swift_regression.run_fixture(self.executable, "restart-child:" + mode, root)
+            faults = (*conditions, "denied") if "-denied-" in cut else conditions
+            after = swift_regression.run_fixture(self.executable, ":".join(("restart-child", *faults)), root)
             self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
     return test
 
@@ -135,3 +135,18 @@ for keychain in ("available", "denied"):
 for case in restart_cases:
     cut = "-".join(case)
     setattr(CodexRestorationRegressions, "test_restart_" + cut.replace("-", "_"), restart_test(cut))
+
+
+interruptions = (("ephemeral",), ("file",), ("directory-denied",),
+                 ("ephemeral", "directory-denied", "denied"), ("file", "directory-denied", "denied"))
+restart_recovery_cases = [
+    (f"{cut}-replace-available-{route}", faults)
+    for cut, route, faults in product(("admission", "move", "delete"), ("stable", "retarget"), interruptions)
+]
+restart_recovery_cases += [
+    ("admission-unchanged-available-stable", (condition,))
+    for condition in ("empty-stage", "empty-config-removed", "keep-stage", "symlink-config")
+]
+for cut, faults in restart_recovery_cases:
+    name = "_".join((cut, *faults)).replace("-", "_")
+    setattr(CodexRestorationRegressions, "test_replay_" + name, restart_test(cut, *faults))

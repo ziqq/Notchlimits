@@ -32,6 +32,7 @@ enum AuthSwap$Codex {
     private static let stashHomeKey = "codexAppStashHome"
     private static let recoveredBackupKey = "codexAppRecoveredBackups"
     private static let recoveredBackupIDPrefix = "codex-recovery:"
+    private static let duplicateRecoverySettings = Data("cli_auth_credentials_store = \"keyring\"\n".utf8)
     private static let sourceAuthKey = "codexAppSourceAuth"
     private static let primarySessionKey = "codexAppPrimarySession"
     private static let nativeGrantKey = "codexNativeGrant"
@@ -125,9 +126,14 @@ enum AuthSwap$Codex {
     }
 
     private static func recoveredBackupHome(_ entry: [String: String]) -> URL? {
+        try? availableRecoveredBackupHome(entry)
+    }
+
+    private static func availableRecoveredBackupHome(_ entry: [String: String]) throws -> URL? {
         guard let path = entry["home"], let owner = entry["owner"] else { return nil }
         let home = URL(fileURLWithPath: path, isDirectory: true)
-        return homeKey(home) == path && fileOwnerKey(home) == owner ? home : nil
+        guard try availableFileOwnerKey(home) == owner, homeKey(home) == path else { return nil }
+        return home
     }
 
     static func recoveredBackupDiscovery(managedDirectories: [URL])
@@ -280,20 +286,25 @@ enum AuthSwap$Codex {
             resumed.formUnion([sourceID, stageID])
             let retained = ["home": retainedPath, "owner": retainedOwner]
             let source = entries[sourceID]
-            let homes = [source, stage, retained].compactMap { $0.flatMap(recoveredBackupHome) }
-            func credentials(_ entry: [String: String]?) throws -> Data? {
-                guard let entry, let home = recoveredBackupHome(entry) else { return nil }
-                let data = try storage(at: home).load(verifyingOwner: true)?.data
-                guard recoveredBackupHome(entry) == home else { throw Failure.busy }
-                return data
-            }
-            var sourceData: Data?, stageData: Data?, retainedData: Data?
+            let sourceData: Data?, stageData: Data?, retainedData: Data?
             do {
-                try AuthStorage$Codex.validateMutation(homes: homes, includesKeyring: true, tracksDirectoryContents: false) {
-                    sourceData = try credentials(source)
-                    stageData = try credentials(stage)
-                    retainedData = try credentials(retained)
+                if let stageHome = try availableRecoveredBackupHome(stage),
+                   !managedDirectories.contains(where: { homeKey($0) == stageHome.path }) {
+                    _ = try retireEmptyDuplicateStage(at: stageHome, matching: stage)
                 }
+                let participants = [source, stage, retained]
+                let homes = try participants.map { try $0.flatMap(availableRecoveredBackupHome) }
+                var data: [Data?] = []
+                try AuthStorage$Codex.validateMutation(homes: homes.compactMap { $0 }, includesKeyring: true,
+                                                       tracksDirectoryContents: false) {
+                    let stores = try homes.map { try $0.map(storage(at:)) }
+                    data = try stores.map { try $0.flatMap(duplicateRecoveryCredentials) }
+                    for (entry, store) in zip(participants, stores) {
+                        guard try entry.flatMap(availableRecoveredBackupHome) == store?.home else { throw Failure.busy }
+                        if let store, try storage(at: store.home).mode != store.mode { throw Failure.busy }
+                    }
+                }
+                (sourceData, stageData, retainedData) = (data[0], data[1], data[2])
             } catch {
                 continue
             }
@@ -342,6 +353,47 @@ enum AuthSwap$Codex {
             entries[stageID] = reconciled(stage, data: stageData, matchingSource: true)
         }
         return resumed
+    }
+
+    private static func duplicateRecoveryCredentials(_ storage: AuthStorage$Codex) throws -> Data? {
+        guard storage.mode != .ephemeral else { throw Failure.busy }
+        let record = try storage.load(verifyingOwner: true)
+        // The journal can outlive the configuration that exposed its login.
+        if storage.mode == .file, try storage.load(backend: .keyring) != nil { throw Failure.busy }
+        if storage.mode == .keyring, record == nil, try storage.load(backend: .file) != nil { throw Failure.busy }
+        return record?.data
+    }
+
+    /// Retire only the stage directory and configuration created by this cleanup.
+    private static func retireEmptyDuplicateStage(at home: URL, matching entry: [String: String]) throws -> Bool {
+        guard !isRoutedRecoveryHome(home) else { return false }
+        let descriptor = open(home.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw Failure.busy }
+        defer { close(descriptor) }
+        guard let owner = DirectoryIdentity.capture(descriptor: descriptor) else { throw Failure.busy }
+        let staged = try AuthStorage$Codex(home: home, mode: .keyring)
+        let config = home.appendingPathComponent("config.toml")
+        var empty = false
+        var hasConfig = false
+        try AuthStorage$Codex.validateMutation(homes: [home], includesKeyring: true) {
+            guard try staged.load(backend: .keyring) == nil, try staged.load(backend: .file) == nil else { return }
+            let names = try FileManager.default.contentsOfDirectory(atPath: home.path)
+            if names == ["config.toml"] {
+                var info = stat()
+                guard fstatat(descriptor, "config.toml", &info, AT_SYMLINK_NOFOLLOW) == 0,
+                      info.st_mode & S_IFMT == S_IFREG,
+                      try Data(contentsOf: config) == duplicateRecoverySettings else { return }
+                hasConfig = true
+            } else if !names.isEmpty {
+                return
+            }
+            empty = true
+        }
+        guard empty, !isRoutedRecoveryHome(home) else { return false }
+        guard owner.matches(home), try availableRecoveredBackupHome(entry) == home else { throw Failure.busy }
+        if hasConfig, unlinkat(descriptor, "config.toml", 0) != 0 { throw Failure.busy }
+        guard owner.matches(home), rmdir(home.path) == 0 else { throw Failure.busy }
+        return true
     }
 
     private static func isRoutedRecoveryHome(_ home: URL) -> Bool {
@@ -431,19 +483,17 @@ enum AuthSwap$Codex {
             guard mkdir(staging.path, 0o700) == 0 else { throw Failure.busy }
             let staged = try AuthStorage$Codex(home: staging, mode: .keyring)
             let config = staged.home.appendingPathComponent("config.toml")
-            let settings = Data("cli_auth_credentials_store = \"keyring\"\n".utf8)
-            guard let stageOwner = DirectoryIdentity.capture(staged.home) else { throw Failure.busy }
+            guard let stageOwner = DirectoryIdentity.capture(staged.home),
+                  let stageOwnerKey = try availableFileOwnerKey(staged.home) else { throw Failure.busy }
+            let stageEntry = ["home": staged.home.path, "owner": stageOwnerKey]
             var stageHasItem = false
             defer {
                 if !stageHasItem, stageOwner.matches(staged.home),
-                   (try? staged.load(verifyingOwner: true) == nil) == true,
-                   (try? staged.load(backend: .file) == nil) == true,
-                   (try? Data(contentsOf: config)) == settings {
+                   (try? retireEmptyDuplicateStage(at: staged.home, matching: stageEntry)) == true {
                     try? recordStage(nil)
-                    if unlink(config.path) == 0 { _ = rmdir(staging.path) }
                 }
             }
-            try settings.write(to: config, options: .withoutOverwriting)
+            try duplicateRecoverySettings.write(to: config, options: .withoutOverwriting)
             // Register before moving the item so discovery can resume a cut transaction.
             try recordStage(staged.home)
             guard try saved.moveRecoveryKeychainItem(to: staged, validating: {

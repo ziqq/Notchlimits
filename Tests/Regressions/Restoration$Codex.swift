@@ -41,7 +41,7 @@ enum Restoration$Codex {
                 try compensationLogins(both: parts[1] == "both", fileBackup: parts.count > 2 && parts[2] == "file", denied: parts.count > 2 && parts[2] == "denied",
                                        unavailable: parts.count > 2 && parts[2] == "locked")
             case "unreadable-original": try unreadableOriginal(outcome: parts[1])
-            case "restart-child": try restartChild(denied: parts[1] == "denied")
+            case "restart-child": try restartChild(conditions: Set(parts.dropFirst()))
             case "migration": try backupMigration(operation: parts[1], mode: parts[2], phase: parts[3])
             case "routing": try routing(returning: parts[1] == "return", foreign: parts[2] == "foreign")
             default: try restoration(kind: parts[0], mode: parts[1], phase: parts[2], change: parts[3])
@@ -356,13 +356,14 @@ enum Restoration$Codex {
                         let replacement = Fixture.codexKeychain[Fixture.codexKey(replacementHome)]!
                         Fixture.codexKeychain[Fixture.codexKey(replacementHome)] = nil
                         let cut = {
+                            let stage = AuthSwap$Codex.recoveredBackupHomes().first {
+                                Fixture.codexKey($0.home) == stageKey
+                            }!.home
                             let stable = outcome.hasSuffix("-stable")
                             let targetSource = outcome.hasSuffix("-source")
                             let targetStage = outcome.hasSuffix("-stage")
                             if targetSource || targetStage {
-                                let target = targetSource ? pending.home : AuthSwap$Codex.recoveredBackupHomes().first {
-                                    Fixture.codexKey($0.home) == stageKey
-                                }!.home
+                                let target = targetSource ? pending.home : stage
                                 try! manager.removeItem(at: primaryAlias)
                                 try! manager.createSymbolicLink(at: primaryAlias, withDestinationURL: target)
                             } else if !stable {
@@ -381,7 +382,8 @@ enum Restoration$Codex {
                                 "primary": targetSource && outcome.contains("-replace") ? replacement
                                     : stable || targetSource || targetStage ? original : foreign,
                                 "replacement": replacement,
-                                "expectsReplacement": outcome.contains("-replace")
+                                "expectsReplacement": outcome.contains("-replace"),
+                                "sourcePath": pending.home.path, "stagePath": stage.path
                             ]
                             let data = try! PropertyListSerialization.data(fromPropertyList: values, format: .binary, options: 0)
                             try! data.write(to: Fixture.root.appendingPathComponent("cleanup-restart.plist"), options: .atomic)
@@ -814,7 +816,7 @@ enum Restoration$Codex {
                    "A retry did not restore the configured replacement login")
     }
 
-    private static func restartChild(denied: Bool) throws {
+    private static func restartChild(conditions: Set<String>) throws {
         let data = try Data(contentsOf: Fixture.root.appendingPathComponent("cleanup-restart.plist"))
         let state = try PropertyListSerialization.propertyList(from: data, format: nil) as! [String: Any]
         for (key, value) in state["defaults"] as! [String: Any] { UserDefaults.standard.set(value, forKey: key) }
@@ -823,12 +825,42 @@ enum Restoration$Codex {
         let original = state["original"] as! Data
         let primary = state["primary"] as! Data
         let replacement = state["replacement"] as! Data
-        if denied {
-            RestorationSignals.keychainDenied = true
-            _ = Discovery$Real().discover()
+        let source = URL(fileURLWithPath: state["sourcePath"] as! String, isDirectory: true)
+        let stage = URL(fileURLWithPath: state["stagePath"] as! String, isDirectory: true)
+        let config = stage.appendingPathComponent("config.toml")
+        let marker = stage.appendingPathComponent("settings-marker")
+        if conditions.contains("empty-config-removed") { try manager.removeItem(at: config) }
+        if conditions.contains("keep-stage") { try Data("owned by another process".utf8).write(to: marker) }
+        if conditions.contains("symlink-config") {
+            let target = Fixture.root.appendingPathComponent("external-settings")
+            try manager.copyItem(at: config, to: target)
+            try manager.removeItem(at: config)
+            try manager.createSymbolicLink(at: config, withDestinationURL: target)
+        }
+        let mode = ["ephemeral", "file"].first(where: conditions.contains)
+        if let mode {
+            Fixture.managedCodex["config_toml_base64"] =
+                Data("cli_auth_credentials_store = '\(mode)'\n".utf8).base64EncodedString()
+        }
+        if conditions.contains("directory-denied") {
+            let parent = source.deletingLastPathComponent().path
+            try expect(Darwin.chmod(parent, 0) == 0, "Could not protect the recovery parent")
+            defer { _ = Darwin.chmod(parent, 0o700) }
+            var info = stat()
+            try expect(Darwin.lstat(source.path, &info) != 0 && errno == EACCES,
+                       "Expected EACCES checking the recovery source")
+            RestorationSignals.keychainDenied = conditions.contains("denied")
             _ = Discovery$Real().discover()
             RestorationSignals.keychainDenied = false
+            _ = Discovery$Real().discover()
         }
+        if mode != nil || conditions.contains("denied") {
+            RestorationSignals.keychainDenied = conditions.contains("denied")
+            _ = Discovery$Real().discover()
+            RestorationSignals.keychainDenied = false
+            _ = Discovery$Real().discover()
+        }
+        Fixture.managedCodex = [:]
         let actualPrimary = try AuthSwap$Codex.authData(home: AuthSwap$Codex.baseHome)
         try expect(actualPrimary == primary, "Restart changed the newly selected primary login")
         let scans = try (0..<3).map { _ in try visibleLogins() }
@@ -838,6 +870,20 @@ enum Restoration$Codex {
         try expect(originalCounts == [1, 1, 1], "Restart lost or duplicated the former login")
         if (state["expectsReplacement"] as? Bool) == true {
             try expect(replacementCounts == [1, 1, 1], "Restart lost or duplicated the independently re-added login")
+        }
+        if conditions.contains("empty-stage") || conditions.contains("empty-config-removed") {
+            try expect(Fixture.codexKeychain[Fixture.codexKey(stage)] == nil,
+                       "The empty stage unexpectedly acquired a Keychain login")
+            try expect(!manager.fileExists(atPath: stage.path), "Restart left the empty stage on disk")
+        }
+        if conditions.contains("keep-stage") {
+            try expect(try Data(contentsOf: marker) == Data("owned by another process".utf8),
+                       "Cleanup affected files from another owner")
+        }
+        if conditions.contains("symlink-config") {
+            try expect(try manager.destinationOfSymbolicLink(atPath: config.path)
+                           == Fixture.root.appendingPathComponent("external-settings").path,
+                       "Cleanup removed an independent configuration link")
         }
     }
 
