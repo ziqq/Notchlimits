@@ -332,7 +332,12 @@ enum Restoration$Codex {
                     try manager.createSymbolicLink(at: primaryAlias, withDestinationURL: relocated)
                 }
                 Fixture.codexHome = retargetPrimary ? primaryAlias.path : relocated.path
-                Fixture.codexKeychain[Fixture.codexKey(relocated)] = original
+                if outcome.contains("-fileowner-") {
+                    try Fixture.codexMode(relocated, "file")
+                    try original.write(to: relocated.appendingPathComponent("auth.json"))
+                } else {
+                    Fixture.codexKeychain[Fixture.codexKey(relocated)] = original
+                }
             }
             if removedPrimaryAlias {
                 Fixture.denyCodexDeleteAccount = pendingKey
@@ -869,6 +874,76 @@ enum Restoration$Codex {
             _ = Discovery$Real().discover()
         }
         Fixture.managedCodex = [:]
+        func alternateLogin() throws -> Data {
+            let home = Fixture.root.appendingPathComponent("alternate-restart-login")
+            try Fixture.codexLogin(home, account: "alternate-restart", mode: "keyring")
+            return Fixture.codexKeychain.removeValue(forKey: Fixture.codexKey(home))!
+        }
+        if conditions.contains("file-owner-mixed") || conditions.contains("file-owner-auto")
+            || conditions.contains("file-owner-distinct") || conditions.contains("file-owner-empty") {
+            let retained = Fixture.root.appendingPathComponent("relocated-original", isDirectory: true)
+            let retainedFile = retained.appendingPathComponent("auth.json")
+            let retainedKey = Fixture.codexKey(retained)
+            try expect(try Data(contentsOf: retainedFile) == original, "Fixture did not retain the old file login")
+            if conditions.contains("remove-keyring-login") {
+                Fixture.codexKeychain[retainedKey] = try alternateLogin()
+            } else if !conditions.contains("file-owner-empty") {
+                Fixture.codexKeychain[retainedKey] = conditions.contains("file-owner-distinct") ? primary : replacement
+            }
+            try Fixture.codexMode(retained, conditions.contains("file-owner-auto") ? "auto" : "keyring")
+            if conditions.contains("deny-first") {
+                RestorationSignals.keychainDenied = true
+                _ = Discovery$Real().discover()
+                RestorationSignals.keychainDenied = false
+            }
+            let scanned = try (0..<3).map { _ in try visibleLogins() }
+            try expect(scanned.allSatisfy { !$0.contains(original) }, "Fixture exposed the old file login in the alternate mode")
+            let activeCounts = scanned.map { $0.filter { $0 == replacement }.count }
+            try expect(activeCounts == [1, 1, 1], "Expected one active replacement login, got \(activeCounts)")
+            if conditions.contains("remove-keyring-login") {
+                let before = Fixture.codexKeychain[retainedKey]
+                guard let account = Discovery$Real().discover().first(where: { $0.source == .codexHome(retained) }) else {
+                    throw Failure(description: "The distinct active Keychain login was missing")
+                }
+                try expect((try? AccountRemoval.remove(account)) == nil,
+                           "Removing the active Keychain login also consumed the inactive file login")
+                try expect(Fixture.codexKeychain[retainedKey] == before, "Refused removal changed the active Keychain login")
+            }
+            try expect(try Data(contentsOf: retainedFile) == original, "The alternate mode modified the file login")
+            try Fixture.codexMode(retained, "file")
+        }
+        if conditions.contains("active-file-readd") || conditions.contains("active-file-readd-empty-keychain") {
+            let key = Fixture.codexKey(source)
+            try expect(Fixture.codexKeychain[key] == original, "Fixture did not leave the prior Keychain login")
+            try Fixture.codexMode(source, "file")
+            let file = source.appendingPathComponent("auth.json")
+            try replacement.write(to: file, options: .withoutOverwriting)
+            if conditions.contains("active-file-readd-empty-keychain") { Fixture.codexKeychain[key] = nil }
+            let inactive = conditions.contains("remove-file-login") ? try alternateLogin() : nil
+            if let inactive { Fixture.codexKeychain[key] = inactive }
+            if conditions.contains("deny-first") {
+                RestorationSignals.keychainDenied = true
+                _ = Discovery$Real().discover()
+                RestorationSignals.keychainDenied = false
+            }
+            if conditions.contains("inactive-denied") { RestorationSignals.unavailableKey = key }
+            let counts = try (0..<3).map { _ in try visibleLogins().filter { $0 == replacement }.count }
+            RestorationSignals.unavailableKey = nil
+            print("Actively configured file login counts: \(counts)")
+            try expect(try Data(contentsOf: file) == replacement, "Stored file login was changed")
+            try expect(counts == [1, 1, 1], "The re-added profile in the configured file store stayed hidden")
+            if let inactive {
+                guard let account = Discovery$Real().discover().first(where: { $0.source == .codexHome(source) }) else {
+                    throw Failure(description: "The re-added file profile was missing")
+                }
+                try AccountRemoval.remove(account)
+                try expect(!manager.fileExists(atPath: file.path) && Fixture.codexKeychain[key] == inactive,
+                           "Removing the file login altered the separate Keychain login")
+                try Fixture.codexMode(source, "keyring")
+                try expect(try visibleLogins().filter { $0 == inactive }.count == 1,
+                           "Removing the active file login forgot the separate Keychain login")
+            }
+        }
         let actualPrimary = try AuthSwap$Codex.authData(home: AuthSwap$Codex.baseHome)
         try expect(actualPrimary == primary, "Restart changed the newly selected primary login")
         let scans = try (0..<3).map { _ in try visibleLogins() }

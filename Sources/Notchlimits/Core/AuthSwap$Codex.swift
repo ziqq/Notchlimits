@@ -144,15 +144,15 @@ enum AuthSwap$Codex {
         -> (profiles: [(id: String, home: URL)], reservedPaths: Set<String>) {
         lock.lock()
         defer { lock.unlock() }
-        resolveRecoveredBackups(managedDirectories: managedDirectories)
+        let replay = resolveRecoveredBackups(managedDirectories: managedDirectories)
         let backups = recoveredBackupHomes()
         let entries = recoveredBackups
         let profiles = backups.filter { profile in
             let id = String(profile.id.dropFirst(recoveredBackupIDPrefix.count))
-            return entries[id]?["pendingOn"] == nil
+            return entries[id]?["pendingOn"] == nil && !replay.hidden.contains(id)
         }
         // Managed discovery can reach a private backup through a root alias.
-        return (profiles, Set(backups.map { $0.home.path }))
+        return (profiles + replay.visible, Set((backups + replay.visible).map { $0.home.path }))
     }
 
     private static func retainUnreadableBackup(_ backup: AuthStorage$Codex, owner: DirectoryIdentity?) throws -> String {
@@ -177,13 +177,14 @@ enum AuthSwap$Codex {
     }
 
     /// Keep a saved login private until the original namespace can be checked.
-    private static func resolveRecoveredBackups(managedDirectories: [URL]) {
+    @discardableResult
+    private static func resolveRecoveredBackups(managedDirectories: [URL]) -> CleanupReplay {
         var state = recoveredBackupState
         let previous = recoveredBackups
         var entries = previous
-        let resumed = resumeDuplicateCleanups(in: &entries, managedDirectories: managedDirectories)
+        let replay = resumeDuplicateCleanups(in: &entries, managedDirectories: managedDirectories)
         let pending = entries
-        for (id, entry) in pending where !resumed.contains(id) {
+        for (id, entry) in pending where !replay.resumed.contains(id) {
             guard let originalID = entry["pendingOn"], let snapshot = recoveredBackupHome(entry),
                   let original = matchedPrimaryRecovery(entry) ?? pending[originalID],
                   let originalPath = original["home"], let originalOwner = original["owner"] else { continue }
@@ -276,54 +277,96 @@ enum AuthSwap$Codex {
             state["profiles"] = entries
             UserDefaults.standard.set(state, forKey: recoveredBackupKey)
         }
+        return replay
     }
+
+    private struct CleanupReplay {
+        var resumed: Set<String> = []
+        var hidden: Set<String> = []
+        var visible: [(id: String, home: URL)] = []
+    }
+
+    private typealias CleanupCredentials = (active: Data?, hasInactiveLogin: Bool)
 
     /// An interrupted cleanup still owns one decision across its source,
     /// staged copy and the namespace that was supposed to retain the login.
     private static func resumeDuplicateCleanups(in entries: inout [String: [String: String]],
-                                                managedDirectories: [URL]) -> Set<String> {
-        var resumed: Set<String> = []
+                                                managedDirectories: [URL]) -> CleanupReplay {
+        var replay = CleanupReplay()
         for (stageID, stage) in entries {
             guard let sourceID = stage["cleanupSource"], let retainedID = stage["cleanupRetainedID"],
                   let retainedPath = stage["cleanupRetainedHome"], let retainedOwner = stage["cleanupRetainedOwner"]
             else { continue }
-            resumed.formUnion([sourceID, stageID])
+            replay.resumed.formUnion([sourceID, stageID])
             let retained = ["home": retainedPath, "owner": retainedOwner]
             let source = entries[sourceID]
-            let sourceData: Data?, stageData: Data?, retainedData: Data?
-            do {
-                if let stageHome = try availableRecoveredBackupHome(stage),
-                   !managedDirectories.contains(where: { homeKey($0) == stageHome.path }) {
-                    _ = try retireEmptyDuplicateStage(at: stageHome, matching: stage)
-                }
-                let participants = [source, stage, retained]
-                let homes = try participants.map { try $0.flatMap(availableRecoveredBackupHome) }
-                var data: [Data?] = []
-                try AuthStorage$Codex.validateMutation(homes: homes.compactMap { $0 }, includesKeyring: true,
-                                                       tracksDirectoryContents: false) {
-                    let stores = try homes.map { try $0.map(storage(at:)) }
-                    data = try stores.map { try $0.flatMap(duplicateRecoveryCredentials) }
-                    for (entry, store) in zip(participants, stores) {
-                        guard try entry.flatMap(availableRecoveredBackupHome) == store?.home else { throw Failure.busy }
-                        if let store, try storage(at: store.home).mode != store.mode { throw Failure.busy }
-                    }
-                }
-                (sourceData, stageData, retainedData) = (data[0], data[1], data[2])
-            } catch {
-                continue
-            }
-            let primaryPath = homeKey(liveHome(columnID: defaultColumnID, home: baseHome))
-            let retainedIsPrimary = primaryPath == retainedPath
-            let retainedIsManaged = managedDirectories.contains { homeKey($0) == retainedPath }
-            let isRetainedVisible = retainedIsPrimary || retainedIsManaged
-            let hasRetainedCopy = retainedData != nil && [sourceData, stageData].contains {
-                AuthStorage$Codex.sameCredentials($0, retainedData)
-            }
             let registeredRetained = entries.first {
                 $0.key != sourceID && $0.key != stageID && $0.value["pendingOn"] == nil
                     && $0.value["home"] == retainedPath && $0.value["owner"] == retainedOwner
             }?.key
             let retainedTargetID = registeredRetained ?? retainedID
+            let participants = [source, stage, retained]
+            let homes: [URL?]
+            var credentials: [CleanupCredentials?] = []
+            let primaryHome = liveHome(columnID: defaultColumnID, home: baseHome)
+            let primaryPath = homeKey(primaryHome)
+            var primaryData: Data?
+            do {
+                if let stageHome = try availableRecoveredBackupHome(stage),
+                   !managedDirectories.contains(where: { homeKey($0) == stageHome.path }) {
+                    _ = try retireEmptyDuplicateStage(at: stageHome, matching: stage)
+                }
+                homes = try participants.map { try $0.flatMap(availableRecoveredBackupHome) }
+                try AuthStorage$Codex.validateMutation(homes: homes.compactMap { $0 }, includesKeyring: true,
+                                                       tracksDirectoryContents: false) {
+                    let stores = try homes.map { try $0.map(storage(at:)) }
+                    credentials = try stores.map { try $0.map(duplicateRecoveryCredentials) }
+                    if credentials.contains(where: { $0?.hasInactiveLogin == true }) {
+                        if let index = homes.firstIndex(where: { $0?.path == primaryPath }) {
+                            primaryData = credentials[index]?.active
+                        } else {
+                            let primary = URL(fileURLWithPath: primaryPath, isDirectory: true)
+                            try AuthStorage$Codex.validateMutation(homes: [primary], includesKeyring: false) {
+                                primaryData = try storage(at: primary).load(verifyingOwner: true)?.data
+                            }
+                        }
+                    }
+                    for (entry, store) in zip(participants, stores) {
+                        guard try entry.flatMap(availableRecoveredBackupHome) == store?.home else { throw Failure.busy }
+                        if let store, try storage(at: store.home).mode != store.mode { throw Failure.busy }
+                    }
+                    guard homeKey(liveHome(columnID: defaultColumnID, home: baseHome)) == primaryPath else {
+                        throw Failure.busy
+                    }
+                }
+            } catch {
+                continue
+            }
+            let (sourceData, stageData, retainedData) = (credentials[0]?.active, credentials[1]?.active, credentials[2]?.active)
+            let retainedIsPrimary = primaryPath == retainedPath
+            let retainedIsManaged = managedDirectories.contains { homeKey($0) == retainedPath }
+            if credentials.contains(where: { $0?.hasInactiveLogin == true }) {
+                // Keep the checkpoint for inactive stores. Discovery can still show
+                // each currently selected login, once, without retiring its owner.
+                replay.hidden.formUnion([sourceID, stageID, retainedTargetID])
+                let retainedIsDiscovered = retainedIsManaged && registeredRetained == nil
+                var shown = [primaryData, retainedIsDiscovered ? retainedData : nil].compactMap { $0 }
+                let profiles = [(sourceID, homes[0], sourceData),
+                                (retainedTargetID, retainedIsDiscovered ? nil : homes[2], retainedData),
+                                (stageID, homes[1], stageData)]
+                for (id, home, data) in profiles {
+                    guard let home, let data, !isRoutedRecoveryHome(home),
+                          !replay.visible.contains(where: { $0.home == home }),
+                          !shown.contains(where: { AuthStorage$Codex.sameCredentials($0, data) }) else { continue }
+                    replay.visible.append((recoveredBackupIDPrefix + id, home))
+                    shown.append(data)
+                }
+                continue
+            }
+            let isRetainedVisible = retainedIsPrimary || retainedIsManaged
+            let hasRetainedCopy = retainedData != nil && [sourceData, stageData].contains {
+                AuthStorage$Codex.sameCredentials($0, retainedData)
+            }
             let primaryCopy = [(sourceID, source, sourceData), (stageID, stage, stageData)]
                 .first { $0.1?["home"] == primaryPath && $0.2 != nil }
             if retainedData != nil, !isRetainedVisible, !hasRetainedCopy, registeredRetained == nil {
@@ -356,16 +399,24 @@ enum AuthSwap$Codex {
             entries[sourceID] = reconciled(source, data: sourceData)
             entries[stageID] = reconciled(stage, data: stageData, matchingSource: true)
         }
-        return resumed
+        return replay
     }
 
-    private static func duplicateRecoveryCredentials(_ storage: AuthStorage$Codex) throws -> Data? {
-        guard storage.mode != .ephemeral else { throw Failure.busy }
-        let record = try storage.load(verifyingOwner: true)
-        // The journal can outlive the configuration that exposed its login.
-        if storage.mode == .file, try storage.load(backend: .keyring) != nil { throw Failure.busy }
-        if storage.mode == .keyring, record == nil, try storage.load(backend: .file) != nil { throw Failure.busy }
-        return record?.data
+    private static func duplicateRecoveryCredentials(_ storage: AuthStorage$Codex) throws -> CleanupCredentials {
+        // A failed probe of an inactive store still requires the checkpoint.
+        func mayHaveLogin(_ backend: AuthStorage$Codex.Backend) -> Bool {
+            (try? storage.load(backend: backend) == nil) != true
+        }
+        switch storage.mode {
+        case .file:
+            return (try storage.load(backend: .file)?.data, mayHaveLogin(.keyring))
+        case .keyring:
+            return (try storage.load(backend: .keyring)?.data, mayHaveLogin(.file))
+        case .auto:
+            if let keyring = try storage.load(backend: .keyring) { return (keyring.data, mayHaveLogin(.file)) }
+            return (try storage.load(backend: .file)?.data, false)
+        case .ephemeral: throw Failure.busy
+        }
     }
 
     /// Retire only the stage directory and configuration created by this cleanup.
@@ -1458,6 +1509,11 @@ enum AuthSwap$Codex {
             guard !hasPendingRecovery(for: target.home),
                   liveTarget == target.home || !hasPendingRecovery(for: liveTarget) else { throw Failure.busy }
         }
+        let entries = recoveredBackups
+        let protectsInactiveFile = target.mode.usesKeyring && entries.values.contains { stage in
+            guard let source = stage["cleanupSource"] else { return false }
+            return [entries[source]?["home"], stage["home"], stage["cleanupRetainedHome"]].contains(target.home.path)
+        }
         var removalRecord: AuthStorage$Codex.Record?
         var verifiesLogin = false
         do {
@@ -1469,6 +1525,8 @@ enum AuthSwap$Codex {
             guard target.mode == .keyring || target.mode == .auto else { throw error }
         }
         func validateRemoval(at location: URL) throws {
+            if protectsInactiveFile, let file = try target.load(backend: .file),
+               !AuthStorage$Codex.sameCredentials(file.data, removalRecord?.data) { throw Failure.busy }
             guard verifiesLogin else {
                 try requireStorage(target, home: location, owner: targetOwner)
                 return
@@ -1631,7 +1689,12 @@ enum AuthSwap$Codex {
         if let columnID, columnID.hasPrefix(recoveredBackupIDPrefix) {
             var state = recoveredBackupState
             var entries = state["profiles"] as? [String: [String: String]] ?? [:]
-            entries[String(columnID.dropFirst(recoveredBackupIDPrefix.count))] = nil
+            let id = String(columnID.dropFirst(recoveredBackupIDPrefix.count))
+            // Removing the active file can leave a different login in Keychain.
+            // Keep its ownership until the interrupted cleanup can be reconciled.
+            if entries[id]?["cleanupSource"] == nil && !entries.values.contains(where: { $0["cleanupSource"] == id }) {
+                entries[id] = nil
+            }
             state["profiles"] = entries
             UserDefaults.standard.set(state, forKey: recoveredBackupKey)
         }

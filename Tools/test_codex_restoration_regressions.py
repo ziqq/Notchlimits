@@ -155,3 +155,26 @@ restart_recovery_cases += [
 for cut, faults in restart_recovery_cases:
     name = "_".join((cut, *faults)).replace("-", "_")
     setattr(CodexRestorationRegressions, "test_replay_" + name, restart_test(cut, *faults))
+
+
+mixed_store_cases = [
+    (f"{phase}-replace-fileowner-available-retarget", faults)
+    for phase, faults in product(("admission", "delete"),
+                                 (("file-owner-mixed",), ("file-owner-auto", "deny-first")))
+]
+mixed_store_cases += [
+    (f"{phase}-rewrite-available-stable", faults)
+    for phase, faults in product(("admission", "move", "delete"),
+                                 (("active-file-readd",), ("active-file-readd", "deny-first"),
+                                  ("active-file-readd", "inactive-denied")))
+]
+mixed_store_cases += [
+    ("delete-replace-fileowner-available-retarget", ("file-owner-distinct",)),
+    ("delete-replace-fileowner-available-retarget", ("file-owner-empty", "deny-first")),
+    ("delete-rewrite-available-stable", ("active-file-readd-empty-keychain", "deny-first")),
+    ("admission-rewrite-available-stable", ("active-file-readd", "remove-file-login")),
+    ("delete-replace-fileowner-available-retarget", ("file-owner-distinct", "remove-keyring-login")),
+]
+for cut, faults in mixed_store_cases:
+    name = "_".join((cut, *faults)).replace("-", "_")
+    setattr(CodexRestorationRegressions, "test_mixed_store_" + name, restart_test(cut, *faults))
