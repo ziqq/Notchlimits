@@ -147,6 +147,11 @@ restart_recovery_cases += [
     ("admission-unchanged-available-stable", (condition,))
     for condition in ("empty-stage", "empty-config-removed", "keep-stage", "symlink-config")
 ]
+restart_recovery_cases += [
+    (f"{cut}-unchanged-available-retarget", faults)
+    for cut, faults in product(("admission", "move", "delete"),
+                               (("parent-replaced",), ("parent-replaced", "ephemeral", "denied")))
+]
 for cut, faults in restart_recovery_cases:
     name = "_".join((cut, *faults)).replace("-", "_")
     setattr(CodexRestorationRegressions, "test_replay_" + name, restart_test(cut, *faults))

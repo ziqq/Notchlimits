@@ -132,7 +132,11 @@ enum AuthSwap$Codex {
     private static func availableRecoveredBackupHome(_ entry: [String: String]) throws -> URL? {
         guard let path = entry["home"], let owner = entry["owner"] else { return nil }
         let home = URL(fileURLWithPath: path, isDirectory: true)
-        guard try availableFileOwnerKey(home) == owner, homeKey(home) == path else { return nil }
+        do {
+            guard try availableFileOwnerKey(home) == owner, homeKey(home) == path else { return nil }
+        } catch let error as POSIXError where error.code == .ENOTDIR {
+            return nil
+        }
         return home
     }
 

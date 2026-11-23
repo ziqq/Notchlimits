@@ -829,6 +829,8 @@ enum Restoration$Codex {
         let stage = URL(fileURLWithPath: state["stagePath"] as! String, isDirectory: true)
         let config = stage.appendingPathComponent("config.toml")
         let marker = stage.appendingPathComponent("settings-marker")
+        let parent = source.deletingLastPathComponent()
+        let replacementParent = Data("replacement parent file".utf8)
         if conditions.contains("empty-config-removed") { try manager.removeItem(at: config) }
         if conditions.contains("keep-stage") { try Data("owned by another process".utf8).write(to: marker) }
         if conditions.contains("symlink-config") {
@@ -842,10 +844,16 @@ enum Restoration$Codex {
             Fixture.managedCodex["config_toml_base64"] =
                 Data("cli_auth_credentials_store = '\(mode)'\n".utf8).base64EncodedString()
         }
+        if conditions.contains("parent-replaced") {
+            try manager.moveItem(at: parent, to: parent.appendingPathExtension("moved"))
+            try replacementParent.write(to: parent, options: .withoutOverwriting)
+            var info = stat()
+            try expect(Darwin.lstat(source.path, &info) != 0 && errno == ENOTDIR,
+                       "Expected ENOTDIR after replacing the recovery parent")
+        }
         if conditions.contains("directory-denied") {
-            let parent = source.deletingLastPathComponent().path
-            try expect(Darwin.chmod(parent, 0) == 0, "Could not protect the recovery parent")
-            defer { _ = Darwin.chmod(parent, 0o700) }
+            try expect(Darwin.chmod(parent.path, 0) == 0, "Could not protect the recovery parent")
+            defer { _ = Darwin.chmod(parent.path, 0o700) }
             var info = stat()
             try expect(Darwin.lstat(source.path, &info) != 0 && errno == EACCES,
                        "Expected EACCES checking the recovery source")
@@ -884,6 +892,10 @@ enum Restoration$Codex {
             try expect(try manager.destinationOfSymbolicLink(atPath: config.path)
                            == Fixture.root.appendingPathComponent("external-settings").path,
                        "Cleanup removed an independent configuration link")
+        }
+        if conditions.contains("parent-replaced") {
+            try expect(try Data(contentsOf: parent) == replacementParent,
+                       "Cleanup modified the file that replaced the recovery parent")
         }
     }
 
