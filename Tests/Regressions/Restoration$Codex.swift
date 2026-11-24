@@ -1150,6 +1150,8 @@ enum Restoration$Codex {
               let primary = try AuthSwap$Codex.authData(home: native) else {
             throw Failure(description: "Fixture could not set up the switch")
         }
+        let selectedFile = selection.appendingPathComponent("auth.json")
+        try withAccountSubject(Data(contentsOf: selectedFile), subject: "selected-person").write(to: selectedFile)
         try AuthSwap$Codex.activate(columnID: chosen.id, home: selection)
         let stash = AuthSwap$Codex.stashHome
         let other = Fixture.root.appendingPathComponent("cycle-alternate")
@@ -1520,10 +1522,16 @@ enum Restoration$Codex {
                        "Native refresh became a second profile with the retired primary token")
             return
         }
+        if conditions.contains("selected-rotation") {
+            try expect(Fixture.codexKeychain[nativeKey] == previous && Fixture.codexKeychain[stashKey] == primary,
+                       "Fixture did not stop with the prior selected login installed")
+            try mutate(native, mode: "keyring", change: "rotation", original: previous)
+        }
         let expectedSelected = !conditions.contains("relogin")
         let expectedNative = Fixture.codexKeychain[nativeKey]
         if expectedSelected {
-            try expect(expectedNative == previous && Fixture.codexKeychain[stashKey] == primary,
+            try expect((conditions.contains("selected-rotation") ? expectedNative != previous : expectedNative == previous)
+                       && Fixture.codexKeychain[stashKey] == primary,
                        "Fixture did not leave the prior login and its backup")
         }
         let accounts = discovery.discover().filter { $0.provider == .codex }
@@ -1534,6 +1542,10 @@ enum Restoration$Codex {
         print("Expected route: \(expectedID); actual route: \(activeID ?? "none"); primary assignment correct: \(correctPrimary)")
         try expect(activeID == expectedID && correctPrimary && Fixture.codexKeychain[nativeKey] == expectedNative,
                    "Restart reassigned the prior selected login to the primary route")
+        if conditions.contains("selected-rotation") {
+            let retired = UserDefaults.standard.stringArray(forKey: "codexRetiredNativeGrants") ?? []
+            try expect(retired.count == 1, "Recovery did not reserve the spent selected grant")
+        }
     }
 
     @MainActor

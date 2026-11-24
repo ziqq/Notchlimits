@@ -145,6 +145,7 @@ enum AuthSwap$Codex {
         let nativeMode: AuthStorage$Codex.Mode?
         let previousLogin: String?
         let previousAccountOwner: String?
+        let previousGrant: String?
         let primaryLogin: String?
         let primaryAccountOwner: String?
         let primaryGrant: String?
@@ -202,27 +203,31 @@ enum AuthSwap$Codex {
         if sameNative, record == nil, let mode = operation.nativeMode, native.mode != mode {
             throw Failure.busy
         }
-        if sameNative, operation.rollingBack == true, identity == operation.previousLogin {
+        let currentGrant = record.flatMap { grantIdentity($0.data) }
+        let currentAccountOwner = record.flatMap { primaryAccountOwner($0.data) }
+        let rollingBack = operation.rollingBack == true
+        let previousContinued = operation.previousGrant != nil && currentGrant != nil
+            && operation.previousAccountOwner != nil && currentAccountOwner == operation.previousAccountOwner
+            && operation.previousAccountOwner != operation.primaryAccountOwner
+        if sameNative, rollingBack || !operation.published, identity == operation.previousLogin || previousContinued {
             try requirePublication(record?.data, storage: native, owner: owner)
-            operation.previousRoute?.restore()
-            rememberNativeGrant(record?.data, home: native.home.path)
-            try flushNativeGrants()
-            finishPrimaryReturn()
-            return
-        }
-        if sameNative, !operation.published, identity == operation.previousLogin {
-            try requirePublication(record?.data, storage: native, owner: owner)
+            if rollingBack { operation.previousRoute?.restore() }
+            if previousContinued, let grant = operation.previousGrant, currentGrant != grant {
+                try retireNativeGrant(grant)
+            }
+            if rollingBack || previousContinued {
+                rememberNativeGrant(record?.data, home: native.home.path)
+                try flushNativeGrants()
+            }
             finishPrimaryReturn()
             return
         }
 
-        let currentGrant = record.flatMap { grantIdentity($0.data) }
         let replacedGrant = operation.primaryGrant
         let nativeContinued = sameNative && replacedGrant != nil && currentGrant != nil && identity != operation.primaryLogin
             && operation.primaryAccountOwner != nil
-            && record.flatMap { primaryAccountOwner($0.data) } == operation.primaryAccountOwner
-            && (operation.published && operation.rollingBack != true
-                || operation.primaryAccountOwner != operation.previousAccountOwner)
+            && currentAccountOwner == operation.primaryAccountOwner
+            && (operation.published && !rollingBack || operation.primaryAccountOwner != operation.previousAccountOwner)
         let nativeRotated = nativeContinued && currentGrant != replacedGrant
         if nativeRotated, let replacedGrant {
             try requirePublication(record?.data, storage: native, owner: owner)
@@ -1240,6 +1245,7 @@ enum AuthSwap$Codex {
             let operation = PrimaryReturn(nativePath: base.home.path, nativeOwner: nativeKey, nativeMode: base.mode,
                                           previousLogin: previous.flatMap { authIdentity($0.data) },
                                           previousAccountOwner: previous.flatMap { primaryAccountOwner($0.data) },
+                                          previousGrant: previous.flatMap { grantIdentity($0.data) },
                                           primaryLogin: payload.flatMap(authIdentity),
                                           primaryAccountOwner: payload.flatMap(primaryAccountOwner),
                                           primaryGrant: payload.flatMap(grantIdentity), backupPath: backup.home.path,
