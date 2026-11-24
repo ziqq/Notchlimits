@@ -225,8 +225,13 @@ final class UsageStore: ObservableObject {
 
     func removeAccount(id: String, completion: @escaping (Result<Void, Error>) -> Void) {
         guard let account = accounts.first(where: { $0.id == id }) else { completion(.success(())); return }
+        removeAccount(account, completion: completion)
+    }
+
+    func removeAccount(_ account: DiscoveredAccount, expectedLogin: AuthSwap$Codex.LoginOwner? = nil,
+                       completion: @escaping (Result<Void, Error>) -> Void) {
         var removal: AccountRemoval.ClaudeRemoval?
-        AccountRemoval.remove(account, claudeRemoval: { removal = $0 }) { result in
+        AccountRemoval.remove(account, claudeRemoval: { removal = $0 }, expectedLogin: expectedLogin) { result in
             if case .success = result { self.finishRemoval(account, claudeRemoval: removal) }
             completion(result)
         }

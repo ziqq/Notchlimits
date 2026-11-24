@@ -403,7 +403,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func removeColumn(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String,
+              let account = store.account(for: id),
               let column = store.columns.first(where: { $0.id == id }) else { return }
+        let selectedLogin = AuthSwap$Codex.actionLogin(for: account)
 
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -418,7 +420,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard runModalAbovePanel(alert) == .alertFirstButtonReturn else { return }
 
-        store.removeAccount(id: id) { result in
+        store.removeAccount(account, expectedLogin: selectedLogin) { result in
             if case .failure(let error) = result { self.errorAlert(L.t("remove.failed.title"), error) }
         }
     }
@@ -471,6 +473,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let account = store.account(for: id),
               let column = store.columns.first(where: { $0.id == id }),
               let switcher = appAccountSwitcher(for: account.provider) else { return }
+        (switcher as? AppSwitcher$Codex)?.captureSelection(account)
         let confirm = NSAlert()
         confirm.messageText = L.t("appswitch.confirm.title")
         confirm.informativeText = L.t("appswitch.confirm.body", switcher.appName, column.displayName)

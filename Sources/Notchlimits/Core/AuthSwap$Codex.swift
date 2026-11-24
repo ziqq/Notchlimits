@@ -668,6 +668,49 @@ enum AuthSwap$Codex {
         return UsageOwner(path: path, directory: DirectoryIdentity.capture(URL(fileURLWithPath: path)))
     }
 
+    static func discoveredLogin(columnID: String, home: URL) -> AuthStorage$Codex.LoginSelection? {
+        lock.lock()
+        defer { lock.unlock() }
+        let live = liveHome(columnID: columnID, home: home)
+        guard let source = try? storage(at: live) else { return nil }
+        let login = source.loginSelection()
+        return homeKey(live) == source.home.path ? login : nil
+    }
+
+    static func actionLogin(for account: DiscoveredAccount) -> LoginOwner? {
+        guard account.codexLogin != nil, case .codexHome(let home) = account.source else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        let live = liveHome(columnID: account.id, home: home)
+        guard let source = try? storage(at: live),
+              let current = try? source.load(verifyingOwner: true),
+              let identity = authIdentity(current.data), homeKey(live) == source.home.path else { return nil }
+        let location = UsageOwner(path: source.home.path, directory: DirectoryIdentity.capture(source.home))
+        return LoginOwner(location: location, authIdentity: identity)
+    }
+
+    private static func requireActionLogin(_ account: DiscoveredAccount?, owner: LoginOwner?) throws {
+        guard let account, let selection = account.codexLogin,
+              case .codexHome(let home) = account.source else { return }
+        let live = liveHome(columnID: account.id, home: home)
+        let source = try storage(at: live)
+        guard source.loginSelection() == selection else { throw Failure.busy }
+        if let owner {
+            let record = try source.load(verifyingOwner: true)
+            guard let record, selection.matches(record), authIdentity(record.data) == owner.authIdentity,
+                  owner.location == UsageOwner(path: source.home.path, directory: DirectoryIdentity.capture(source.home))
+            else { throw Failure.busy }
+        }
+        guard homeKey(live) == source.home.path else { throw Failure.busy }
+    }
+
+    private static func requireSelectedRecord(_ record: AuthStorage$Codex.Record?, account: DiscoveredAccount?,
+                                              owner: LoginOwner?) throws {
+        guard let selection = account?.codexLogin else { return }
+        guard let record, selection.matches(record), owner == nil || owner?.authIdentity == authIdentity(record.data)
+        else { throw Failure.busy }
+    }
+
     /// Provider outcomes retain a login proof without making discovery read secrets.
     static func loginOwner(columnID: String, home: URL) -> LoginOwner {
         lock.lock()
@@ -871,21 +914,22 @@ enum AuthSwap$Codex {
 
     /// Положить в `~/.codex` вход колонки. Приложение должно быть закрыто.
     static func activate(columnID: String, home: URL, expectedAccount: DiscoveredAccount? = nil,
-                         expectedPrimaryRoute: UsageOwner? = nil) throws {
+                         expectedPrimaryRoute: UsageOwner? = nil, expectedLogin: LoginOwner? = nil) throws {
         lock.lock()
         defer { lock.unlock() }
         _ = try activateLocked(columnID: columnID, home: home, expectedAccount: expectedAccount,
-                               expectedPrimaryRoute: expectedPrimaryRoute)
+                               expectedPrimaryRoute: expectedPrimaryRoute, expectedLogin: expectedLogin)
     }
 
     private static func activateLocked(columnID: String, home: URL,
                                        keepBackup: Bool = false, expectedAccount: DiscoveredAccount? = nil,
-                                       expectedPrimaryRoute: UsageOwner? = nil) throws
+                                       expectedPrimaryRoute: UsageOwner? = nil, expectedLogin: LoginOwner? = nil) throws
         -> (previous: AuthStorage$Codex.Record?, published: AuthStorage$Codex.Record?) {
         let base = try storage(at: baseHome)
         var baseOwner = DirectoryIdentity.capture(base.home)
         guard base.mode != .ephemeral else { throw AuthStorage$Codex.Failure.ephemeral }
         guard columnID == defaultColumnID || !isBaseHome(home) else { throw Failure.busy }
+        try requireActionLogin(expectedAccount, owner: expectedLogin)
         func validateSelectionOwner(_ owner: DirectoryIdentity?, at location: URL) throws {
             guard let expectedAccount else { return }
             let missingPrimary = columnID == defaultColumnID && owner == nil
@@ -919,6 +963,7 @@ enum AuthSwap$Codex {
         try requireIdle(base)
         try requireIdle(source)
         var incomingRecord = try source.load(verifyingOwner: true)
+        try requireSelectedRecord(incomingRecord, account: expectedAccount, owner: expectedLogin)
         if let record = incomingRecord {
             try requireIdleGrant(record.data)
             incomingRecord = try reconcile(source, record: record)
@@ -974,7 +1019,7 @@ enum AuthSwap$Codex {
                 }
             }
         }
-        if let payload { try base.save(payload, validating: validatePublication) }
+        if let payload { try base.save(payload, replacing: previous, validating: validatePublication) }
         else { try base.delete(validating: validatePublication) }
         rememberNativeGrant(payload, home: base.home.path)
         let verifyPublication = { try requirePublication(payload, storage: base, owner: baseOwner) }
@@ -1207,7 +1252,7 @@ enum AuthSwap$Codex {
                 } else if authIdentity(record.data) == authIdentity(renewal.record.data),
                           let data = renewedAuth(record.data, usedRefreshToken: usedRefreshToken,
                                                  tokens: tokens, now: Date()) {
-                    try destination.save(data, backend: record.backend, validating: {
+                    try destination.save(data, backend: record.backend, replacing: record, validating: {
                         if let recovery {
                             guard try ownsDirectory(recovery.removal.owner, at: destination.home) else { throw Failure.busy }
                         }
@@ -1361,7 +1406,7 @@ enum AuthSwap$Codex {
                       try matchesLocation(stash, home: stashHome, owner: stashOwner) else { throw Failure.busy }
                 try requireNativeLocation(live, owner: owner)
             }
-            if let payload { try stash.save(payload, backend: record?.backend, validating: validateBackup) }
+            if let payload { try stash.save(payload, backend: record?.backend, replacing: previousStash, validating: validateBackup) }
             else { try stash.delete(validating: validateBackup) }
             // A CLI re-login into our internal backup must use that same backend.
             try ("cli_auth_credentials_store = \"" + stashMode.rawValue + "\"\n")
@@ -1416,7 +1461,7 @@ enum AuthSwap$Codex {
                 try requireIdle(backup)
                 UserDefaults.standard.set([identity, backupIdentity, intended], forKey: sourceAuthKey)
                 changedProof = true
-                try backup.save(payload, validating: {
+                try backup.save(payload, replacing: primary, validating: {
                     guard try checkedRecord(primary, storage: backup, home: stashHome, owner: backupOwner).matches,
                           try checkedRecord(record, storage: live, home: baseHome, owner: owner).matches else {
                         throw Failure.busy
@@ -1427,7 +1472,7 @@ enum AuthSwap$Codex {
             guard try checkedRecord(record, storage: live, home: baseHome, owner: owner).matches else { throw Failure.busy }
             try validateProfile()
             try requireNativeLocation(live, owner: owner)
-            try profile.save(payload, validating: {
+            try profile.save(payload, replacing: previousRecord, validating: {
                 guard try checkedRecord(record, storage: live, home: baseHome, owner: owner).matches else { throw Failure.busy }
                 try validateProfile()
                 try requireNativeLocation(live, owner: owner)
@@ -1482,6 +1527,7 @@ enum AuthSwap$Codex {
 
     static func removeAuth(home: URL, columnID: String? = nil, removingProfileLink: Bool = false,
                            requireIncomplete: Bool = false, expectedAccount: DiscoveredAccount? = nil,
+                           expectedLogin: LoginOwner? = nil,
                            operation: (AuthStorage$Codex) throws -> Void = { try $0.delete() }) throws {
         lock.lock()
         defer { lock.unlock() }
@@ -1510,6 +1556,10 @@ enum AuthSwap$Codex {
                   liveTarget == target.home || !hasPendingRecovery(for: liveTarget) else { throw Failure.busy }
         }
         let entries = recoveredBackups
+        try requireActionLogin(expectedAccount, owner: expectedLogin)
+        let usesSelectedNamespace = expectedAccount.map {
+            homeKey(liveHome(columnID: $0.id, home: home)) == target.home.path
+        } == true
         let protectsInactiveFile = target.mode.usesKeyring && entries.values.contains { stage in
             guard let source = stage["cleanupSource"] else { return false }
             return [entries[source]?["home"], stage["home"], stage["cleanupRetainedHome"]].contains(target.home.path)
@@ -1522,7 +1572,10 @@ enum AuthSwap$Codex {
         } catch {
             // Explicit namespace removal does not require secret-read access.
             // Existing shared-fallback checks still govern auto cleanup below.
-            guard target.mode == .keyring || target.mode == .auto else { throw error }
+            guard target.mode.usesKeyring, !usesSelectedNamespace || expectedLogin == nil else { throw error }
+        }
+        if verifiesLogin, usesSelectedNamespace {
+            try requireSelectedRecord(removalRecord, account: expectedAccount, owner: expectedLogin)
         }
         func validateRemoval(at location: URL) throws {
             if protectsInactiveFile, let file = try target.load(backend: .file),
@@ -2052,7 +2105,7 @@ enum AuthSwap$Codex {
         var stored = current.data
         if authIdentity(current.data) == authIdentity(copy.record.data) {
             guard let merged = sessionUpdate(from: data, in: current.data) else { throw Failure.busy }
-            try copy.storage.save(merged, backend: current.backend, validating: {
+            try copy.storage.save(merged, backend: current.backend, replacing: current, validating: {
                 guard try matchesPinnedRecord(current, storage: copy.storage, key: copy.sourceKey),
                       try ownsCopy(copy) else { throw Failure.busy }
             })

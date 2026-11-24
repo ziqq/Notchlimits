@@ -42,6 +42,7 @@ enum Restoration$Codex {
                                        unavailable: parts.count > 2 && parts[2] == "locked")
             case "unreadable-original": try unreadableOriginal(outcome: parts[1])
             case "restart-child": try restartChild(conditions: Set(parts.dropFirst()))
+            case "restart-after-cycle": try verifyCycleAfterRestart()
             case "migration": try backupMigration(operation: parts[1], mode: parts[2], phase: parts[3])
             case "routing": try routing(returning: parts[1] == "return", foreign: parts[2] == "foreign")
             default: try restoration(kind: parts[0], mode: parts[1], phase: parts[2], change: parts[3])
@@ -306,7 +307,8 @@ enum Restoration$Codex {
             }
             let pendingKey = Fixture.codexKey(pending.home)
             try expect(Fixture.codexKeychain[pendingKey] == original, "The private copy was never saved")
-            let parent = relocatedIntoManaged ? ProfileDirectories.codexRoot : Fixture.root
+            let managedRetained = outcome.contains("-managedowner-")
+            let parent = (relocatedIntoManaged || managedRetained) ? ProfileDirectories.codexRoot : Fixture.root
             let relocated = parent.appendingPathComponent("relocated-original")
             try manager.moveItem(at: backup, to: relocated)
             if outcome == "non-directory" {
@@ -388,7 +390,7 @@ enum Restoration$Codex {
                                     : stable || targetSource || targetStage ? original : foreign,
                                 "replacement": replacement,
                                 "expectsReplacement": outcome.contains("-replace"),
-                                "sourcePath": pending.home.path, "stagePath": stage.path
+                                "sourcePath": pending.home.path, "stagePath": stage.path, "retainedPath": relocated.path
                             ]
                             let data = try! PropertyListSerialization.data(fromPropertyList: values, format: .binary, options: 0)
                             try! data.write(to: Fixture.root.appendingPathComponent("cleanup-restart.plist"), options: .atomic)
@@ -879,6 +881,96 @@ enum Restoration$Codex {
             try Fixture.codexLogin(home, account: "alternate-restart", mode: "keyring")
             return Fixture.codexKeychain.removeValue(forKey: Fixture.codexKey(home))!
         }
+        if conditions.contains("audit-renew") || conditions.contains("audit-renew-auto")
+            || conditions.contains("audit-renew-same") || conditions.contains("audit-managed-remove")
+            || conditions.contains("audit-private-remove") || conditions.contains("audit-switch")
+            || conditions.contains("audit-managed-remove-denied") || conditions.contains("audit-managed-remove-relogin") {
+            let retained = URL(fileURLWithPath: state["retainedPath"] as! String, isDirectory: true)
+            let file = retained.appendingPathComponent("auth.json")
+            let key = Fixture.codexKey(retained)
+            let other = try alternateLogin()
+            if conditions.contains("audit-renew") || conditions.contains("audit-renew-auto") || conditions.contains("audit-renew-same") {
+                let same = conditions.contains("audit-renew-same")
+                Fixture.codexKeychain[key] = same ? original : other
+                try Fixture.codexMode(retained, conditions.contains("audit-renew-auto") ? "auto" : "keyring")
+                guard let account = Discovery$Real().discover().first(where: { $0.source == .codexHome(retained) }),
+                      let renewal = try AuthSwap$Codex.beginRenewal(columnID: account.id, home: retained) else {
+                    throw Failure(description: "Fixture did not admit a sleeping Keychain renewal")
+                }
+                defer { AuthSwap$Codex.finishRenewal(renewal) }
+                let payload = try JSONSerialization.jsonObject(with: renewal.record.data) as! [String: Any]
+                let refresh = (payload["tokens"] as! [String: Any])["refresh_token"] as! String
+                let response = OAuth$Codex.Tokens(idToken: nil,
+                    accessToken: Fixture.accessToken(expiresAt: Date().addingTimeInterval(86400).timeIntervalSince1970),
+                    refreshToken: "synthetic-audit-keychain-rotated")
+                let updated = try AuthSwap$Codex.storeRenewed(renewal, usedRefreshToken: refresh, tokens: response)
+                try expect(updated?.data == Fixture.codexKeychain[key] && updated?.data != renewal.record.data,
+                           "Fixture did not complete the Keychain token update")
+                let onDisk = try? Data(contentsOf: file)
+                print("Completed Keychain renewal; file exists: \(manager.fileExists(atPath: file.path)); file preserved: \(onDisk == original)")
+                try expect(same ? onDisk == nil : onDisk == original, "Keychain renewal removed a distinct inactive file login")
+                if conditions.contains("cycle") {
+                    AuthSwap$Codex.finishRenewal(renewal)
+                    try finishMixedStoreCycle(retained: retained, file: file, original: original, updated: updated!.data)
+                }
+                return
+            }
+            if conditions.contains("audit-switch") {
+                Fixture.codexKeychain[key] = original
+                try other.write(to: file)
+                try Fixture.codexMode(retained, "keyring")
+                _ = Discovery$Real().discover()
+                let chosen = ProfileDirectories.codexRoot.appendingPathComponent("audit-switch-target")
+                try Fixture.codexLogin(chosen, account: "audit-switch-target", mode: "file")
+                guard let account = Discovery$Real().discover().first(where: {
+                    if case .codexHome(let url) = $0.source { return url.path == chosen.path }
+                    return false
+                }) else {
+                    throw Failure(description: "Fixture did not discover the switch target")
+                }
+                let switched = Result { try AppSwitcher$Codex().prepare(account) }
+                let onDisk = try? Data(contentsOf: file)
+                print("Switched native route: \(AuthSwap$Codex.activeColumnID == account.id); file preserved: \(onDisk == other)")
+                try expect(onDisk == other, "Switching the native Keychain account deleted the distinct inactive file login")
+                if case .success = switched {
+                    try expect(AuthSwap$Codex.activeColumnID == account.id, "Fixture did not complete the native switch")
+                }
+                return
+            }
+            let reloginDuringRemoval = conditions.contains("audit-managed-remove-relogin")
+            if !reloginDuringRemoval { Fixture.codexKeychain[key] = other }
+            try Fixture.codexMode(retained, "file")
+            guard let account = Discovery$Real().discover().first(where: { $0.source == .codexHome(retained) }) else {
+                throw Failure(description: "Fixture did not discover the active file login")
+            }
+            if conditions.contains("audit-managed-remove-denied") { RestorationSignals.unavailableKey = key }
+            var reached = false
+            if reloginDuringRemoval {
+                Fixture.beforeDirectoryMove = { from, to in
+                    guard from.path == retained.path, to.lastPathComponent.hasPrefix(".removed-") else { return }
+                    reached = true
+                    Fixture.codexKeychain[key] = other
+                }
+            }
+            let removed = Result { try AccountRemoval.remove(account) }
+            Fixture.beforeDirectoryMove = nil
+            RestorationSignals.unavailableKey = nil
+            try expect(!reloginDuringRemoval || reached, "Fixture missed the managed removal boundary")
+            let remainingProfiles = try visibleLogins().filter { $0 == other }.count
+            let directoryExists = manager.fileExists(atPath: retained.path)
+            let keychainExists = Fixture.codexKeychain[key] == other
+            let succeeded = (try? removed.get()) != nil
+            print("File profile removal success: \(succeeded); directory preserved: \(directoryExists); Keychain preserved: \(keychainExists); remaining views: \(remainingProfiles)")
+            try expect(directoryExists && keychainExists, "Removing the active file login made the separate Keychain login unreachable")
+            if succeeded {
+                try expect(!manager.fileExists(atPath: file.path), "Completed removal did not remove the file login")
+            } else {
+                try expect(try Data(contentsOf: file) == original, "Refused removal changed the file login")
+            }
+            try Fixture.codexMode(retained, "keyring")
+            try expect(try visibleLogins().filter { $0 == other }.count == 1, "The inactive Keychain login could not be restored")
+            return
+        }
         if conditions.contains("file-owner-mixed") || conditions.contains("file-owner-auto")
             || conditions.contains("file-owner-distinct") || conditions.contains("file-owner-empty") {
             let retained = Fixture.root.appendingPathComponent("relocated-original", isDirectory: true)
@@ -911,6 +1003,43 @@ enum Restoration$Codex {
             }
             try expect(try Data(contentsOf: retainedFile) == original, "The alternate mode modified the file login")
             try Fixture.codexMode(retained, "file")
+        }
+        if conditions.contains("audit-stale-switch") || conditions.contains("audit-stale-remove")
+            || conditions.contains("audit-stable-switch") {
+            let key = Fixture.codexKey(source)
+            let other = try alternateLogin()
+            Fixture.codexKeychain[key] = other
+            try Fixture.codexMode(source, "file")
+            let file = source.appendingPathComponent("auth.json")
+            try replacement.write(to: file, options: .withoutOverwriting)
+            guard let profile = Discovery$Real().discover().first(where: { $0.source == .codexHome(source) }) else {
+                throw Failure(description: "Fixture did not discover the active file login before selection")
+            }
+            try expect(try AuthSwap$Codex.authData(columnID: profile.id, home: source) == replacement,
+                       "Fixture selected an unexpected profile")
+            let switcher = AppSwitcher$Codex()
+            switcher.beginSwitch(profile)
+            if !conditions.contains("audit-stable-switch") { try Fixture.codexMode(source, "keyring") }
+            if conditions.contains("file-cycle") {
+                try other.write(to: file, options: .atomic)
+                try Fixture.codexMode(source, "file")
+            }
+            if conditions.contains("audit-stale-remove") {
+                try manager.moveItem(at: file, to: Fixture.root.appendingPathComponent("retired-file-login"))
+                let removed = Result { try AccountRemoval.remove(profile) }
+                print("Stale removal success: \((try? removed.get()) != nil); replacement survives: \(Fixture.codexKeychain[key] == other)")
+                try expect(Fixture.codexKeychain[key] == other, "Removal of the stale file selection deleted another Keychain login")
+            } else {
+                let switched = Result { try switcher.prepare(profile) }
+                let current = try AuthSwap$Codex.authData(home: AuthSwap$Codex.baseHome)
+                print("Switch success: \((try? switched.get()) != nil); published other login: \(current == other)")
+                if conditions.contains("audit-stable-switch") {
+                    try expect((try? switched.get()) != nil && current == replacement, "Stable file selection did not switch")
+                } else {
+                    try expect(current != other, "Switching a stale file selection published the unrelated Keychain login")
+                }
+            }
+            return
         }
         if conditions.contains("active-file-readd") || conditions.contains("active-file-readd-empty-keychain") {
             let key = Fixture.codexKey(source)
@@ -972,6 +1101,49 @@ enum Restoration$Codex {
             try expect(try Data(contentsOf: parent) == replacementParent,
                        "Cleanup modified the file that replaced the recovery parent")
         }
+    }
+
+    private static func finishMixedStoreCycle(retained: URL, file: URL, original: Data, updated: Data) throws {
+        func profile() throws -> DiscoveredAccount {
+            guard let account = Discovery$Real().discover().first(where: { $0.source == .codexHome(retained) }) else {
+                throw Failure(description: "The cycle lost the retained profile")
+            }
+            return account
+        }
+        let primary = try AuthSwap$Codex.authData(home: AuthSwap$Codex.baseHome)
+        try Fixture.codexMode(retained, "file")
+        let chosen = try profile()
+        let switcher = AppSwitcher$Codex()
+        switcher.beginSwitch(chosen)
+        _ = try switcher.prepare(chosen)
+        try expect(try AuthSwap$Codex.authData(home: AuthSwap$Codex.baseHome) == original,
+                   "The cycle published a different login")
+        try AuthSwap$Codex.restoreDefault()
+        try expect(try AuthSwap$Codex.authData(home: AuthSwap$Codex.baseHome) == primary,
+                   "The cycle did not restore the primary login")
+        try AccountRemoval.remove(profile())
+        try expect(!manager.fileExists(atPath: file.path) && Fixture.codexKeychain[Fixture.codexKey(retained)] == updated,
+                   "File removal changed the rotated Keychain login")
+        try Fixture.codexMode(retained, "keyring")
+        let state: [String: Any] = ["defaults": UserDefaults.standard.dictionaryRepresentation(),
+                                    "keychain": Fixture.codexKeychain, "home": AuthSwap$Codex.baseHome.path,
+                                    "updated": updated, "primary": primary!]
+        let data = try PropertyListSerialization.data(fromPropertyList: state, format: .binary, options: 0)
+        try data.write(to: Fixture.root.appendingPathComponent("cycle-restart.plist"), options: .atomic)
+    }
+
+    private static func verifyCycleAfterRestart() throws {
+        let data = try Data(contentsOf: Fixture.root.appendingPathComponent("cycle-restart.plist"))
+        let state = try PropertyListSerialization.propertyList(from: data, format: nil) as! [String: Any]
+        for (key, value) in state["defaults"] as! [String: Any] { UserDefaults.standard.set(value, forKey: key) }
+        Fixture.codexKeychain = state["keychain"] as! [String: Data]
+        Fixture.codexHome = state["home"] as? String
+        let updated = state["updated"] as! Data
+        let primary = state["primary"] as! Data
+        let counts = try (0..<3).map { _ in try visibleLogins().filter { $0 == updated }.count }
+        try expect(counts == [1, 1, 1], "Restart after the full cycle lost or duplicated the rotated Keychain login")
+        try expect(try AuthSwap$Codex.authData(home: AuthSwap$Codex.baseHome) == primary,
+                   "Restart after the cycle changed the primary login")
     }
 
     private static func visibleLogins() throws -> [Data] {

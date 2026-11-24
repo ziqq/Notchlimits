@@ -88,6 +88,7 @@ struct DiscoveredAccount: Identifiable, Equatable {
     let codexHomeOwner: DirectoryIdentity?
     /// Primary credentials can remain in the backup while the native home is absent.
     let codexHomeMissingPath: String?
+    let codexLogin: AuthStorage$Codex.LoginSelection?
     /// Почта аккаунта (из конфигов, без Keychain). Для дедупа и подсветки.
     var email: String? = nil
     /// Аккаунт открыт в десктоп-приложении (Claude — по папке данных, Codex —
@@ -96,7 +97,7 @@ struct DiscoveredAccount: Identifiable, Equatable {
 
     init(id: String, provider: Provider, profileName: String, source: AccountSource,
          email: String? = nil, isActive: Bool = false,
-         claudePrimaryOwner: ClaudePrimaryOwner? = nil) {
+         claudePrimaryOwner: ClaudePrimaryOwner? = nil, codexLogin: AuthStorage$Codex.LoginSelection? = nil) {
         self.id = id
         self.provider = provider
         self.profileName = profileName
@@ -104,6 +105,7 @@ struct DiscoveredAccount: Identifiable, Equatable {
         self.email = email
         self.isActive = isActive
         self.claudePrimaryOwner = claudePrimaryOwner
+        self.codexLogin = codexLogin
         if case .claudeKeychain(_, let directory) = source {
             if let directory {
                 claudeConfigOwner = DirectoryIdentity.capture(directory)

@@ -38,6 +38,7 @@ enum AccountRemoval {
     @MainActor
     static func remove(_ account: DiscoveredAccount, requireIncomplete: Bool = false,
                        claudeRemoval: ((ClaudeRemoval) -> Void)? = nil,
+                       expectedLogin: AuthSwap$Codex.LoginOwner? = nil,
                        completion: @escaping (Result<Void, Error>) -> Void) {
         guard account.provider == .codex else {
             completion(Result { try remove(account, requireIncomplete: requireIncomplete, claudeRemoval: claudeRemoval) })
@@ -47,10 +48,13 @@ enum AccountRemoval {
             completion(.failure(Failure.busy))
             return
         }
+        let selectedLogin = expectedLogin ?? AuthSwap$Codex.actionLogin(for: account)
         AppSwitchState.inProgress.insert(.codex)
         let finish: (Result<Void, Error>) -> Void = { result in
             defer { AppSwitchState.inProgress.remove(.codex) }
-            completion(result.flatMap { Result { try remove(account, requireIncomplete: requireIncomplete) } })
+            completion(result.flatMap { Result {
+                try remove(account, requireIncomplete: requireIncomplete, expectedLogin: selectedLogin)
+            } })
         }
         if touchesCodexDesktop(account) {
             let app = AppSwitcher$Codex()
@@ -97,7 +101,8 @@ enum AccountRemoval {
     }
 
     static func remove(_ account: DiscoveredAccount, requireIncomplete: Bool = false,
-                       claudeRemoval: ((ClaudeRemoval) -> Void)? = nil) throws {
+                       claudeRemoval: ((ClaudeRemoval) -> Void)? = nil,
+                       expectedLogin: AuthSwap$Codex.LoginOwner? = nil) throws {
         switch account.source {
         case .claudeKeychain(let service, let configDir):
             let directory = configDir ?? AuthStorage$Claude.configDirectory(for: service)
@@ -164,7 +169,8 @@ enum AccountRemoval {
             let removesLink = !isBase && url.deletingLastPathComponent().path == ProfileDirectories.codexRoot.path
                 && url.path.withCString({ Darwin.lstat($0, &link) }) == 0 && link.st_mode & S_IFMT == S_IFLNK
             try AuthSwap$Codex.removeAuth(home: url, columnID: account.id, removingProfileLink: removesLink,
-                                        requireIncomplete: requireIncomplete, expectedAccount: account) { storage in
+                                        requireIncomplete: requireIncomplete, expectedAccount: account,
+                                        expectedLogin: expectedLogin) { storage in
                 if isBase {
                     try storage.delete()
                 } else {
@@ -191,7 +197,8 @@ enum AccountRemoval {
                     var retainsOriginalFile = true
                     do {
                         try keyring?.validateFiles()
-                        try withProfileDirectory(managed ? directory : nil, root: root, expectedOwner: account.codexHomeOwner,
+                        let removableDirectory = managed && storage.canRetireProfileDirectory() ? directory : nil
+                        try withProfileDirectory(removableDirectory, root: root, expectedOwner: account.codexHomeOwner,
                                                  rollbackFile: { retainsOriginalFile = $0 },
                                                  codexAuthRestoreCheck: AuthStorage$Codex.profileAuthRestoreCheck,
                                                  restoredFileOwner: AuthSwap$Codex.recordRestoredFileOwner) { directory in

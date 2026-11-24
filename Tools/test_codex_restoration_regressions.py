@@ -124,6 +124,9 @@ def restart_test(cut, *conditions):
             faults = (*conditions, "denied") if "-denied-" in cut else conditions
             after = swift_regression.run_fixture(self.executable, ":".join(("restart-child", *faults)), root)
             self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
+            if "cycle" in conditions:
+                reopened = swift_regression.run_fixture(self.executable, "restart-after-cycle", root)
+                self.assertEqual(reopened.returncode, 0, reopened.stdout + reopened.stderr)
     return test
 
 
@@ -178,3 +181,27 @@ mixed_store_cases += [
 for cut, faults in mixed_store_cases:
     name = "_".join((cut, *faults)).replace("-", "_")
     setattr(CodexRestorationRegressions, "test_mixed_store_" + name, restart_test(cut, *faults))
+
+
+mixed_store_lifecycle_cases = (
+    ("delete-replace-fileowner-available-retarget", "audit-renew"),
+    ("delete-replace-fileowner-available-retarget", "audit-renew-auto"),
+    ("delete-replace-fileowner-available-retarget", "audit-renew-same"),
+    ("delete-replace-fileowner-managedowner-available-retarget", "audit-managed-remove"),
+    ("delete-replace-fileowner-managedowner-available-retarget", "audit-managed-remove-denied"),
+    ("delete-replace-fileowner-managedowner-available-retarget", "audit-managed-remove-relogin"),
+    ("delete-replace-fileowner-available-retarget", "audit-private-remove"),
+    ("delete-replace-fileowner-available-stable", "audit-switch"),
+    ("admission-rewrite-available-stable", "audit-stale-switch"),
+    ("admission-rewrite-available-stable", "audit-stale-remove"),
+    ("admission-rewrite-available-stable", "audit-stable-switch"),
+)
+for cut, condition in mixed_store_lifecycle_cases:
+    name = condition.removeprefix("audit-").replace("-", "_")
+    setattr(CodexRestorationRegressions, "test_mixed_store_lifecycle_" + name, restart_test(cut, condition))
+for mode in ("audit-renew", "audit-renew-auto"):
+    name = mode.removeprefix("audit-").replace("-", "_")
+    setattr(CodexRestorationRegressions, "test_mixed_store_lifecycle_cycle_" + name,
+            restart_test("delete-replace-fileowner-available-retarget", mode, "cycle"))
+CodexRestorationRegressions.test_mixed_store_lifecycle_stale_switch_after_file_cycle = restart_test(
+    "admission-rewrite-available-stable", "audit-stale-switch", "file-cycle")

@@ -13,6 +13,19 @@ struct AuthStorage$Codex {
     }
     enum Backend { case file, keyring }
     struct Record { let data: Data; let backend: Backend }
+    enum LoginSelection: Equatable {
+        case file(String?)
+        case keyring
+
+        func matches(_ record: Record) -> Bool {
+            switch self {
+            case .file(let identity):
+                return record.backend == .file && (identity == nil || AuthSwap$Codex.authIdentity(record.data) == identity)
+            case .keyring:
+                return record.backend == .keyring
+            }
+        }
+    }
 
     /// Classic Keychain item dates have only second precision. The owning
     /// database changes even when a native write leaves item metadata equal.
@@ -408,6 +421,12 @@ struct AuthStorage$Codex {
                     && AuthSwap$Codex.fileIsShared(home: original.home, fileHome: location)
                 let files = try CredentialFilesRevision([location] + (keyring.map { [$0.storage.home] } ?? []))
                 try validateFiles(phase, shared: shared)
+                if fileHome != nil, !original.canRetireProfileDirectory() {
+                    // A live login at the released name must have a new owner.
+                    // Otherwise keep the old directory reachable by its Keychain key.
+                    guard let replacement = DirectoryIdentity.capture(original.home),
+                          !replacement.isSameDirectory(as: owner) else { throw Failure.settings }
+                }
                 try files.validate()
                 guard try AuthStorage$Codex.profileRevision() == inventory else { throw Failure.settings }
                 if phase != .removed { try keyring?.proof.validateDatabase() }
@@ -517,9 +536,20 @@ struct AuthStorage$Codex {
         }
     }
 
+    func canRetireProfileDirectory() -> Bool {
+        mode != .file || keyringStatus() == errSecItemNotFound
+    }
+
+    func loginSelection() -> LoginSelection? {
+        if mode.usesKeyring, keyringStatus() == errSecSuccess { return .keyring }
+        guard mode == .file || mode == .auto, FileManager.default.fileExists(atPath: file.path) else { return nil }
+        return .file((try? loadFile()).flatMap { AuthSwap$Codex.authIdentity($0.data) })
+    }
+
     /// Renewal persists back to the backend that supplied its current grant.
     /// A denied Keychain update must not hide rotated tokens behind a stale entry.
-    func save(_ data: Data, backend: Backend? = nil, validating: (() throws -> Void)? = nil) throws {
+    func save(_ data: Data, backend: Backend? = nil, replacing previous: Record? = nil,
+              validating: (() throws -> Void)? = nil) throws {
         guard mode != .ephemeral else { throw Failure.ephemeral }
         let validate = {
             try mutationValidation?()
@@ -544,6 +574,7 @@ struct AuthStorage$Codex {
             }
             guard status == errSecSuccess else { throw Failure.keychain(status) }
             if let fallback, let fallbackOwner,
+               Self.sameCredentials(fallback.data, data) || Self.sameCredentials(fallback.data, previous?.data),
                !AuthSwap$Codex.fileIsShared(home: home, fileHome: home) {
                 try? removeFile(validating: {
                     let inventory = try Self.profileRevision()

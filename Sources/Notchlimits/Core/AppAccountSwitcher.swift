@@ -174,6 +174,7 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
 /// Swap credentials only, preserving the application's projects and threads.
 final class AppSwitcher$Codex: AppAccountSwitcher {
     private var primaryUsageOwner: AuthSwap$Codex.UsageOwner?
+    private var selectedLogin: AuthSwap$Codex.LoginOwner?
 
     let bundleID = "com.openai.codex"
     let appName = "Codex"
@@ -182,7 +183,12 @@ final class AppSwitcher$Codex: AppAccountSwitcher {
         AuthSwap$Codex.activeColumnID == columnID
     }
 
+    func captureSelection(_ account: DiscoveredAccount) {
+        selectedLogin = AuthSwap$Codex.actionLogin(for: account)
+    }
+
     func beginSwitch(_ account: DiscoveredAccount) {
+        if selectedLogin == nil { captureSelection(account) }
         guard account.id == AuthSwap$Codex.defaultColumnID,
               case .codexHome(let home) = account.source else { return }
         primaryUsageOwner = AuthSwap$Codex.usageOwner(columnID: account.id, home: home)
@@ -191,12 +197,15 @@ final class AppSwitcher$Codex: AppAccountSwitcher {
     func prepare(_ account: DiscoveredAccount) throws -> NSWorkspace.OpenConfiguration {
         guard case .codexHome(let home) = account.source else { throw AuthSwap$Codex.Failure.missingAuth }
         try AuthSwap$Codex.activate(columnID: account.id, home: home, expectedAccount: account,
-                                    expectedPrimaryRoute: primaryUsageOwner)
+                                    expectedPrimaryRoute: primaryUsageOwner, expectedLogin: selectedLogin)
         return NSWorkspace.OpenConfiguration()
     }
 
     /// Состояние меняет сама подмена в `prepare`.
     func commit(_ account: DiscoveredAccount) { cancel() }
 
-    func cancel() { primaryUsageOwner = nil }
+    func cancel() {
+        primaryUsageOwner = nil
+        selectedLogin = nil
+    }
 }
