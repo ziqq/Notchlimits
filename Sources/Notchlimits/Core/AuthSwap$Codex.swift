@@ -120,15 +120,41 @@ enum AuthSwap$Codex {
     }
 
     private struct PrimaryReturn: Codable {
+        struct Route: Codable {
+            let id: String?
+            let home: String?
+            let physicalHome: String?
+
+            init() {
+                let defaults = UserDefaults.standard
+                id = defaults.string(forKey: activeIDKey)
+                home = defaults.string(forKey: activeHomeKey)
+                physicalHome = defaults.string(forKey: activePhysicalHomeKey)
+            }
+
+            func restore() {
+                let defaults = UserDefaults.standard
+                defaults.set(id, forKey: activeIDKey)
+                defaults.set(home, forKey: activeHomeKey)
+                defaults.set(physicalHome, forKey: activePhysicalHomeKey)
+            }
+        }
+
         let nativePath: String
         let nativeOwner: String
+        let nativeMode: AuthStorage$Codex.Mode?
         let previousLogin: String?
+        let previousAccountOwner: String?
         let primaryLogin: String?
+        let primaryAccountOwner: String?
+        let primaryGrant: String?
         let backupPath: String
         let backupOwner: String?
         let backupMode: AuthStorage$Codex.Mode
         let backupBackend: AuthStorage$Codex.Backend?
+        let previousRoute: Route?
         var published = false
+        var rollingBack: Bool?
     }
 
     private static func savePrimaryReturn(_ operation: PrimaryReturn) throws {
@@ -141,6 +167,13 @@ enum AuthSwap$Codex {
               UserDefaults.standard.synchronize() else { return }
         UserDefaults.standard.removeObject(forKey: primaryReturnKey)
         _ = UserDefaults.standard.synchronize()
+    }
+
+    private static func startPrimaryRollback() throws {
+        guard let data = UserDefaults.standard.data(forKey: primaryReturnKey) else { return }
+        var operation = try PropertyListDecoder().decode(PrimaryReturn.self, from: data)
+        operation.rollingBack = true
+        try savePrimaryReturn(operation)
     }
 
     static func recoverPrimaryReturnForDiscovery() -> Bool {
@@ -158,6 +191,7 @@ enum AuthSwap$Codex {
         guard let data = UserDefaults.standard.data(forKey: primaryReturnKey) else { return }
         let operation = try PropertyListDecoder().decode(PrimaryReturn.self, from: data)
         let native = try storage(at: baseHome)
+        guard native.mode != .ephemeral else { throw AuthStorage$Codex.Failure.ephemeral }
         let owner = DirectoryIdentity.capture(native.home)
         try requireNative(native, owner: owner)
         let record = try native.load(verifyingOwner: true)
@@ -165,11 +199,36 @@ enum AuthSwap$Codex {
         let identity = record.flatMap { authIdentity($0.data) }
         let sameNative = try native.home.path == operation.nativePath
             && availableFileOwnerKey(native.home) == operation.nativeOwner
-        if sameNative, !operation.published, identity == operation.previousLogin, identity != operation.primaryLogin {
+        if sameNative, record == nil, let mode = operation.nativeMode, native.mode != mode {
+            throw Failure.busy
+        }
+        if sameNative, operation.rollingBack == true, identity == operation.previousLogin {
+            try requirePublication(record?.data, storage: native, owner: owner)
+            operation.previousRoute?.restore()
+            rememberNativeGrant(record?.data, home: native.home.path)
+            try flushNativeGrants()
+            finishPrimaryReturn()
+            return
+        }
+        if sameNative, !operation.published, identity == operation.previousLogin {
+            try requirePublication(record?.data, storage: native, owner: owner)
             finishPrimaryReturn()
             return
         }
 
+        let currentGrant = record.flatMap { grantIdentity($0.data) }
+        let replacedGrant = operation.primaryGrant
+        let nativeContinued = sameNative && replacedGrant != nil && currentGrant != nil && identity != operation.primaryLogin
+            && operation.primaryAccountOwner != nil
+            && record.flatMap { primaryAccountOwner($0.data) } == operation.primaryAccountOwner
+            && (operation.published && operation.rollingBack != true
+                || operation.primaryAccountOwner != operation.previousAccountOwner)
+        let nativeRotated = nativeContinued && currentGrant != replacedGrant
+        if nativeRotated, let replacedGrant {
+            try requirePublication(record?.data, storage: native, owner: owner)
+            try retireNativeGrant(replacedGrant)
+            try flushNativeGrants()
+        }
         let path = URL(fileURLWithPath: operation.backupPath, isDirectory: true)
         if homeKey(stashHome) == path.path {
             if let key = operation.backupOwner,
@@ -178,15 +237,19 @@ enum AuthSwap$Codex {
                     throw Failure.busy
                 }
                 let backup = try AuthStorage$Codex(home: path, mode: operation.backupMode)
-                if sameNative, identity == operation.primaryLogin, let backend = operation.backupBackend,
-                   let active = try backup.load(verifyingOwner: true), active.backend == backend,
+                if sameNative, identity == operation.primaryLogin || nativeContinued,
+                   let backend = operation.backupBackend,
+                   let active = try backup.load(backend: backend),
                    authIdentity(active.data) == operation.primaryLogin {
-                    try requireIdle(backup)
-                    try requireIdleGrant(active.data)
-                    _ = try deleteBackup(active, storage: backup, owner: backupOwner,
-                                         protecting: [(baseHome, native.mode)], validating: {
+                    if backend == .keyring, let file = try backup.load(backend: .file),
+                       AuthStorage$Codex.sameCredentials(file.data, active.data) {
+                        try deleteReturnedCopy(file, at: path, owner: backupOwner, native: native) {
+                            try requirePublication(record?.data, storage: native, owner: owner)
+                        }
+                    }
+                    try deleteReturnedCopy(active, at: path, owner: backupOwner, native: native) {
                         try requirePublication(record?.data, storage: native, owner: owner)
-                    })
+                    }
                 }
                 // The write may have completed before the old process died.
                 // Either backend, including an unreadable one, can still own a login.
@@ -201,16 +264,43 @@ enum AuthSwap$Codex {
                 UserDefaults.standard.set(state, forKey: recoveredBackupKey)
             }
         }
-        try requireNativeLocation(native, owner: owner)
+        try requirePublication(record?.data, storage: native, owner: owner)
         clearActiveRouting()
         UserDefaults.standard.removeObject(forKey: stashStoreKey)
         UserDefaults.standard.removeObject(forKey: stashHomeKey)
-        if let record, let owner {
+        if nativeRotated, let record, let replacedGrant {
+            // Keep the original grant as the lookup key until known copies
+            // have caught up with the native rotation.
+            rememberPrimarySession(record.data, grant: replacedGrant, accountOwner: operation.primaryAccountOwner)
+        } else if let record, let owner {
             primarySession = (record.data, owner, generations[native.home.path])
             rememberPrimarySession(record.data)
         }
         rememberNativeGrant(record?.data, home: native.home.path)
         finishPrimaryReturn()
+    }
+
+    /// The configured backend can now hold an independent login. Recovery
+    /// deletes only the recorded copy, using the backend that supplied it.
+    private static func deleteReturnedCopy(_ record: AuthStorage$Codex.Record, at path: URL,
+                                           owner: DirectoryIdentity, native: AuthStorage$Codex,
+                                           validating: @escaping () throws -> Void) throws {
+        let backend = record.backend
+        if backend == .file, fileIsShared(home: path, fileHome: path) { return }
+        let exact = try AuthStorage$Codex(home: path, mode: backend == .file ? .file : .keyring)
+        try requireIdle(exact)
+        try requireIdleGrant(record.data)
+        try exact.delete(preservingFile: true, validating: {
+            try AuthStorage$Codex.validateMutation(homes: [baseHome, stashHome],
+                                                   includesKeyring: native.mode.usesKeyring || backend == .keyring,
+                                                   tracksDirectoryContents: false) {
+                try validating()
+                if backend == .file, fileIsShared(home: path, fileHome: path) { throw Failure.busy }
+                let current = try exact.load(backend: backend)
+                guard AuthStorage$Codex.sameCredentials(current?.data, record.data),
+                      try matchesLocation(exact, home: stashHome, owner: owner) else { throw Failure.busy }
+            }
+        })
     }
 
     static func recoveredBackupHomes() -> [(id: String, home: URL)] {
@@ -235,16 +325,17 @@ enum AuthSwap$Codex {
         return home
     }
 
-    static func recoveredBackupDiscovery(managedDirectories: [URL])
+    static func recoveredBackupDiscovery(managedDirectories: [URL], resumeCleanup: Bool = true)
         -> (profiles: [(id: String, home: URL)], reservedPaths: Set<String>) {
         lock.lock()
         defer { lock.unlock() }
-        let replay = resolveRecoveredBackups(managedDirectories: managedDirectories)
+        let replay = resumeCleanup ? resolveRecoveredBackups(managedDirectories: managedDirectories) : CleanupReplay()
         let backups = recoveredBackupHomes()
         let entries = recoveredBackups
         let profiles = backups.filter { profile in
             let id = String(profile.id.dropFirst(recoveredBackupIDPrefix.count))
-            return entries[id]?["pendingOn"] == nil && !replay.hidden.contains(id)
+            return entries[id]?["pendingOn"] == nil && (resumeCleanup || entries[id]?["cleanupSource"] == nil)
+                && !replay.hidden.contains(id)
         }
         // Managed discovery can reach a private backup through a root alias.
         return (profiles + replay.visible, Set((backups + replay.visible).map { $0.home.path }))
@@ -1146,11 +1237,14 @@ enum AuthSwap$Codex {
         if columnID == defaultColumnID {
             guard let nativeKey = try availableFileOwnerKey(base.home),
                   try matchesLocation(backup, home: stashHome, owner: backupOwner) else { throw Failure.busy }
-            let operation = PrimaryReturn(nativePath: base.home.path, nativeOwner: nativeKey,
+            let operation = PrimaryReturn(nativePath: base.home.path, nativeOwner: nativeKey, nativeMode: base.mode,
                                           previousLogin: previous.flatMap { authIdentity($0.data) },
-                                          primaryLogin: payload.flatMap(authIdentity), backupPath: backup.home.path,
+                                          previousAccountOwner: previous.flatMap { primaryAccountOwner($0.data) },
+                                          primaryLogin: payload.flatMap(authIdentity),
+                                          primaryAccountOwner: payload.flatMap(primaryAccountOwner),
+                                          primaryGrant: payload.flatMap(grantIdentity), backupPath: backup.home.path,
                                           backupOwner: try availableFileOwnerKey(backup.home), backupMode: backup.mode,
-                                          backupBackend: checked.record?.backend)
+                                          backupBackend: checked.record?.backend, previousRoute: PrimaryReturn.Route())
             try savePrimaryReturn(operation)
             primaryReturn = operation
         }
@@ -1184,6 +1278,7 @@ enum AuthSwap$Codex {
                 try verifyPublication()
                 if columnID == defaultColumnID {
                     try restoreBackup(removedBackup, to: backup, owner: backupOwner, recovered: &recovered)
+                    try startPrimaryRollback()
                 }
                 try rollbackPublication(previous, storage: base, owner: baseOwner, validating: verifyPublication)
             } catch {
@@ -1795,8 +1890,7 @@ enum AuthSwap$Codex {
                 guard homeKey(baseHome) == base.home.path else { throw Failure.busy }
                 try observeNativeGrant(native?.data, home: base.home.path)
             }
-            let keys = [activeIDKey, activeHomeKey, activePhysicalHomeKey]
-            let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
+            let route = PrimaryReturn.Route()
             // Restore primary credentials before removing their backup. A
             // refused cleanup must precede destructive profile deletion.
             let activation = restore ? try activateLocked(columnID: defaultColumnID, home: baseHome, keepBackup: true) : nil
@@ -1849,12 +1943,10 @@ enum AuthSwap$Codex {
                     do {
                         try validateRollback()
                         try restoreBackup(removedBackup, to: backup, owner: backupOwner, recovered: &recovered)
+                        try startPrimaryRollback()
                         try rollbackPublication(activation.previous, storage: base, owner: baseOwner,
                                                 validating: validateRollback)
-                        for (name, value) in zip(keys, saved) {
-                            if let value { UserDefaults.standard.set(value, forKey: name) }
-                            else { UserDefaults.standard.removeObject(forKey: name) }
-                        }
+                        route.restore()
                     } catch {
                         clearActiveRouting()
                         try exposeUnroutedBackup(backup, owner: backupOwner, removed: removedBackup,
@@ -2355,6 +2447,20 @@ enum AuthSwap$Codex {
         refreshToken(data).map { SHA256.hash(data: Data($0.utf8)).map { String(format: "%02x", $0) }.joined() }
     }
 
+    private static func primaryAccountOwner(_ data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tokens = root["tokens"] as? [String: Any], let account = accountID(data) else { return nil }
+        for name in ["id_token", "access_token"] {
+            if let token = tokens[name] as? String, let claims = JWT.claims(token),
+               let issuer = claims["iss"] as? String, let subject = claims["sub"] as? String,
+               !issuer.isEmpty, !subject.isEmpty,
+               let identity = try? JSONEncoder().encode([account, issuer, subject]) {
+                return SHA256.hash(data: identity).map { String(format: "%02x", $0) }.joined()
+            }
+        }
+        return nil
+    }
+
     private static func nativeGrantProof(_ data: Data?, home: String) -> [String: String]? {
         guard let data, let grant = grantIdentity(data), let account = accountID(data) else { return nil }
         return ["home": home, "account": account, "grant": grant]
@@ -2394,6 +2500,14 @@ enum AuthSwap$Codex {
         return Set(grants)
     }
 
+    private static func retireNativeGrant(_ grant: String) throws {
+        var retired = try retiredNativeGrants()
+        if retired.insert(grant).inserted {
+            UserDefaults.standard.set(retired.sorted(), forKey: retiredNativeGrantsKey)
+            nativeGrantsDirty = true
+        }
+    }
+
     /// Native rotation retires the grant itself, including unobserved copies
     /// and copies with another account routing or a replaced file directory.
     private static func observeNativeGrant(_ data: Data?, home: String) throws {
@@ -2413,11 +2527,7 @@ enum AuthSwap$Codex {
             if let grant = previous["grant"], observed == nil
                 || previous["home"] == observed?["home"] && previous["account"] == observed?["account"]
                     && grant != observed?["grant"] {
-                var retired = try retiredNativeGrants()
-                if retired.insert(grant).inserted {
-                    UserDefaults.standard.set(retired.sorted(), forKey: retiredNativeGrantsKey)
-                    nativeGrantsDirty = true
-                }
+                try retireNativeGrant(grant)
             }
         }
         if data != nil { rememberNativeGrant(data, home: home) }
@@ -2437,14 +2547,15 @@ enum AuthSwap$Codex {
         nativeGrantsDirty = false
     }
 
-    private static func rememberPrimarySession(_ data: Data) {
-        guard let grant = grantIdentity(data), let account = accountID(data) else {
+    private static func rememberPrimarySession(_ data: Data, grant: String? = nil, accountOwner: String? = nil) {
+        guard let grant = grant ?? grantIdentity(data), let account = accountID(data) else {
             UserDefaults.standard.removeObject(forKey: primarySessionKey)
             return
         }
         // Only a grant digest, account routing and canonical home survive restart.
-        UserDefaults.standard.set(["home": homeKey(baseHome), "account": account, "grant": grant],
-                                  forKey: primarySessionKey)
+        var proof = ["home": homeKey(baseHome), "account": account, "grant": grant]
+        proof["owner"] = accountOwner
+        UserDefaults.standard.set(proof, forKey: primarySessionKey)
     }
 
     private static func clearPrimarySession() {
@@ -2457,13 +2568,15 @@ enum AuthSwap$Codex {
     @discardableResult
     private static func advancePrimaryCopies(matching data: Data? = nil) throws -> Bool {
         guard !isSwapped else { return false }
+        let proof = UserDefaults.standard.dictionary(forKey: primarySessionKey) as? [String: String]
         if primarySession == nil,
-           let proof = UserDefaults.standard.dictionary(forKey: primarySessionKey) as? [String: String],
+           let proof,
            proof["home"] == homeKey(baseHome),
            data == nil || data.flatMap(grantIdentity) == proof["grant"],
            let copy = copyInventory().first(where: { grantIdentity($0.record.data) == proof["grant"] }),
            let native = try storage(at: baseHome).load(verifyingOwner: true),
            accountID(native.data) == proof["account"],
+           proof["owner"] == nil || primaryAccountOwner(native.data) == proof["owner"],
            let baseline = sessionUpdate(from: copy.record.data, in: native.data),
            let owner = DirectoryIdentity.capture(baseHome) {
             primarySession = (baseline, owner, generations[homeKey(baseHome)])
@@ -2482,7 +2595,8 @@ enum AuthSwap$Codex {
             return try ownsCopy($0)
         }) else { return false }
         guard let native = try storage(at: baseHome).load(verifyingOwner: true),
-              accountID(native.data) == accountID(primary.data) else {
+              accountID(native.data) == accountID(primary.data),
+              proof?["owner"] == nil || primaryAccountOwner(native.data) == proof?["owner"] else {
             clearPrimarySession()
             return false
         }

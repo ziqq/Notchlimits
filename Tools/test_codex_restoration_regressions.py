@@ -257,3 +257,35 @@ for action in ("switch", "remove"):
 
 CodexRestorationRegressions.test_audit_rollback_absent_native = scenario_test("audit-rollback:absent")
 CodexRestorationRegressions.test_audit_rollback_present_native = scenario_test("audit-rollback:present")
+
+def audit_combined(mode, cut, *conditions):
+    def test(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-audit-combined-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            before = swift_regression.run_fixture(self.executable, f"audit-backup:{mode}:{cut}", root)
+            self.assertEqual(before.returncode, 86, before.stdout + before.stderr)
+            after = swift_regression.run_fixture(self.executable, ":".join(("audit-combined", *conditions)), root)
+            self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
+    return test
+
+combined = (
+    ("keyring", "cut-rollback-native", "denied"),
+    ("auto", "cut-rollback-native", "denied"),
+    ("keyring", "cut-rollback-removal", "denied"),
+    ("keyring", "cut-rollback-native", "denied", "relogin"),
+    ("keyring", "cut-before-publication", "denied", "ephemeral"),
+    ("keyring", "cut-before-publication", "denied", "file-mode"),
+    ("keyring", "cut-before-publication", "denied"),
+    ("keyring", "cut-before-delete", "denied", "stash-relogin"),
+    ("auto", "cut-before-delete", "denied", "stash-relogin"),
+    ("keyring", "cut-after-publication", "denied", "rotation"),
+    ("keyring", "cut-before-delete", "denied", "rotation"),
+    ("keyring", "cut-before-delete", "denied", "rotation", "shared-copy"),
+    ("keyring", "cut-before-delete", "denied", "access-only"),
+    ("keyring", "cut-before-delete", "denied", "duplicate-file"),
+    ("keyring", "cut-before-delete", "denied", "same-workspace"),
+    ("keyring", "cut-before-delete", "usage"),
+)
+for mode, cut, *conditions in combined:
+    name = "_".join((mode, cut, *conditions)).replace("-", "_")
+    setattr(CodexRestorationRegressions, "test_combined_" + name, audit_combined(mode, cut, *conditions))

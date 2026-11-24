@@ -83,7 +83,7 @@ struct Discovery$Real: AccountDiscovery {
     }
 
     private func codexAccounts() -> [DiscoveredAccount] {
-        guard AuthSwap$Codex.recoverPrimaryReturnForDiscovery() else { return [] }
+        let recoveredPrimary = AuthSwap$Codex.recoverPrimaryReturnForDiscovery()
         // id — стабильный идентификатор колонки, name — подпись в заголовке.
         // Переименование основного профиля не должно ронять кэш и уведомления.
         var homes: [(id: String, name: String, url: URL, login: AuthStorage$Codex.LoginSelection)] = []
@@ -95,7 +95,8 @@ struct Discovery$Real: AccountDiscovery {
         }
 
         let managedDirectories = ProfileDirectories.codexProfiles()
-        let recovered = AuthSwap$Codex.recoveredBackupDiscovery(managedDirectories: managedDirectories)
+        let recovered = AuthSwap$Codex.recoveredBackupDiscovery(managedDirectories: managedDirectories,
+                                                               resumeCleanup: recoveredPrimary)
         let managed = managedDirectories.filter {
             !recovered.reservedPaths.contains(AuthStorage$Codex.canonicalPath($0))
         }.map { directory in
