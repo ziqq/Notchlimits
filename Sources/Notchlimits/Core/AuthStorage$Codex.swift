@@ -662,7 +662,7 @@ struct AuthStorage$Codex {
         }
     }
 
-    func delete(fileHome: URL? = nil, keyring: AuthStorage$Codex? = nil,
+    func delete(fileHome: URL? = nil, keyring: AuthStorage$Codex? = nil, preservingFile: Bool = false,
                 validating: (() throws -> Void)? = nil,
                 afterFileRemoval: (() throws -> Void)? = nil,
                 beforeKeyringMutation: (() throws -> Void)? = nil) throws {
@@ -679,7 +679,7 @@ struct AuthStorage$Codex {
         }
         let destination = keyring ?? self
         let proof = try destination.captureKeyringProof()
-        let shared = AuthSwap$Codex.fileIsShared(home: home, fileHome: file.deletingLastPathComponent())
+        let shared = preservingFile || AuthSwap$Codex.fileIsShared(home: home, fileHome: file.deletingLastPathComponent())
         let backup = !shared && FileManager.default.fileExists(atPath: file.path) ? try Data(contentsOf: file) : nil
         if !shared {
             try removeFile(at: file, validating: {

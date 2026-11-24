@@ -1028,11 +1028,12 @@ enum AuthSwap$Codex {
             try verifyPublication()
             if columnID == defaultColumnID && !keepBackup {
                 removedBackup = checked.record
-                try deleteBackup(checked.record, storage: backup, owner: backupOwner,
-                                 protecting: [(baseHome, base.mode)], validating: {
+                let retainsLogin = try deleteBackup(checked.record, storage: backup, owner: backupOwner,
+                                                    protecting: [(baseHome, base.mode)], validating: {
                     guard try ownsPublication(payload, storage: base, owner: baseOwner) else { throw Failure.busy }
                 })
                 try verifyPublication()
+                if retainsLogin { _ = try retainUnreadableBackup(backup, owner: backupOwner) }
             }
         } catch {
             var recovered: AuthStorage$Codex.Record?
@@ -1678,13 +1679,14 @@ enum AuthSwap$Codex {
                 }
                 try validateRemoval(at: home)
                 removedBackup = primary
-                try deleteBackup(primary, storage: backup, owner: backupOwner,
-                                 protecting: [(baseHome, base.mode), (home, target.mode)], validating: {
+                let retainsLogin = try deleteBackup(primary, storage: backup, owner: backupOwner,
+                                                    protecting: [(baseHome, base.mode), (home, target.mode)], validating: {
                     try validateRemoval(at: home)
                     try validateNative?()
                 })
                 try validateRemoval(at: home)
                 try operation(target.validatingMutation(validateMutation))
+                if retainsLogin { _ = try retainUnreadableBackup(backup, owner: backupOwner) }
             } catch {
                 var recovered: AuthStorage$Codex.Record?
                 if let activation {
@@ -1757,9 +1759,11 @@ enum AuthSwap$Codex {
     /// deletion and completion. Shared fallbacks retain their independent owner.
     private static func deleteBackup(_ record: AuthStorage$Codex.Record?, storage backup: AuthStorage$Codex,
                                      owner: DirectoryIdentity?, protecting owners: [(home: URL, mode: AuthStorage$Codex.Mode)],
-                                     validating publication: @escaping () throws -> Void) throws {
+                                     validating publication: @escaping () throws -> Void) throws -> Bool {
         let shared = backup.mode != .file && fileIsShared(home: backup.home, fileHome: backup.home)
         let file = try backup.load(backend: .file)?.data
+        let retainsFileLogin = backup.mode.usesKeyring && record?.backend == .keyring && file != nil
+            && !AuthStorage$Codex.sameCredentials(file, record?.data)
         func validate(_ remaining: AuthStorage$Codex.Record?, fileRemoved: Bool) throws {
             // History or project metadata can change without replacing either login.
             let configured = try AuthStorage$Codex(home: backup.home)
@@ -1768,8 +1772,13 @@ enum AuthSwap$Codex {
             try AuthStorage$Codex.validateMutation(homes: [stashHome] + owners.map { $0.home },
                                                    includesKeyring: includesKeyring, tracksDirectoryContents: false) {
                 try publication()
-                guard try checkedRecord(remaining, storage: backup, home: stashHome, owner: owner).matches else {
-                    throw Failure.busy
+                if fileRemoved && retainsFileLogin {
+                    guard try backup.load(backend: .keyring) == nil,
+                          try matchesLocation(backup, home: stashHome, owner: owner) else { throw Failure.busy }
+                } else {
+                    guard try checkedRecord(remaining, storage: backup, home: stashHome, owner: owner).matches else {
+                        throw Failure.busy
+                    }
                 }
                 // The pinned backup still owns the original login. A CLI
                 // re-login can change modes and publish a different login.
@@ -1777,7 +1786,7 @@ enum AuthSwap$Codex {
                       try AuthStorage$Codex(home: backup.home).mode == configured.mode else { throw Failure.busy }
                 if !shared {
                     let current = try backup.load(backend: .file)?.data
-                    if fileRemoved {
+                    if fileRemoved && !retainsFileLogin {
                         guard current == nil else { throw Failure.busy }
                     } else {
                         guard current == file || current.flatMap(authIdentity) != nil
@@ -1789,10 +1798,11 @@ enum AuthSwap$Codex {
             }
         }
         try validate(record, fileRemoved: false)
-        try backup.delete(validating: { try validate(record, fileRemoved: false) }, afterFileRemoval: {
+        try backup.delete(preservingFile: retainsFileLogin, validating: { try validate(record, fileRemoved: false) }, afterFileRemoval: {
             try validate(record?.backend == .file ? nil : record, fileRemoved: true)
         })
         try validate(nil, fileRemoved: true)
+        return retainsFileLogin || !backup.canRetireProfileDirectory()
     }
 
     private static func configuredBackup(replacing record: AuthStorage$Codex.Record?, pinnedMode: AuthStorage$Codex.Mode,

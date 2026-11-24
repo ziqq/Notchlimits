@@ -369,7 +369,10 @@ private enum AuditSignals {
     }
     let alternate = Fixture.root.appendingPathComponent("alternate")
     try Cleanup$Authentication.login(alternate, name: "independent-fallback", mode: "file")
-    let fallback = try Cleanup$Authentication.bytes(alternate, mode: "file")!
+    let independent = try Cleanup$Authentication.bytes(alternate, mode: "file")!
+    // A late alias must be injected while an otherwise removable copy is
+    // checked. The stable scenario still covers the independent file owner.
+    let fallback = phase == "late" || phase == "read" ? original : independent
     try fallback.write(to: home.appendingPathComponent("auth.json"))
     let dataHome = URL(fileURLWithPath: "/System/Volumes/Data" + home.path)
     try expect(manager.fileExists(atPath: dataHome.path), "Data-volume alias unavailable")
@@ -401,6 +404,6 @@ private enum AuditSignals {
     try expect(reached, "late shared owner boundary not reached")
     try expect(
       retained == fallback,
-      "post-publication cleanup removed an independent newly shared file login")
+      "post-publication cleanup removed a file login owned by the shared alias")
   }
 }

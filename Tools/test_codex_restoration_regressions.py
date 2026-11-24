@@ -205,3 +205,17 @@ for mode in ("audit-renew", "audit-renew-auto"):
             restart_test("delete-replace-fileowner-available-retarget", mode, "cycle"))
 CodexRestorationRegressions.test_mixed_store_lifecycle_stale_switch_after_file_cycle = restart_test(
     "admission-rewrite-available-stable", "audit-stale-switch", "file-cycle")
+
+
+def mixed_backup_cycle(mode):
+    def test(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-codex-backup-cycle-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            for scenario in (f"backup-cycle:{mode}", "restart-after-cycle"):
+                result = swift_regression.run_fixture(self.executable, scenario, root)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+    return test
+
+
+for mode in ("file", "keyring", "auto"):
+    setattr(CodexRestorationRegressions, "test_mixed_store_lifecycle_backup_cycle_" + mode, mixed_backup_cycle(mode))

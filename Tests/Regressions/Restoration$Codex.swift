@@ -43,6 +43,7 @@ enum Restoration$Codex {
             case "unreadable-original": try unreadableOriginal(outcome: parts[1])
             case "restart-child": try restartChild(conditions: Set(parts.dropFirst()))
             case "restart-after-cycle": try verifyCycleAfterRestart()
+            case "backup-cycle": try switchThroughMixedBackup(mode: parts[1])
             case "migration": try backupMigration(operation: parts[1], mode: parts[2], phase: parts[3])
             case "routing": try routing(returning: parts[1] == "return", foreign: parts[2] == "foreign")
             default: try restoration(kind: parts[0], mode: parts[1], phase: parts[2], change: parts[3])
@@ -1125,9 +1126,44 @@ enum Restoration$Codex {
         try expect(!manager.fileExists(atPath: file.path) && Fixture.codexKeychain[Fixture.codexKey(retained)] == updated,
                    "File removal changed the rotated Keychain login")
         try Fixture.codexMode(retained, "keyring")
+        try checkpointCycle(updated: updated, primary: primary!)
+    }
+
+    private static func switchThroughMixedBackup(mode: String) throws {
+        let native = AuthSwap$Codex.baseHome
+        try Fixture.codexLogin(native, account: "primary", mode: mode)
+        let chosen = try Fixture.codexAccount("cycle-selection")
+        guard case .codexHome(let selection) = chosen.source,
+              let primary = try AuthSwap$Codex.authData(home: native) else {
+            throw Failure(description: "Fixture could not set up the switch")
+        }
+        try AuthSwap$Codex.activate(columnID: chosen.id, home: selection)
+        let stash = AuthSwap$Codex.stashHome
+        let other = Fixture.root.appendingPathComponent("cycle-alternate")
+        let alternateMode = mode == "file" ? "keyring" : "file"
+        try Fixture.codexLogin(other, account: "inactive", mode: alternateMode)
+        let key = Fixture.codexKey(stash)
+        let file = stash.appendingPathComponent("auth.json")
+        let inactive: Data
+        if alternateMode == "file" {
+            inactive = try Data(contentsOf: other.appendingPathComponent("auth.json"))
+            try inactive.write(to: file, options: .withoutOverwriting)
+        } else {
+            inactive = Fixture.codexKeychain.removeValue(forKey: Fixture.codexKey(other))!
+            Fixture.codexKeychain[key] = inactive
+        }
+        try AuthSwap$Codex.restoreDefault()
+        try expect(try AuthSwap$Codex.authData(home: native) == primary, "The primary did not restore from the mixed backup")
+        let remaining = alternateMode == "file" ? (try? Data(contentsOf: file)) : Fixture.codexKeychain[key]
+        try expect(remaining == inactive, "Cleaning the primary backup removed a separate login")
+        try Fixture.codexMode(stash, alternateMode)
+        try checkpointCycle(updated: inactive, primary: primary)
+    }
+
+    private static func checkpointCycle(updated: Data, primary: Data) throws {
         let state: [String: Any] = ["defaults": UserDefaults.standard.dictionaryRepresentation(),
                                     "keychain": Fixture.codexKeychain, "home": AuthSwap$Codex.baseHome.path,
-                                    "updated": updated, "primary": primary!]
+                                    "updated": updated, "primary": primary]
         let data = try PropertyListSerialization.data(fromPropertyList: state, format: .binary, options: 0)
         try data.write(to: Fixture.root.appendingPathComponent("cycle-restart.plist"), options: .atomic)
     }
