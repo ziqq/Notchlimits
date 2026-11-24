@@ -28,7 +28,7 @@ class CodexRestorationRegressions(unittest.TestCase):
             "let exists = super.fileExists(atPath: configPath(path))":
                 "let exists = super.fileExists(atPath: configPath(path))\n        RestorationSignals.io?(path)",
             "try super.removeItem(at: url)":
-                "try RestorationSignals.remove?(url)\n        try super.removeItem(at: url)",
+                "try RestorationSignals.remove?(url)\n        try super.removeItem(at: url)\n        RestorationSignals.afterFileRemoval?(url)",
             "if Fixture.failCodexFileWrite && URL(fileURLWithPath: path).lastPathComponent.hasPrefix":
                 "RestorationSignals.attributes?(path)\n        if Fixture.failCodexFileWrite && URL(fileURLWithPath: path).lastPathComponent.hasPrefix",
         }
@@ -54,7 +54,7 @@ class CodexRestorationRegressions(unittest.TestCase):
             support = support.replace(before, after)
         assignment = "Fixture.codexKeychain[key] = (attributes as NSDictionary)[kSecValueData as String] as? Data"
         assert support.count(assignment) == 2
-        support = support.replace(assignment, assignment + "\n        RestorationSignals.didWrite(key)")
+        support = support.replace(assignment, "RestorationSignals.beforeWrite?(key)\n        " + assignment + "\n        RestorationSignals.didWrite(key)")
         cls.fixture_path = pathlib.Path(fixture.name) / "Restoration$Codex.swift"
         cls.fixture_path.write_text(support + "\n" + (swift_regression.FIXTURES / "Restoration$Codex.swift").read_text())
         authentication.AuthenticationRegressions.setUpClass.__func__(cls)
@@ -219,3 +219,41 @@ def mixed_backup_cycle(mode):
 
 for mode in ("file", "keyring", "auto"):
     setattr(CodexRestorationRegressions, "test_mixed_store_lifecycle_backup_cycle_" + mode, mixed_backup_cycle(mode))
+
+
+def interrupted_primary_return(mode, cut, *conditions):
+    def test(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-audit-backup-crash-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            before = swift_regression.run_fixture(self.executable, f"audit-backup:{mode}:{cut}", root)
+            self.assertEqual(before.returncode, 86, before.stdout + before.stderr)
+            after = swift_regression.run_fixture(self.executable, ":".join(("audit-backup-restart", *conditions)), root)
+            self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
+    return test
+
+for mode in ("auto", "keyring"):
+    for cut, conditions in (
+        ("cut-after-delete", ()),
+        ("cut-after-delete", ("retry",)),
+        ("cut-after-delete", ("denied", "native-relogin")),
+        ("cut-before-delete", ("before-delete", "denied")),
+        ("cut-during-removal", ("removal", "denied")),
+    ):
+        name = "_".join((mode, cut, *conditions)).replace("-", "_")
+        setattr(CodexRestorationRegressions, "test_audit_backup_" + name, interrupted_primary_return(mode, cut, *conditions))
+CodexRestorationRegressions.test_audit_backup_before_publication = interrupted_primary_return(
+    "keyring", "cut-before-publication", "before-publication")
+CodexRestorationRegressions.test_audit_backup_after_publication = interrupted_primary_return(
+    "keyring", "cut-after-publication", "before-delete", "denied")
+CodexRestorationRegressions.test_audit_backup_file_cut_after_delete = interrupted_primary_return(
+    "file", "cut-after-delete", "denied")
+CodexRestorationRegressions.test_audit_backup_parent_replaced = interrupted_primary_return(
+    "keyring", "cut-after-delete", "parent-replaced")
+CodexRestorationRegressions.test_audit_backup_primary_signed_out = scenario_test("audit-backup:keyring:signed-out-primary")
+for action in ("switch", "remove"):
+    for condition in ("denied", "available", "opaque-replaced", "opaque-unchanged"):
+        name = condition.replace("-", "_")
+        setattr(CodexRestorationRegressions, f"test_audit_stale_{action}_{name}", scenario_test(f"audit-stale-keychain:{action}:{condition}"))
+
+CodexRestorationRegressions.test_audit_rollback_absent_native = scenario_test("audit-rollback:absent")
+CodexRestorationRegressions.test_audit_rollback_present_native = scenario_test("audit-rollback:present")

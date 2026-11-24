@@ -174,7 +174,7 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
 /// Swap credentials only, preserving the application's projects and threads.
 final class AppSwitcher$Codex: AppAccountSwitcher {
     private var primaryUsageOwner: AuthSwap$Codex.UsageOwner?
-    private var selectedLogin: AuthSwap$Codex.LoginOwner?
+    private var selectedLogin: AuthSwap$Codex.ActionLogin?
 
     let bundleID = "com.openai.codex"
     let appName = "Codex"

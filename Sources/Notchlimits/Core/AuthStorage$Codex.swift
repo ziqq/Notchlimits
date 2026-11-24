@@ -7,11 +7,11 @@ import TOMLDecoder
 /// The native Codex auth payload, stored under the selected CODEX_HOME.
 struct AuthStorage$Codex {
     private static let recoveryConfiguration = "cli_auth_credentials_store = \"keyring\"\n"
-    enum Mode: String {
+    enum Mode: String, Codable {
         case file, keyring, auto, ephemeral
         var usesKeyring: Bool { self == .keyring || self == .auto }
     }
-    enum Backend { case file, keyring }
+    enum Backend: String, Codable { case file, keyring }
     struct Record { let data: Data; let backend: Backend }
     enum LoginSelection: Equatable {
         case file(String?)
@@ -546,6 +546,14 @@ struct AuthStorage$Codex {
         return .file((try? loadFile()).flatMap { AuthSwap$Codex.authIdentity($0.data) })
     }
 
+    func opaqueLoginCheck() -> (() throws -> Bool)? {
+        guard let revision = try? keyringRevision() else { return nil }
+        return {
+            guard revision.database.isCurrent else { return false }
+            return try self.keyringRevision() == revision && revision.database.isCurrent
+        }
+    }
+
     /// Renewal persists back to the backend that supplied its current grant.
     /// A denied Keychain update must not hide rotated tokens behind a stale entry.
     func save(_ data: Data, backend: Backend? = nil, replacing previous: Record? = nil,
@@ -600,8 +608,8 @@ struct AuthStorage$Codex {
     /// A switch can promote an auto file fallback into Keychain. Restore the
     /// owner through the preferred backend instead of leaving that item above
     /// a restored file. Never export an original Keychain record to a fallback.
-    func restore(_ record: Record?, validating: (() throws -> Void)? = nil) throws {
-        guard let record else { try delete(validating: validating); return }
+    func restore(_ record: Record?, preservingFile: Bool = false, validating: (() throws -> Void)? = nil) throws {
+        guard let record else { try delete(preservingFile: preservingFile, validating: validating); return }
         let backend: Backend? = mode == .auto && record.backend == .file ? nil : record.backend
         try save(record.data, backend: backend, validating: validating)
     }

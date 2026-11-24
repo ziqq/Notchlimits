@@ -83,6 +83,7 @@ struct Discovery$Real: AccountDiscovery {
     }
 
     private func codexAccounts() -> [DiscoveredAccount] {
+        guard AuthSwap$Codex.recoverPrimaryReturnForDiscovery() else { return [] }
         // id — стабильный идентификатор колонки, name — подпись в заголовке.
         // Переименование основного профиля не должно ронять кэш и уведомления.
         var homes: [(id: String, name: String, url: URL, login: AuthStorage$Codex.LoginSelection)] = []

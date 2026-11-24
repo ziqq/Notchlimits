@@ -38,7 +38,7 @@ enum AccountRemoval {
     @MainActor
     static func remove(_ account: DiscoveredAccount, requireIncomplete: Bool = false,
                        claudeRemoval: ((ClaudeRemoval) -> Void)? = nil,
-                       expectedLogin: AuthSwap$Codex.LoginOwner? = nil,
+                       expectedLogin: AuthSwap$Codex.ActionLogin? = nil,
                        completion: @escaping (Result<Void, Error>) -> Void) {
         guard account.provider == .codex else {
             completion(Result { try remove(account, requireIncomplete: requireIncomplete, claudeRemoval: claudeRemoval) })
@@ -102,7 +102,7 @@ enum AccountRemoval {
 
     static func remove(_ account: DiscoveredAccount, requireIncomplete: Bool = false,
                        claudeRemoval: ((ClaudeRemoval) -> Void)? = nil,
-                       expectedLogin: AuthSwap$Codex.LoginOwner? = nil) throws {
+                       expectedLogin: AuthSwap$Codex.ActionLogin? = nil) throws {
         switch account.source {
         case .claudeKeychain(let service, let configDir):
             let directory = configDir ?? AuthStorage$Claude.configDirectory(for: service)
