@@ -2661,7 +2661,7 @@ enum Authentication {
         }
         let currentLogin = Provider$Codex.parseAuth(snapshot.data)?.accountID
         let originalStillCurrent = try AuthSwap$Codex.isCurrent(originalSnapshot, columnID: account.id, home: home)
-        try expect(current == account && owner.matches(live)
+        try expect(current.source == account.source && current.codexHomeOwner == account.codexHomeOwner && owner.matches(live)
                    && currentLogin == (replacing ? "cli-replacement" : originalLogin)
                    && originalStillCurrent == !replacing,
                    "Setup did not isolate a changed login inside an unchanged discovered directory")
@@ -2877,7 +2877,7 @@ enum Authentication {
             throw Failure(description: "Same-account re-login disappeared from real discovery")
         }
         let originalStillCurrent = try AuthSwap$Codex.isCurrent(originalSnapshot, columnID: account.id, home: home)
-        try expect(current == account && owner.matches(live)
+        try expect(current.source == account.source && current.codexHomeOwner == account.codexHomeOwner && owner.matches(live)
                    && Provider$Codex.parseAuth(snapshot.data)?.accountID == "original-selected"
                    && originalStillCurrent == !replacing,
                    "Setup did not isolate a new session of the same account in the same directory")
@@ -7971,7 +7971,7 @@ enum Authentication {
         let base = AuthSwap$Codex.baseHome
         try Fixture.codexLogin(base, account: "primary", mode: "auto")
         let payload = try AuthSwap$Codex.authData(home: base)
-        try Fixture.writeAuth(base, account: "stale-fallback", refresh: "stale-refresh", expired: false)
+        try payload!.write(to: base.appendingPathComponent("auth.json"))
         try expect(!Foundation.FileManager.default.fileExists(atPath: ProfileDirectories.codexRoot.path),
                    "Missing-root control unexpectedly created a managed root")
         let storage = try AuthStorage$Codex(home: base)

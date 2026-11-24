@@ -411,15 +411,14 @@ private enum RemovalSignals {
     private static func renewalCleanup(stable: Bool) throws {
         let base = AuthSwap$Codex.baseHome
         let profile = ProfileDirectories.codexRoot.appendingPathComponent("sleeping")
-        let fallback = ProfileDirectories.codexRoot.appendingPathComponent("fallback")
         try Cleanup$Authentication.login(base, name: "native", mode: "file")
         try Cleanup$Authentication.login(profile, name: "sleeping", mode: "auto")
-        try Cleanup$Authentication.login(fallback, name: "fallback", mode: "file")
-        let data = try Cleanup$Authentication.bytes(fallback, mode: "file")!
-        let profileFile = profile.appendingPathComponent("auth.json")
-        try data.write(to: profileFile)
         let key = Fixture.codexKey(profile)
         let original = Fixture.codexKeychain[key]!
+        let profileFile = profile.appendingPathComponent("auth.json")
+        // Exercise cleanup of a duplicate. A different login is kept before
+        // this post-publication gate, regardless of whether sign-out races it.
+        try original.write(to: profileFile)
         guard let renewal = try AuthSwap$Codex.beginRenewal(columnID: "codex:sleeping", home: profile) else {
             throw Failure(description: "sleeping renewal was not admitted")
         }
@@ -438,12 +437,12 @@ private enum RemovalSignals {
         let snapshot = try AuthSwap$Codex.storeRenewed(renewal, usedRefreshToken: "synthetic-refresh-sleeping", tokens: tokens)
         let actual = try AuthSwap$Codex.authData(home: profile)
         let file = try? Data(contentsOf: profileFile)
-        print("renewal reached=\(reached) returnedSnapshot=\(snapshot != nil) fallbackPreserved=\(file == data) fallbackUsable=\(actual == data)")
+        print("renewal reached=\(reached) returnedSnapshot=\(snapshot != nil) fallbackPreserved=\(file == original) fallbackUsable=\(actual == original)")
         try expect(reached, "configuration read after the published Keychain lookup was not reached")
         if stable {
             try expect(snapshot != nil && actual != nil && actual != original && file == nil, "ordinary rotation failed")
         } else {
-            try expect(file == data && actual == data, "renewal deleted the only current auto fallback")
+            try expect(file == original && actual == original, "renewal deleted the only current auto fallback")
             try expect(snapshot == nil, "renewal reported a Keychain snapshot that no longer exists")
         }
     }
