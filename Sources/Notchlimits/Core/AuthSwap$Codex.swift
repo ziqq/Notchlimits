@@ -242,25 +242,27 @@ enum AuthSwap$Codex {
                     throw Failure.busy
                 }
                 let backup = try AuthStorage$Codex(home: path, mode: operation.backupMode)
+                var deferredCleanup: [String: String] = [:]
                 if sameNative, identity == operation.primaryLogin || nativeContinued,
-                   let backend = operation.backupBackend,
-                   let active = try backup.load(backend: backend),
-                   authIdentity(active.data) == operation.primaryLogin {
-                    if backend == .keyring, let file = try backup.load(backend: .file),
-                       AuthStorage$Codex.sameCredentials(file.data, active.data) {
-                        try deleteReturnedCopy(file, at: path, owner: backupOwner, native: native) {
+                   let backend = operation.backupBackend, let login = operation.primaryLogin {
+                    do {
+                        try cleanupReturnedCopies(in: backup, owner: backupOwner, backend: backend, login: login,
+                                                  retainedRoute: baseHome, retainedUsesKeyring: native.mode.usesKeyring) {
                             try requirePublication(record?.data, storage: native, owner: owner)
                         }
-                    }
-                    try deleteReturnedCopy(active, at: path, owner: backupOwner, native: native) {
+                    } catch {
                         try requirePublication(record?.data, storage: native, owner: owner)
+                        deferredCleanup = ["returnedLogin": login, "returnedBackend": backend.rawValue]
+                        deferredCleanup["returnedOwner"] = operation.primaryAccountOwner
+                        deferredCleanup["returnedGrant"] = operation.primaryGrant
                     }
                 }
                 // The write may have completed before the old process died.
                 // Either backend, including an unreadable one, can still own a login.
-                if (try? backup.load(backend: .file) == nil) != true || (try? backup.load(backend: .keyring) == nil) != true {
+                if !deferredCleanup.isEmpty || (try? backup.load(backend: .file) == nil) != true
+                    || (try? backup.load(backend: .keyring) == nil) != true {
                     try requireNativeLocation(native, owner: owner)
-                    _ = try retainUnreadableBackup(backup, owner: backupOwner)
+                    _ = try retainUnreadableBackup(backup, owner: backupOwner, details: deferredCleanup)
                 }
             } else {
                 // A path that no longer names the captured owner must not be reused.
@@ -285,27 +287,39 @@ enum AuthSwap$Codex {
         finishPrimaryReturn()
     }
 
-    /// The configured backend can now hold an independent login. Recovery
-    /// deletes only the recorded copy, using the backend that supplied it.
-    private static func deleteReturnedCopy(_ record: AuthStorage$Codex.Record, at path: URL,
-                                           owner: DirectoryIdentity, native: AuthStorage$Codex,
-                                           validating: @escaping () throws -> Void) throws {
-        let backend = record.backend
-        if backend == .file, fileIsShared(home: path, fileHome: path) { return }
-        let exact = try AuthStorage$Codex(home: path, mode: backend == .file ? .file : .keyring)
-        try requireIdle(exact)
-        try requireIdleGrant(record.data)
-        try exact.delete(preservingFile: true, validating: {
-            try AuthStorage$Codex.validateMutation(homes: [baseHome, stashHome],
-                                                   includesKeyring: native.mode.usesKeyring || backend == .keyring,
-                                                   tracksDirectoryContents: false) {
-                try validating()
-                if backend == .file, fileIsShared(home: path, fileHome: path) { throw Failure.busy }
-                let current = try exact.load(backend: backend)
-                guard AuthStorage$Codex.sameCredentials(current?.data, record.data),
-                      try matchesLocation(exact, home: stashHome, owner: owner) else { throw Failure.busy }
+    /// The alternate backend can own a separate login. Remove only copies
+    /// that still match the recorded credentials.
+    private static func cleanupReturnedCopies(in backup: AuthStorage$Codex, owner: DirectoryIdentity,
+                                              backend: AuthStorage$Codex.Backend, login: String,
+                                              retainedRoute: URL, retainedUsesKeyring: Bool,
+                                              validating: @escaping () throws -> Void) throws {
+        let path = backup.home
+        guard homeKey(retainedRoute) != path.path else { throw Failure.busy }
+        let candidates: [AuthStorage$Codex.Backend] = backend == .keyring ? [.file, .keyring] : [.file]
+        var sharedCopyRemains = false
+        for candidate in candidates {
+            guard let current = try backup.load(backend: candidate), authIdentity(current.data) == login else { continue }
+            let isFile = candidate == .file
+            if isFile, fileIsShared(home: path, fileHome: path) {
+                sharedCopyRemains = true
+                continue
             }
-        })
+            let exact = try AuthStorage$Codex(home: path, mode: isFile ? .file : .keyring)
+            try requireIdle(exact)
+            try requireIdleGrant(current.data)
+            try exact.delete(preservingFile: true, validating: {
+                try AuthStorage$Codex.validateMutation(homes: [retainedRoute, path],
+                                                       includesKeyring: retainedUsesKeyring || !isFile,
+                                                       tracksDirectoryContents: false) {
+                    try validating()
+                    if isFile, fileIsShared(home: path, fileHome: path) { throw Failure.busy }
+                    let found = try exact.load(backend: candidate)
+                    guard AuthStorage$Codex.sameCredentials(found?.data, current.data),
+                          try matchesLocation(exact, home: path, owner: owner) else { throw Failure.busy }
+                }
+            })
+        }
+        if sharedCopyRemains { throw Failure.busy }
     }
 
     static func recoveredBackupHomes() -> [(id: String, home: URL)] {
@@ -334,6 +348,7 @@ enum AuthSwap$Codex {
         -> (profiles: [(id: String, home: URL)], reservedPaths: Set<String>) {
         lock.lock()
         defer { lock.unlock() }
+        discoverPreviouslySavedNativeLogins()
         let replay = resumeCleanup ? resolveRecoveredBackups(managedDirectories: managedDirectories) : CleanupReplay()
         let backups = recoveredBackupHomes()
         let entries = recoveredBackups
@@ -341,19 +356,21 @@ enum AuthSwap$Codex {
             let id = String(profile.id.dropFirst(recoveredBackupIDPrefix.count))
             return entries[id]?["pendingOn"] == nil && (resumeCleanup || entries[id]?["cleanupSource"] == nil)
                 && !replay.hidden.contains(id)
+                && exposesRetainedBackup(entries[id], at: profile.home, id: profile.id)
         }
         // Managed discovery can reach a private backup through a root alias.
         return (profiles + replay.visible, Set((backups + replay.visible).map { $0.home.path }))
     }
 
-    private static func retainUnreadableBackup(_ backup: AuthStorage$Codex, owner: DirectoryIdentity?) throws -> String {
+    private static func retainUnreadableBackup(_ backup: AuthStorage$Codex, owner: DirectoryIdentity?,
+                                               details: [String: String] = [:]) throws -> String {
         guard let owner, homeKey(backup.home) == backup.home.path,
               let key = try availableFileOwnerKey(backup.home), owner.matches(backup.home) else { throw Failure.busy }
         var state = recoveredBackupState
         var entries = state["profiles"] as? [String: [String: String]] ?? [:]
         let id = entries.first(where: { $0.value["home"] == backup.home.path && $0.value["owner"] == key })?.key
             ?? UUID().uuidString
-        entries[id] = ["home": backup.home.path, "owner": key]
+        entries[id] = details.merging(["home": backup.home.path, "owner": key]) { _, location in location }
         // CLI can keep using this CODEX_HOME. A future swap needs another stash.
         if homeKey(stashHome) == backup.home.path {
             state["stashHome"] = nextStashHome().path
@@ -369,6 +386,51 @@ enum AuthSwap$Codex {
         defaultStashHome.deletingLastPathComponent().appendingPathComponent("backup-" + UUID().uuidString, isDirectory: true)
     }
 
+    private static func exposesRetainedBackup(_ entry: [String: String]?, at home: URL, id: String) -> Bool {
+        if let returned = entry?["returnedLogin"] {
+            guard let active = try? storage(at: home).load(verifyingOwner: true) else { return false }
+            return authIdentity(active.data) != returned
+        }
+        if let saved = entry?["nativeLogin"], id != activeColumnID,
+           let active = try? storage(at: home).load(verifyingOwner: true), authIdentity(active.data) == saved,
+           let native = try? storage(at: baseHome).load(verifyingOwner: true) {
+            return authIdentity(native.data) != saved
+        }
+        return true
+    }
+
+    /// Cleanup of a retired stash can retry without blocking active routing.
+    private static func reconcileReturnedCopy(_ entry: [String: String]) throws {
+        guard let path = try availableRecoveredBackupHome(entry),
+              let owner = DirectoryIdentity.capture(path), !isRoutedRecoveryHome(path),
+              let login = entry["returnedLogin"], let name = entry["returnedBackend"],
+              let backend = AuthStorage$Codex.Backend(rawValue: name) else { return }
+        let retainedRoute = liveHome(columnID: defaultColumnID, home: baseHome)
+        let retained = try storage(at: retainedRoute)
+        guard retained.mode != .ephemeral else { throw Failure.busy }
+        let retainedOwner = DirectoryIdentity.capture(retained.home)
+        guard let record = try retained.load(verifyingOwner: true) else { throw Failure.busy }
+        func validate() throws {
+            guard liveHome(columnID: defaultColumnID, home: baseHome) == retainedRoute,
+                  !isRoutedRecoveryHome(path),
+                  try checkedRecord(record, storage: retained, home: retainedRoute, owner: retainedOwner).matches else {
+                throw Failure.busy
+            }
+        }
+        try validate()
+        let rotated: Bool
+        if let account = entry["returnedOwner"], primaryAccountOwner(record.data) == account,
+           let grant = entry["returnedGrant"] {
+            rotated = try retiredNativeGrants().contains(grant)
+        } else { rotated = false }
+        if authIdentity(record.data) == login || rotated {
+            let backup = try AuthStorage$Codex(home: path, mode: backend == .file ? .file : .keyring)
+            try cleanupReturnedCopies(in: backup, owner: owner, backend: backend, login: login,
+                                      retainedRoute: retainedRoute, retainedUsesKeyring: retained.mode.usesKeyring,
+                                      validating: validate)
+        }
+    }
+
     /// Keep a saved login private until the original namespace can be checked.
     @discardableResult
     private static func resolveRecoveredBackups(managedDirectories: [URL]) -> CleanupReplay {
@@ -378,6 +440,17 @@ enum AuthSwap$Codex {
         let replay = resumeDuplicateCleanups(in: &entries, managedDirectories: managedDirectories)
         let pending = entries
         for (id, entry) in pending where !replay.resumed.contains(id) {
+            if entry["returnedLogin"] != nil {
+                do {
+                    try reconcileReturnedCopy(entry)
+                    for key in ["returnedLogin", "returnedBackend", "returnedOwner", "returnedGrant"] {
+                        entries[id]?[key] = nil
+                    }
+                } catch {
+                    // The old copy stays private while its owner cannot be checked.
+                }
+                continue
+            }
             guard let originalID = entry["pendingOn"], let snapshot = recoveredBackupHome(entry),
                   let original = matchedPrimaryRecovery(entry) ?? pending[originalID],
                   let originalPath = original["home"], let originalOwner = original["owner"] else { continue }
@@ -661,6 +734,9 @@ enum AuthSwap$Codex {
     private static func hasPendingRecovery(for home: URL) -> Bool {
         let entries = recoveredBackups
         return entries.values.contains { entry in
+            if entry["returnedLogin"] != nil {
+                return homeKey(liveHome(columnID: defaultColumnID, home: baseHome)) == home.path
+            }
             guard let original = entry["pendingOn"] else { return false }
             if let primary = matchedPrimaryRecovery(entry) {
                 return primary["home"] == home.path
@@ -1676,7 +1752,7 @@ enum AuthSwap$Codex {
         let profileOwner = profile.flatMap { DirectoryIdentity.capture($0.home) }
         if let profile, profile.home.path == physical,
            let previousRecord = try profile.load(verifyingOwner: true),
-           accountID(payload) == accountID(previousRecord.data),
+           sameAccount(payload, previousRecord.data),
            let identity = authIdentity(previousRecord.data),
            proof?.ownsSelected(identity) ?? (identity == authIdentity(payload)) {
             let previous = previousRecord.data
@@ -1731,15 +1807,75 @@ enum AuthSwap$Codex {
             try synchronizeCopies(from: previous, to: payload)
         } else {
             guard proof?.isPending != true else { throw Failure.busy }
-            // Retain an unexpected native login without exporting a Keychain login to plaintext.
-            let orphan = stashHome.deletingLastPathComponent().appendingPathComponent("orphaned-" + UUID().uuidString)
-            try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
-            let orphanMode = record?.backend == .file ? AuthStorage$Codex.Mode.file : live.mode
-            try ("cli_auth_credentials_store = \"" + orphanMode.rawValue + "\"\n")
-                .write(to: orphan.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
-            try AuthStorage$Codex(home: orphan, mode: orphanMode).save(payload, backend: record?.backend)
+            if let record {
+                try preserveUnexpectedNativeLogin(record, storage: live, owner: owner)
+            }
         }
         return record
+    }
+
+    private static func preserveUnexpectedNativeLogin(_ record: AuthStorage$Codex.Record,
+                                                      storage native: AuthStorage$Codex,
+                                                      owner: DirectoryIdentity?) throws {
+        try requirePublication(record.data, storage: native, owner: owner)
+        let login = authIdentity(record.data)
+        // Reuse a copy saved by an interrupted switch.
+        discoverPreviouslySavedNativeLogins()
+        for entry in recoveredBackups.values where login != nil && entry["nativeLogin"] == login {
+            guard let home = recoveredBackupHome(entry),
+                  let saved = try? storage(at: home).load(backend: record.backend),
+                  AuthStorage$Codex.sameCredentials(saved.data, record.data) else { continue }
+            return
+        }
+        let root = defaultStashHome.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let id = UUID().uuidString
+        let recovery = root.appendingPathComponent("orphaned-" + id, isDirectory: true)
+        guard mkdir(recovery.path, 0o700) == 0 else { throw Failure.busy }
+        let mode: AuthStorage$Codex.Mode = record.backend == .file ? .file : .keyring
+        let destination = try AuthStorage$Codex(home: recovery, mode: mode)
+        guard let recoveryOwner = DirectoryIdentity.capture(destination.home),
+              let key = try availableFileOwnerKey(destination.home) else { throw Failure.busy }
+        func validate() throws {
+            try requirePublication(record.data, storage: native, owner: owner)
+            guard try matchesLocation(destination, home: recovery, owner: recoveryOwner) else { throw Failure.busy }
+        }
+        let config = recovery.appendingPathComponent("config.toml")
+        try Data(("cli_auth_credentials_store = \"" + mode.rawValue + "\"\n").utf8)
+            .write(to: config, options: .withoutOverwriting)
+        var state = recoveredBackupState
+        var entries = recoveredBackups
+        var entry = ["home": destination.home.path, "owner": key]
+        entry["nativeLogin"] = login
+        entries[id] = entry
+        state["profiles"] = entries
+        UserDefaults.standard.set(state, forKey: recoveredBackupKey)
+        guard UserDefaults.standard.synchronize() else { throw Failure.busy }
+        guard try destination.restoreRecoveryRecordIfAbsent(record, validating: validate) else { throw Failure.busy }
+    }
+
+    private static func discoverPreviouslySavedNativeLogins() {
+        let root = defaultStashHome.deletingLastPathComponent()
+        guard let children = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return }
+        var state = recoveredBackupState
+        var entries = recoveredBackups
+        let previous = entries
+        for home in children where home.lastPathComponent.hasPrefix("orphaned-") {
+            let id = String(home.lastPathComponent.dropFirst("orphaned-".count))
+            guard UUID(uuidString: id) != nil, entries[id] == nil,
+                  let candidate = try? AuthStorage$Codex(home: home),
+                  candidate.home.deletingLastPathComponent().path == homeKey(root), candidate.home.lastPathComponent == home.lastPathComponent,
+                  let owner = DirectoryIdentity.capture(candidate.home),
+                  let record = try? candidate.load(verifyingOwner: true),
+                  let key = try? availableFileOwnerKey(candidate.home), owner.matches(candidate.home) else { continue }
+            var entry = ["home": candidate.home.path, "owner": key]
+            entry["nativeLogin"] = authIdentity(record.data)
+            entries[id] = entry
+        }
+        if entries != previous {
+            state["profiles"] = entries
+            UserDefaults.standard.set(state, forKey: recoveredBackupKey)
+        }
     }
 
     static func authData(home: URL) throws -> Data? { try storage(at: home).load()?.data }
@@ -2001,7 +2137,8 @@ enum AuthSwap$Codex {
             let id = String(columnID.dropFirst(recoveredBackupIDPrefix.count))
             // Removing the active file can leave a different login in Keychain.
             // Keep its ownership until the interrupted cleanup can be reconciled.
-            if entries[id]?["cleanupSource"] == nil && !entries.values.contains(where: { $0["cleanupSource"] == id }) {
+            if entries[id]?["returnedLogin"] == nil, entries[id]?["cleanupSource"] == nil,
+               !entries.values.contains(where: { $0["cleanupSource"] == id }) {
                 entries[id] = nil
             }
             state["profiles"] = entries
@@ -2232,7 +2369,7 @@ enum AuthSwap$Codex {
             guard let source = try? storage(at: home), source.home.path != homeKey(baseHome),
                   let owner = DirectoryIdentity.capture(source.home),
                   let record = try? source.load(verifyingOwner: true),
-                  owner.matches(source.home) else { return nil }
+                  owner.matches(source.home), !isDeferredReturnedCopy(record, at: source.home) else { return nil }
             if record.backend == .file, fileOwnerKey(source.home) == fileOwnerKey(baseHome) { return nil }
             let key = sourceKey(source, backend: record.backend)
             guard seen.insert(key).inserted else { return nil }
@@ -2332,12 +2469,20 @@ enum AuthSwap$Codex {
     }
 
     private static func ownsCopy(_ copy: SessionCopy) throws -> Bool {
-        guard generations[copy.sourceKey] == copy.generation else { return false }
+        guard generations[copy.sourceKey] == copy.generation,
+              !isDeferredReturnedCopy(copy.record, at: copy.storage.home) else { return false }
         if copy.record.backend == .keyring, homeKey(copy.storage.home) != copy.sourceKey { return false }
         let sameDirectory = try ownsDirectory(copy.owner, at: copy.storage.home)
         // Recreating a directory does not replace its native Keychain namespace.
         // Defer unavailable owners; persistence still verifies their credentials.
         return copy.record.backend == .keyring || sameDirectory
+    }
+
+    private static func isDeferredReturnedCopy(_ record: AuthStorage$Codex.Record, at home: URL) -> Bool {
+        guard let login = authIdentity(record.data) else { return false }
+        return recoveredBackups.values.contains { entry in
+            entry["returnedLogin"] == login && entry["home"] == home.path && recoveredBackupHome(entry) == home
+        }
     }
 
     /// Codex removal holds the swap lock. An exclusive rollback rename can
@@ -2469,7 +2614,15 @@ enum AuthSwap$Codex {
 
     private static func nativeGrantProof(_ data: Data?, home: String) -> [String: String]? {
         guard let data, let grant = grantIdentity(data), let account = accountID(data) else { return nil }
-        return ["home": home, "account": account, "grant": grant]
+        var proof = ["home": home, "account": account, "grant": grant]
+        proof["owner"] = primaryAccountOwner(data)
+        return proof
+    }
+
+    private static func sameAccount(_ left: Data, _ right: Data) -> Bool {
+        if AuthStorage$Codex.sameCredentials(left, right) { return true }
+        guard let account = accountID(left), account == accountID(right) else { return false }
+        return primaryAccountOwner(left) == primaryAccountOwner(right)
     }
 
     /// Intentional handoff releases an unchanged grant to its sleeping profile.
@@ -2532,6 +2685,7 @@ enum AuthSwap$Codex {
             }
             if let grant = previous["grant"], observed == nil
                 || previous["home"] == observed?["home"] && previous["account"] == observed?["account"]
+                    && previous["owner"] == observed?["owner"]
                     && grant != observed?["grant"] {
                 try retireNativeGrant(grant)
             }
@@ -2560,7 +2714,7 @@ enum AuthSwap$Codex {
         }
         // Only a grant digest, account routing and canonical home survive restart.
         var proof = ["home": homeKey(baseHome), "account": account, "grant": grant]
-        proof["owner"] = accountOwner
+        proof["owner"] = accountOwner ?? primaryAccountOwner(data)
         UserDefaults.standard.set(proof, forKey: primarySessionKey)
     }
 
@@ -2582,6 +2736,7 @@ enum AuthSwap$Codex {
            let copy = copyInventory().first(where: { grantIdentity($0.record.data) == proof["grant"] }),
            let native = try storage(at: baseHome).load(verifyingOwner: true),
            accountID(native.data) == proof["account"],
+           sameAccount(native.data, copy.record.data),
            proof["owner"] == nil || primaryAccountOwner(native.data) == proof["owner"],
            let baseline = sessionUpdate(from: copy.record.data, in: native.data),
            let owner = DirectoryIdentity.capture(baseHome) {
@@ -2601,7 +2756,7 @@ enum AuthSwap$Codex {
             return try ownsCopy($0)
         }) else { return false }
         guard let native = try storage(at: baseHome).load(verifyingOwner: true),
-              accountID(native.data) == accountID(primary.data),
+              sameAccount(native.data, primary.data),
               proof?["owner"] == nil || primaryAccountOwner(native.data) == proof?["owner"] else {
             clearPrimarySession()
             return false

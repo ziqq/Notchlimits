@@ -52,6 +52,11 @@ enum Restoration$Codex {
             case "audit-rollback": try auditRollbackAfterEmptyNative(fault: parts[1])
             case "audit-backup-restart": try inspectInterruptedBackup(conditions: Set(parts.dropFirst()))
             case "audit-combined": try await auditCombined(conditions: Set(parts.dropFirst()))
+            case "extra-audit-copyback": try extraAuditCopyback(mode: parts[1], change: parts[2])
+            case "extra-audit-copy-seed": try extraAuditCopySeed(mode: parts[1], change: parts[2])
+            case "extra-audit-copy-restart": try extraAuditCopyRestart()
+            case "extra-audit-legacy-login": try extraAuditLegacyLogin(mode: parts[1])
+            case "extra-audit-restart": try await extraAuditRestart(denyDelete: parts[1] == "denied", operation: parts[2])
             case "audit-stale-keychain": try await staleKeychainAction(action: parts[1], condition: parts[2])
             case "migration": try backupMigration(operation: parts[1], mode: parts[2], phase: parts[3])
             case "routing": try routing(returning: parts[1] == "return", foreign: parts[2] == "foreign")
@@ -1358,6 +1363,187 @@ enum Restoration$Codex {
         if conditions.contains("removal") {
             try expect(columns.contains { $0.id == state["selectedID"] as? String },
                        "Recovery replayed the interrupted user's profile removal")
+        }
+    }
+
+    private static func extraAuditCopySeed(mode: String, change: String) throws {
+        let native = AuthSwap$Codex.baseHome
+        try Fixture.codexLogin(native, account: "shared-workspace", mode: mode)
+        let primary = try withAccountSubject(AuthSwap$Codex.authData(home: native)!, subject: "original-primary")
+        if mode == "file" { try primary.write(to: native.appendingPathComponent("auth.json")) }
+        else { Fixture.codexKeychain[Fixture.codexKey(native)] = primary }
+        let copy = try Fixture.codexAccount("primary-owner-copy")
+        guard case .codexHome(let copyHome) = copy.source else { throw Failure(description: "Missing managed copy") }
+        try primary.write(to: copyHome.appendingPathComponent("auth.json"))
+        let other = try Fixture.codexAccount("temporary-selection")
+        guard case .codexHome(let home) = other.source else { throw Failure(description: "Missing temporary choice") }
+        try AuthSwap$Codex.activate(columnID: other.id, home: home)
+        try AuthSwap$Codex.restoreDefault()
+        try expect(try AuthSwap$Codex.authData(home: native) == primary, "The fixture did not restore the original primary")
+        try mutate(native, mode: mode, change: "rotation", original: primary)
+        let subject = change == "rotation" ? "original-primary" : "independent-user"
+        let latest = try withAccountSubject(AuthSwap$Codex.authData(home: native)!, subject: subject)
+        if mode == "file" { try latest.write(to: native.appendingPathComponent("auth.json")) }
+        else { Fixture.codexKeychain[Fixture.codexKey(native)] = latest }
+        try checkpointCycle(updated: latest, primary: primary, selectedID: change)
+    }
+
+    private static func extraAuditCopyRestart() throws {
+        let snapshot = try Data(contentsOf: Fixture.root.appendingPathComponent("cycle-restart.plist"))
+        let state = try PropertyListSerialization.propertyList(from: snapshot, format: nil) as! [String: Any]
+        for (key, value) in state["defaults"] as! [String: Any] { UserDefaults.standard.set(value, forKey: key) }
+        Fixture.codexKeychain = state["keychain"] as! [String: Data]
+        Fixture.codexHome = state["home"] as? String
+        let old = state["primary"] as! Data
+        let replacement = state["updated"] as! Data
+        let copyID = AuthSwap$Codex.profileColumnID("primary-owner-copy")
+        let discovery = Discovery$Real()
+        guard let found = discovery.discover().first(where: { $0.id == copyID }),
+              case .codexHome(let home) = found.source else { throw Failure(description: "Missing primary copy") }
+        _ = try AuthSwap$Codex.beginRenewal(columnID: found.id, home: home)
+        let current = try AuthSwap$Codex.authData(home: home)
+        let preserved = AuthStorage$Codex.sameCredentials(current, old)
+        let overwritten = AuthStorage$Codex.sameCredentials(current, replacement)
+        print("Restored copy unchanged: \(preserved); copy uses the current native credentials: \(overwritten)")
+        if state["selectedID"] as? String == "rotation" {
+            try expect(overwritten, "An actual rotation was not propagated")
+        } else {
+            let retired = UserDefaults.standard.stringArray(forKey: "codexRetiredNativeGrants") ?? []
+            try expect(preserved && retired.isEmpty,
+                       "A native sign-in by another workspace user overwrote or retired a sleeping login")
+        }
+    }
+
+    private static func extraAuditCopyback(mode: String, change: String) throws {
+        let native = AuthSwap$Codex.baseHome
+        try Fixture.codexLogin(native, account: "original-primary", mode: mode)
+        let primary = try AuthSwap$Codex.authData(home: native)!
+        let chosen = try Fixture.codexAccount("audit-selected")
+        guard case .codexHome(let selected) = chosen.source else { throw Failure(description: "Missing selected home") }
+        let originalHome = Fixture.root.appendingPathComponent("original-sign-in")
+        try Fixture.writeAuth(originalHome, account: "shared-workspace", refresh: "synthetic-selected-grant", expired: false)
+        let chosenFile = selected.appendingPathComponent("auth.json")
+        let selectedData = try withAccountSubject(Data(contentsOf: originalHome.appendingPathComponent("auth.json")),
+                                                  subject: "selected-user")
+        try selectedData.write(to: chosenFile)
+        try AuthSwap$Codex.activate(columnID: chosen.id, home: selected)
+        let refreshHome = Fixture.root.appendingPathComponent("native-sign-in")
+        let workspace = change == "different-workspace" ? "other-workspace" : "shared-workspace"
+        try Fixture.writeAuth(refreshHome, account: workspace, refresh: "synthetic-different-grant", expired: false)
+        let subject = change == "rotation" ? "selected-user" : "independent-user"
+        let latest = try withAccountSubject(Data(contentsOf: refreshHome.appendingPathComponent("auth.json")), subject: subject)
+        if mode == "file" { try latest.write(to: native.appendingPathComponent("auth.json")) }
+        else { Fixture.codexKeychain[Fixture.codexKey(native)] = latest }
+        if change == "failed-switch" {
+            Fixture.denyCodexWriteAccount = Fixture.codexKey(native)
+            for _ in 0..<2 {
+                let failed = Result { try AuthSwap$Codex.restoreDefault() }
+                try expect((try? failed.get()) == nil, "The native publication was not refused")
+                let count = try visibleLogins().filter { AuthStorage$Codex.sameCredentials($0, latest) }.count
+                try expect(count == 1, "A failed switch exposed another copy of the active login")
+            }
+            Fixture.denyCodexWriteAccount = nil
+        }
+        try AuthSwap$Codex.restoreDefault()
+        let selectedAfter = try Data(contentsOf: chosenFile)
+        let latestCount = try visibleLogins().filter { AuthStorage$Codex.sameCredentials($0, latest) }.count
+        let selectedPreserved = AuthStorage$Codex.sameCredentials(selectedData, selectedAfter)
+        let originalRestored = try AuthSwap$Codex.authData(home: native) == primary
+        let physicalRecovery = try manager.contentsOfDirectory(at: AuthSwap$Codex.stashHome.deletingLastPathComponent(),
+                                                               includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("orphaned-") }
+            .filter { AuthStorage$Codex.sameCredentials(try? AuthSwap$Codex.authData(home: $0), latest) }.count
+        print("Original primary restored: \(originalRestored); selected login preserved: \(selectedPreserved); new visible logins: \(latestCount); new logins saved in orphan directories: \(physicalRecovery)")
+        try expect(originalRestored && latestCount == 1, "The independent native login is not discoverable after switch")
+        try expect(selectedPreserved == (change != "rotation"), "Copyback overwrote a different selected login")
+        if change == "failed-switch" {
+            try expect(physicalRecovery == 1, "Retry created another private copy of the same native login")
+            try checkpointCycle(updated: latest, primary: primary)
+        }
+    }
+
+    private static func extraAuditLegacyLogin(mode: String) throws {
+        let native = AuthSwap$Codex.baseHome
+        try Fixture.codexLogin(native, account: "current", mode: mode)
+        let home = AuthSwap$Codex.stashHome.deletingLastPathComponent()
+            .appendingPathComponent("orphaned-" + UUID().uuidString, isDirectory: true)
+        try Fixture.codexLogin(home, account: "previously-saved", mode: mode)
+        let data = try AuthSwap$Codex.authData(home: home)!
+        let counts = try (0..<3).map { _ in try visibleLogins().filter { $0 == data }.count }
+        try expect(counts == [1, 1, 1], "A login saved by an older switch is still missing from discovery")
+    }
+
+    private static func extraAuditRestart(denyDelete: Bool, operation: String) async throws {
+        let snapshot = try Data(contentsOf: Fixture.root.appendingPathComponent("cycle-restart.plist"))
+        let state = try PropertyListSerialization.propertyList(from: snapshot, format: nil) as! [String: Any]
+        for (key, value) in state["defaults"] as! [String: Any] { UserDefaults.standard.set(value, forKey: key) }
+        Fixture.codexKeychain = state["keychain"] as! [String: Data]
+        Fixture.codexHome = state["home"] as? String
+        let native = AuthSwap$Codex.baseHome
+        let stash = URL(fileURLWithPath: state["backup"] as! String, isDirectory: true)
+        let primary = state["primary"] as! Data
+        let stashKey = Fixture.codexKey(stash)
+        let name = "audit-standalone-file"
+        let independent = try Fixture.codexAccount(name)
+        guard case .codexHome(let home) = independent.source else { throw Failure(description: "Missing independent file home") }
+        try Fixture.codexLogin(home, account: name, mode: "file")
+        try expect(Fixture.codexKeychain[Fixture.codexKey(native)] == primary && Fixture.codexKeychain[stashKey] == primary,
+                   "Fixture did not stop after native publication and before backup cleanup")
+        if denyDelete { Fixture.denyCodexDeleteAccount = stashKey }
+        let discovery = Discovery$Real()
+        guard let found = discovery.discover().first(where: { $0.id == independent.id }) else {
+            throw Failure(description: "Independent profile was not discovered")
+        }
+        if denyDelete {
+            let routes = try? visibleLogins().filter { $0 == primary }.count
+            if let routes { try expect(routes == 1, "An undeletable duplicate appeared as a second profile") }
+            try expect(Fixture.codexKeychain[stashKey] == primary, "The denied backup deletion was not retried safely")
+        }
+        let requests = Fixture.usageCalls
+        if operation == "usage" {
+            let results = await [Provider$Codex().fetch(found), Provider$Codex().fetch(found), Provider$Codex().fetch(found)]
+            let successes = results.filter { outcome in if case .success = outcome { return true }; return false }.count
+            print("Independent profile visible: true; successes: \(successes); usage requests: \(Fixture.usageCalls - requests)")
+            try expect(successes == 3 && Fixture.usageCalls - requests == 3, "A refusal to delete another profile prevented usage polling")
+        } else if operation == "remove" {
+            let result = Result { try AccountRemoval.remove(found) }
+            try expect((try? result.get()) != nil && !discovery.discover().contains { $0.id == found.id },
+                       "A refusal to delete another profile prevented removing an independent profile")
+        } else {
+            let result = Result { try AuthSwap$Codex.activate(columnID: independent.id, home: home) }
+            let success = (try? result.get()) != nil
+            let active = AuthSwap$Codex.activeColumnID == independent.id
+            print("Independent switch success: \(success); active: \(active)")
+            try expect(success && active, "A refusal to delete another profile prevented switching to an independent profile")
+            if ["retry", "relogin", "remove-alternate"].contains(operation) {
+                try expect(Fixture.codexKeychain[stashKey] == primary, "Switching overwrote the parked owner")
+                let oldFile = stash.appendingPathComponent("auth.json")
+                let fallback = try Data(contentsOf: oldFile)
+                if operation == "relogin" { try Fixture.codexLogin(stash, account: "new-parked-login", mode: "keyring") }
+                if operation == "remove-alternate" {
+                    try Fixture.codexMode(stash, "file")
+                    guard let alternate = discovery.discover().first(where: { account in
+                        guard case .codexHome(let home) = account.source else { return false }
+                        return home.path == stash.path
+                    }) else { throw Failure(description: "The independent alternate backend was not discovered") }
+                    try AccountRemoval.remove(alternate)
+                    try expect(!manager.fileExists(atPath: oldFile.path) && Fixture.codexKeychain[stashKey] == primary,
+                               "Removing the alternate tried to remove the denied duplicate")
+                }
+                let expected = operation == "relogin" ? Fixture.codexKeychain[stashKey] : nil
+                Fixture.denyCodexDeleteAccount = nil
+                _ = discovery.discover()
+                try expect(Fixture.codexKeychain[stashKey] == expected,
+                           "Retry did not delete only the old duplicate across the switch")
+                if operation == "remove-alternate" { return }
+                if operation != "relogin" {
+                    try expect(try Data(contentsOf: oldFile) == fallback, "Retry destroyed the alternate storage login")
+                    try Fixture.codexMode(stash, "file")
+                }
+                let visible = operation == "relogin" ? expected : fallback
+                let counts = try (0..<3).map { _ in try visibleLogins().filter { $0 == visible }.count }
+                try expect(counts == [1, 1, 1], "The surviving login is missing or listed twice after retry")
+            }
         }
     }
 

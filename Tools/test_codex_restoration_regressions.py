@@ -292,3 +292,57 @@ combined = (
 for mode, cut, *conditions in combined:
     name = "_".join((mode, cut, *conditions)).replace("-", "_")
     setattr(CodexRestorationRegressions, "test_combined_" + name, audit_combined(mode, cut, *conditions))
+
+def extra_audit_restart(mode, denial, operation):
+    def test(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-extra-audit-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            before = swift_regression.run_fixture(self.executable, f"audit-backup:{mode}:cut-before-delete", root)
+            self.assertEqual(before.returncode, 86, before.stdout + before.stderr)
+            after = swift_regression.run_fixture(self.executable, f"extra-audit-restart:{denial}:{operation}", root)
+            self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
+    return test
+
+for mode, change in product(("file", "keyring"), ("rotation", "same-workspace", "different-workspace")):
+    name = "_".join((mode, change)).replace("-", "_")
+    setattr(CodexRestorationRegressions, "test_extra_copyback_" + name,
+            scenario_test(f"extra-audit-copyback:{mode}:{change}"))
+
+for denial, operation in product(("denied", "available"), ("usage", "switch")):
+    setattr(CodexRestorationRegressions, "test_extra_restart_" + denial + "_" + operation,
+            extra_audit_restart("keyring", denial, operation))
+
+for operation in ("retry", "relogin", "remove", "remove-alternate"):
+    setattr(CodexRestorationRegressions, "test_extra_restart_denied_" + operation.replace("-", "_"),
+            extra_audit_restart("keyring", "denied", operation))
+
+for operation in ("retry", "relogin"):
+    setattr(CodexRestorationRegressions, "test_extra_restart_auto_denied_" + operation,
+            extra_audit_restart("auto", "denied", operation))
+
+for mode in ("file", "keyring"):
+    setattr(CodexRestorationRegressions, "test_extra_legacy_login_" + mode,
+            scenario_test("extra-audit-legacy-login:" + mode))
+
+def extra_audit_failed_switch(self):
+    with tempfile.TemporaryDirectory(prefix="notchlimits-codex-failed-switch-", dir="/private/tmp") as directory:
+        root = pathlib.Path(directory)
+        for scenario in ("extra-audit-copyback:keyring:failed-switch", "restart-after-cycle"):
+            result = swift_regression.run_fixture(self.executable, scenario, root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+CodexRestorationRegressions.test_extra_relogin_retry_survives_restart = extra_audit_failed_switch
+
+def extra_audit_copy_restart(mode, change):
+    def test(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-extra-copy-audit-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            before = swift_regression.run_fixture(self.executable, f"extra-audit-copy-seed:{mode}:{change}", root)
+            self.assertEqual(before.returncode, 0, before.stdout + before.stderr)
+            after = swift_regression.run_fixture(self.executable, "extra-audit-copy-restart", root)
+            self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
+    return test
+
+for mode, change in product(("file", "keyring"), ("rotation", "same-workspace")):
+    name = "_".join((mode, change)).replace("-", "_")
+    setattr(CodexRestorationRegressions, "test_extra_primary_copy_" + name, extra_audit_copy_restart(mode, change))
