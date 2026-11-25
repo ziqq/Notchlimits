@@ -11,6 +11,7 @@ enum Transactions$Codex {
 
     static func main() async {
         do {
+            CodexFileMutation.afterTransfer = { source, _ in TransactionSignals.removed?(source) }
             let parts = CommandLine.arguments[1].split(separator: ":").map(String.init)
             Fixture.keychainExists = false
             switch parts[0] {

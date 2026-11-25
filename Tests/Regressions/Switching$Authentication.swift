@@ -4,6 +4,7 @@ private enum DesktopFixture {
     static var opens = 0
     static var installed = true
     static var duringStop: (() -> Void)?
+    static var openArguments: [String] = []
 }
 
 final class NSRunningApplication {
@@ -30,9 +31,10 @@ final class NSWorkspace {
         DesktopFixture.installed ? Fixture.root.appendingPathComponent("Desktop.app") : nil
     }
 
-    func openApplication(at _: URL, configuration _: OpenConfiguration,
+    func openApplication(at _: URL, configuration: OpenConfiguration,
                          completionHandler: (NSRunningApplication?, Error?) -> Void) {
         DesktopFixture.opens += 1
+        DesktopFixture.openArguments = configuration.arguments
         DesktopFixture.running = true
         completionHandler(NSRunningApplication(), nil)
     }
@@ -47,6 +49,7 @@ enum Switching$Authentication {
         do {
             let scenario = CommandLine.arguments[1]
             if scenario.hasPrefix("codex-") { try await codex(scenario) }
+            else if scenario.hasPrefix("claude-readded-") { try await claudeReadded(scenario) }
             else { try await claude(scenario) }
         } catch {
             print("FAIL: \(error)")
@@ -114,6 +117,68 @@ enum Switching$Authentication {
         }
         try expect(Fixture.refreshCalls == 0 && Fixture.keychainWrites == 0,
                    "Desktop switch performed a renewal or wrote Claude credentials")
+    }
+
+    private static func claudeReadded(_ scenario: String) async throws {
+        let directory = ProfileDirectories.claudeRoot.appendingPathComponent("work", isDirectory: true)
+        let service = AuthStorage$Claude.profileService(forConfigPath: directory.path)
+        let columnID = "claude:" + service
+        Fixture.claudeEntries = [:]
+        func addProfile(_ name: String) throws -> DiscoveredAccount {
+            try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+            let data = try JSONSerialization.data(withJSONObject: Fixture.claudeLogin(name, expired: false))
+            try data.write(to: directory.appendingPathComponent(".credentials.json"), options: .atomic)
+            guard let account = Discovery$Real().discover().first(where: { $0.id == columnID }) else {
+                throw Failure(description: "Real discovery missed the Claude profile")
+            }
+            return account
+        }
+
+        let selected = try addProfile("selected")
+        let originalKey = AppSwitcher$Claude.key(for: columnID)
+        let cliEnabled = scenario.hasSuffix("-cli-on")
+        let beforeStop = scenario.hasPrefix("claude-readded-confirmation-")
+        CLISelection$Claude.isEnabled = cliEnabled
+        let pointer = DesktopApp.supportDirectory.appendingPathComponent("claude-cli/selected-profile")
+        try manager.createDirectory(at: pointer.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let originalSelection = Fixture.root.appendingPathComponent("previous-cli").path + "\n"
+        try Data(originalSelection.utf8).write(to: pointer)
+        let originalMarker = "previous-desktop"
+        UserDefaults.standard.set(originalMarker, forKey: "currentClaudeAppAccount")
+
+        let switcher: any AppAccountSwitcher = AppSwitcher$Claude()
+        var replacement: Result<DiscoveredAccount, Error>?
+        func readdProfile() throws -> DiscoveredAccount {
+            try AccountRemoval.remove(selected)
+            return try addProfile("replacement")
+        }
+        if beforeStop {
+            switcher.captureSelection(selected)
+            replacement = Result { try readdProfile() }
+        } else {
+            DesktopFixture.duringStop = { replacement = Result { try readdProfile() } }
+        }
+
+        let acceptedStaleSelection = await switchAccount(switcher, to: selected)
+        DesktopFixture.duringStop = nil
+        guard let replacement else { throw Failure(description: "Desktop did not reach the removal boundary") }
+        let rediscovered = try replacement.get()
+        let replacementKey = AppSwitcher$Claude.key(for: columnID)
+        try expect(rediscovered.id == selected.id && replacementKey != originalKey,
+                   "Removal and re-addition must produce a new Desktop generation at the same column ID")
+        try expect(!acceptedStaleSelection && DesktopFixture.opens == 0 && DesktopFixture.stops == (beforeStop ? 0 : 1)
+                   && UserDefaults.standard.string(forKey: "currentClaudeAppAccount") == originalMarker
+                   && (try String(contentsOf: pointer)) == originalSelection,
+                   "Stale selection launched the replacement profile or changed the prior Desktop or CLI selection")
+
+        let acceptedFreshSelection = await switchAccount(switcher, to: rediscovered)
+        let replacementDesktop = DesktopApp.supportDirectory.appendingPathComponent("claude-app/\(replacementKey)")
+        try expect(acceptedFreshSelection && DesktopFixture.opens == 1
+                   && DesktopFixture.openArguments == ["--user-data-dir=\(replacementDesktop.path)"]
+                   && switcher.isOpenInApp(columnID: columnID) == true
+                   && (try String(contentsOf: pointer)) == (cliEnabled ? directory.path + "\n" : originalSelection)
+                   && AppSwitchState.inProgress.isEmpty,
+                   "A fresh selection could not open the replacement or ignored the CLI option")
     }
 
     private static func codex(_ scenario: String) async throws {

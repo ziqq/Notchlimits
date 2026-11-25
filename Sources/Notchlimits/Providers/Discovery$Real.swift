@@ -6,7 +6,9 @@ import Foundation
 struct Discovery$Real: AccountDiscovery {
 
     func discover() -> [DiscoveredAccount] {
-        claudeAccounts() + codexAccounts() + kimiAccounts() + grokAccounts()
+        CLISelection$Claude.recoverInterruptedRetirement()
+        AppSwitcher$Claude.recoverInterruptedRemovals()
+        return claudeAccounts() + codexAccounts() + kimiAccounts() + grokAccounts()
     }
 
     private func kimiAccounts() -> [DiscoveredAccount] {

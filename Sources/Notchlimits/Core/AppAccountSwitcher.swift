@@ -1,4 +1,6 @@
 import AppKit
+import CryptoKit
+import Darwin
 
 /// Switch the desktop application account and optionally route new Claude CLI sessions.
 ///
@@ -21,6 +23,8 @@ protocol AppAccountSwitcher {
     /// Открыт ли аккаунт колонки в приложении. nil — неизвестно (через нас
     /// ещё не переключались).
     func isOpenInApp(columnID: String) -> Bool?
+    /// Bind the selected account before a confirmation can outlive it.
+    func captureSelection(_ account: DiscoveredAccount)
     /// Prepare the switch before stopping the running application.
     func beginSwitch(_ account: DiscoveredAccount) throws
     /// Приложение уже закрыто: подготовить аккаунт и вернуть параметры запуска.
@@ -31,6 +35,7 @@ protocol AppAccountSwitcher {
 }
 
 extension AppAccountSwitcher {
+    func captureSelection(_ account: DiscoveredAccount) {}
     func beginSwitch(_ account: DiscoveredAccount) {}
     func cancel() {}
 
@@ -90,7 +95,7 @@ func appAccountSwitcher(for provider: Provider) -> (any AppAccountSwitcher)? {
 final class AppSwitcher$Claude: AppAccountSwitcher {
     private var cliChange: CLISelection$Claude.Prepared?
     private var cliRevisionIsCurrent: (() -> Bool)?
-    private var preparedKey: String?
+    private var selectedKey: String?
     let bundleID = "com.anthropic.claudefordesktop"
     let appName = "Claude"
 
@@ -105,6 +110,74 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
         DesktopApp.supportDirectory.appendingPathComponent("claude-app", isDirectory: true)
     }
 
+    private struct Retirement: Codable {
+        struct Rollback: Codable {
+            let directory: String
+            let credentialFile: String
+        }
+
+        let columnID: String
+        let service: String
+        let directory: URL
+        let keychainOnly: Bool
+        let previousKey: String
+        let previousLogin: AuthStorage$Claude.DesktopLoginProof?
+        let generation: UUID
+        var staged: URL?
+        var rollback: Rollback?
+        var removed = false
+
+        func currentLogin() -> AuthStorage$Claude.DesktopLoginProof? {
+            AuthStorage$Claude.desktopLoginProof(service: service, directory: directory, keychainOnly: keychainOnly)
+        }
+
+        func matchesPreviousLogin(_ current: AuthStorage$Claude.DesktopLoginProof) -> Bool {
+            guard let previousLogin, current.directory != nil else { return false }
+            if current == previousLogin { return true }
+            guard let rollback, current.directory == rollback.directory,
+                  current.login == previousLogin.login, current.stub == previousLogin.stub,
+                  let owner = DirectoryIdentity.capture(directory) else { return false }
+            let descriptor = open(owner.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard descriptor >= 0 else { return false }
+            defer { _ = close(descriptor) }
+            guard let pinned = DirectoryIdentity.capture(descriptor: descriptor),
+                  AuthStorage$Claude.desktopDirectoryProof(pinned) == rollback.directory,
+                  AppSwitcher$Claude.credentialFileProof(descriptor) == rollback.credentialFile,
+                  currentLogin() == current else { return false }
+            return pinned.matches(directory) && AppSwitcher$Claude.credentialFileProof(descriptor) == rollback.credentialFile
+        }
+    }
+
+    static func credentialFileProof(_ parent: Int32) -> String? {
+        var info = stat()
+        guard fstatat(parent, ".credentials.json", &info, AT_SYMLINK_NOFOLLOW) == 0,
+              info.st_mode & S_IFMT == S_IFREG else { return nil }
+        return "\(info.st_dev):\(info.st_ino):\(info.st_birthtimespec.tv_sec):\(info.st_birthtimespec.tv_nsec)"
+    }
+
+    private static var retirements: URL { root.appendingPathComponent(".retirements", isDirectory: true) }
+
+    private static func receipt(for columnID: String) -> URL {
+        let name = SHA256.hash(data: Data(columnID.utf8)).map { String(format: "%02x", $0) }.joined()
+        return retirements.appendingPathComponent(name)
+    }
+
+    private static func save(_ retirement: Retirement) throws {
+        try PropertyListEncoder().encode(retirement).write(to: receipt(for: retirement.columnID), options: .atomic)
+    }
+
+    private static func load(from file: URL) throws -> Retirement? {
+        let retirement: Retirement
+        do { retirement = try PropertyListDecoder().decode(Retirement.self, from: Data(contentsOf: file)) }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile { return nil }
+        let base = AccountSwitcher.slug(retirement.columnID)
+        guard file.path == receipt(for: retirement.columnID).path,
+              retirement.previousKey == base || (retirement.previousKey.hasPrefix(base + "-")
+                  && UUID(uuidString: String(retirement.previousKey.dropFirst(base.count + 1))) != nil)
+        else { throw RetiredAccount() }
+        return retirement
+    }
+
     /// Стабильный ключ папки: из id колонки, не из имени (переименование
     /// колонки не должно осиротить папку данных).
     static func key(for columnID: String) -> String {
@@ -115,13 +188,136 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
         return base + "-" + generation
     }
 
-    static func accountRemoved(columnID: String) {
-        let previous = root.appendingPathComponent(key(for: columnID), isDirectory: true)
-        var generations = UserDefaults.standard.dictionary(forKey: generationsKey) as? [String: String] ?? [:]
-        generations[columnID] = UUID().uuidString
-        UserDefaults.standard.set(generations, forKey: generationsKey)
-        // A running Desktop may recreate its old path. Future switches use a new generation.
-        try? FileManager.default.removeItem(at: previous)
+    private static func finish(_ retirement: Retirement, removingOldData: Bool) throws {
+        let defaults = UserDefaults.standard
+        if key(for: retirement.columnID) == retirement.previousKey {
+            var generations = defaults.dictionary(forKey: generationsKey) as? [String: String] ?? [:]
+            generations[retirement.columnID] = retirement.generation.uuidString
+            defaults.set(generations, forKey: generationsKey)
+        }
+        guard defaults.synchronize() else { throw RetiredAccount() }
+        // A running Desktop may recreate this path. Its generation is retired.
+        if removingOldData {
+            try? FileManager.default.removeItem(at: root.appendingPathComponent(retirement.previousKey, isDirectory: true))
+        }
+        try FileManager.default.removeItem(at: receipt(for: retirement.columnID))
+    }
+
+    private static func finishRollback(_ retirement: Retirement) throws {
+        if retirement.rollback != nil, CLISelection$Claude.requiresDesktopRollbackProof(service: retirement.service) {
+            return
+        }
+        try FileManager.default.removeItem(at: receipt(for: retirement.columnID))
+    }
+
+    private static func recover(_ retirement: Retirement) throws {
+        if retirement.removed {
+            try finish(retirement, removingOldData: true)
+            return
+        }
+        guard let current = retirement.currentLogin() else { return }
+        if retirement.matchesPreviousLogin(current) {
+            try finishRollback(retirement)
+            return
+        }
+        // A moved profile may still own the old credentials. Give the CLI
+        // recovery a chance to restore it before deciding that deletion won.
+        if !current.hasCredential, let staged = retirement.staged, DirectoryIdentity.missingPath(staged) == nil {
+            guard let previous = retirement.previousLogin, previous.hasCredential,
+                  let parked = AuthStorage$Claude.desktopLoginProof(service: retirement.service, directory: staged,
+                                                                     keychainOnly: retirement.keychainOnly),
+                  parked.directory == previous.directory, !parked.hasCredential else { return }
+        }
+        guard current.directory != nil || !current.hasCredential else { return }
+        // An independently written login can use a fresh Desktop without
+        // touching the previous session when deletion could not be proved.
+        try finish(retirement, removingOldData: !current.hasCredential && retirement.previousLogin?.hasCredential == true)
+    }
+
+    static func recoverInterruptedRemovals() {
+        let files = (try? FileManager.default.contentsOfDirectory(at: retirements, includingPropertiesForKeys: nil)) ?? []
+        for file in files {
+            if let retirement = try? load(from: file) { try? recover(retirement) }
+        }
+    }
+
+    static func verifiedFileRollback(service: String, previous: DirectoryIdentity, restored: DirectoryIdentity) -> Bool {
+        guard let retirement = try? load(from: receipt(for: "claude:" + service)), retirement.service == service,
+              !retirement.removed, let rollback = retirement.rollback,
+              let oldOwner = AuthStorage$Claude.desktopDirectoryProof(previous), oldOwner == retirement.previousLogin?.directory,
+              AuthStorage$Claude.desktopDirectoryProof(restored) == rollback.directory,
+              restored.matches(retirement.directory), let current = retirement.currentLogin(),
+              current.directory == rollback.directory, retirement.matchesPreviousLogin(current)
+        else { return false }
+        return restored.matches(retirement.directory)
+    }
+
+    static func withDesktopRetirement(services: Set<String>, directory: URL, keychainOnly: Bool = false,
+                                      operation: (_ recordMove: @escaping (URL) throws -> Void,
+                                                  _ recordRollback: @escaping (Int32, Int32) -> Void) throws -> Void) throws {
+        var pending: [Retirement] = []
+        try FileManager.default.createDirectory(at: retirements, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        for service in services.sorted() {
+            let columnID = "claude:" + service
+            let file = receipt(for: columnID)
+            if let existing = try load(from: file) { try recover(existing) }
+            guard try load(from: file) == nil else { throw RetiredAccount() }
+            let retirement = Retirement(columnID: columnID, service: service, directory: directory,
+                                        keychainOnly: keychainOnly, previousKey: key(for: columnID),
+                                        previousLogin: AuthStorage$Claude.desktopLoginProof(service: service, directory: directory,
+                                                                                            keychainOnly: keychainOnly),
+                                        generation: UUID())
+            try save(retirement)
+            pending.append(retirement)
+        }
+        do {
+            try operation({ staged in
+                for index in pending.indices {
+                    pending[index].staged = staged
+                    try save(pending[index])
+                }
+            }, { source, destination in
+                guard let staged = DirectoryIdentity.capture(descriptor: source),
+                      let file = credentialFileProof(source),
+                      let restored = DirectoryIdentity.capture(descriptor: destination),
+                      restored.matches(directory), let restoredProof = AuthStorage$Claude.desktopDirectoryProof(restored)
+                else { return }
+                for index in pending.indices {
+                    let retirement = pending[index]
+                    let archivedDirectory = URL(fileURLWithPath: staged.path, isDirectory: true)
+                    guard let previous = retirement.previousLogin, previous.hasCredential,
+                          AuthStorage$Claude.desktopLoginProof(service: retirement.service, directory: archivedDirectory,
+                                                               keychainOnly: retirement.keychainOnly) == previous,
+                          credentialFileProof(source) == file, restored.matches(directory) else { continue }
+                    pending[index].rollback = Retirement.Rollback(directory: restoredProof, credentialFile: file)
+                    try? save(pending[index])
+                }
+            })
+        } catch {
+            for retirement in pending {
+                if let current = retirement.currentLogin(), retirement.matchesPreviousLogin(current) {
+                    try? finishRollback(retirement)
+                }
+            }
+            throw error
+        }
+        for var retirement in pending {
+            retirement.removed = true
+            try save(retirement)
+            try finish(retirement, removingOldData: true)
+        }
+    }
+
+    private static func switchKey(for columnID: String) throws -> String {
+        let file = receipt(for: columnID)
+        if let retirement = try load(from: file) { try recover(retirement) }
+        if let pending = try load(from: file) {
+            // A verified rollback is usable while CLI still needs its proof.
+            guard pending.rollback != nil, let current = pending.currentLogin(),
+                  pending.matchesPreviousLogin(current) else { throw RetiredAccount() }
+        }
+        return key(for: columnID)
     }
 
     func isOpenInApp(columnID: String) -> Bool? {
@@ -129,7 +325,14 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
         return current.isEmpty ? nil : current == Self.key(for: columnID)
     }
 
+    func captureSelection(_ account: DiscoveredAccount) {
+        selectedKey = Self.key(for: account.id)
+    }
+
     func beginSwitch(_ account: DiscoveredAccount) throws {
+        let current = try Self.switchKey(for: account.id)
+        if selectedKey == nil { selectedKey = current }
+        guard selectedKey == current else { throw RetiredAccount() }
         guard case .claudeKeychain(let service, _) = account.source else { return }
         // Cover the outgoing Desktop's shutdown and a setting change during launch.
         cliRevisionIsCurrent = AuthStorage$Claude.captureSelectionRevision(for: service)
@@ -137,10 +340,11 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
     }
 
     func prepare(_ account: DiscoveredAccount) throws -> NSWorkspace.OpenConfiguration {
-        let key = Self.key(for: account.id)
+        guard let key = selectedKey, key == (try Self.switchKey(for: account.id)) else {
+            throw RetiredAccount()
+        }
         let dir = Self.root.appendingPathComponent(key, isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        preparedKey = key
         let config = NSWorkspace.OpenConfiguration()
         config.arguments = ["--user-data-dir=\(dir.path)"]
         return config
@@ -149,10 +353,10 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
     func commit(_ account: DiscoveredAccount) throws {
         // Desktop has opened: keep its marker truthful even if an external
         // filesystem change prevents publishing the prepared CLI selection.
-        let launchedKey = preparedKey ?? Self.key(for: account.id)
+        guard let launchedKey = selectedKey else { throw RetiredAccount() }
         defer { UserDefaults.standard.set(launchedKey, forKey: Self.currentKey) }
         if CLISelection$Claude.isEnabled {
-            guard launchedKey == Self.key(for: account.id) else {
+            guard launchedKey == (try Self.switchKey(for: account.id)) else {
                 throw RetiredAccount()
             }
             let change = try cliChange ?? CLISelection$Claude.stage(account)
@@ -164,7 +368,7 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
     func cancel() {
         cliChange = nil
         cliRevisionIsCurrent = nil
-        preparedKey = nil
+        selectedKey = nil
     }
 }
 

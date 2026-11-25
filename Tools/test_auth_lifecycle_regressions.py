@@ -287,3 +287,12 @@ class AuthenticationLifecycleRegressions(unittest.TestCase):
 
     def test_usage_claude_keyring_restart_renew(self):
         self.check_scenario("usage:claude:keyring:restart-renew")
+
+    def test_usage_codex_auto_restart_denied(self):
+        self.check_scenario("usage:codex:auto:restart-denied")
+
+    def test_usage_claude_keyring_restart_denied(self):
+        self.check_scenario("usage:claude:keyring:restart-denied")
+
+    def test_usage_codex_file_restart_unowned(self):
+        self.check_scenario("usage:codex:file:restart-unowned")

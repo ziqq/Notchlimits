@@ -96,7 +96,7 @@ final class StorageLock$Claude: @unchecked Sendable {
 
     /// Rename a managed profile without making its pinned native locks appear
     /// lost to heartbeat or concurrent renewal checks during removal/rollback.
-    static func moveDirectory(from: URL, to: URL, locks: [StorageLock$Claude]) throws {
+    static func moveDirectory(from: URL, to: URL, locks: [StorageLock$Claude], exclusive: Bool = false) throws {
         locks.forEach { $0.stateLock.lock() }
         defer { locks.reversed().forEach { $0.stateLock.unlock() } }
         guard locks.allSatisfy({
@@ -105,7 +105,13 @@ final class StorageLock$Claude: @unchecked Sendable {
         }) else {
             throw Failure.lost
         }
-        try FileManager.default.moveItem(at: from, to: to)
+        if exclusive {
+            guard renameatx_np(AT_FDCWD, from.path, AT_FDCWD, to.path, UInt32(RENAME_EXCL)) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+        } else {
+            try FileManager.default.moveItem(at: from, to: to)
+        }
         for lock in locks {
             // A moved symlink may be removed before release; retain its physical target.
             lock.path = to.resolvingSymlinksInPath().appendingPathComponent(URL(fileURLWithPath: lock.path).lastPathComponent).path
@@ -494,10 +500,10 @@ final class RefreshLock$Claude: @unchecked Sendable {
         }
     }
 
-    func moveDirectory(from: URL, to: URL, storage: StorageLock$Claude) throws {
+    func moveDirectory(from: URL, to: URL, storage: StorageLock$Claude, exclusive: Bool = false) throws {
         guard let original = DirectoryIdentity.capture(from) else { throw StorageLock$Claude.Failure.lost }
         // The legacy OAuth lock is adjacent to the profile and stays in place.
-        try StorageLock$Claude.moveDirectory(from: from, to: to, locks: [current, storage])
+        try StorageLock$Claude.moveDirectory(from: from, to: to, locks: [current, storage], exclusive: exclusive)
         if let restored = DirectoryIdentity.capture(to), restored.isSameDirectory(as: original) {
             Self.moveFileOwners(from: original, to: restored)
         }

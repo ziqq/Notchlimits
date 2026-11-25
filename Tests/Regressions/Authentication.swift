@@ -36,7 +36,9 @@ private enum Fixture {
     static func classicKeychainDatabase() throws -> URL {
         if let codexDatabase { return codexDatabase }
         let path = root.appendingPathComponent("fixture-classic.keychain-db")
-        try Data().write(to: path, options: .withoutOverwriting)
+        if !Foundation.FileManager.default.fileExists(atPath: path.path) {
+            try Data().write(to: path, options: .withoutOverwriting)
+        }
         codexDatabase = path
         return path
     }
@@ -243,6 +245,23 @@ private enum Fixture {
         ], "unknown": "preserved"]
     }
 
+    static func seedUsageEpoch(_ login: UUID, columnID: String) {
+        var epochs = UserDefaults.standard.dictionary(forKey: "usageLoginEpochs") as? [String: String] ?? [:]
+        epochs[columnID] = login.uuidString
+        UserDefaults.standard.set(epochs, forKey: "usageLoginEpochs")
+    }
+
+    static func seedClaudeUsageEpoch(_ credentials: AuthStorage$Claude.Credentials, columnID: String) {
+        let fields = [service, credentials.accessToken, credentials.refreshToken ?? ""]
+        let bytes = fields.map { "\($0.utf8.count):\($0)" }.joined()
+        let key = SHA256.hash(data: Data(bytes.utf8)).map { String(format: "%02x", $0) }.joined()
+        let login = UUID()
+        var logins = UserDefaults.standard.dictionary(forKey: "claudeUsageLogins") as? [String: String] ?? [:]
+        logins[key] = login.uuidString
+        UserDefaults.standard.set(logins, forKey: "claudeUsageLogins")
+        seedUsageEpoch(login, columnID: columnID)
+    }
+
     static func codexKey(_ home: URL) -> String {
         // Independent native contract: Rust canonicalize uses realpath on macOS.
         let path: String
@@ -345,8 +364,31 @@ func fsetxattr(_ fd: Int32, _ name: UnsafePointer<CChar>, _ value: UnsafeRawPoin
     return result
 }
 
+private func codexStagedAuthFiles(_ fromFD: Int32, _ from: UnsafePointer<CChar>, _ toFD: Int32,
+                                  _ to: UnsafePointer<CChar>) -> (source: URL, destination: URL)? {
+    func directory(_ descriptor: Int32) -> URL? {
+        var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard fcntl(descriptor, F_GETPATH, &path) == 0 else { return nil }
+        return URL(fileURLWithPath: String(cString: path), isDirectory: true)
+    }
+    guard String(cString: from) == "auth.json", String(cString: to) == "auth.json",
+          let target = directory(toFD),
+          target.lastPathComponent.hasPrefix(".duplicate-") || target.lastPathComponent.hasPrefix(".returned-"),
+          let source = directory(fromFD) else { return nil }
+    return (source.appendingPathComponent("auth.json"), target.appendingPathComponent("auth.json"))
+}
+
+private func credentialRemovalDenied(_ file: URL) -> Bool {
+    file.path == Fixture.denyCredentialFileRemovalPath
+        || Fixture.denyCredentialFileRemoval && ["auth.json", ".credentials.json"].contains(file.lastPathComponent)
+}
+
 func renameatx_np(_ fromFD: Int32, _ from: UnsafePointer<CChar>, _ toFD: Int32,
                   _ to: UnsafePointer<CChar>, _ flags: UInt32) -> Int32 {
+    if let files = codexStagedAuthFiles(fromFD, from, toFD, to), credentialRemovalDenied(files.source) {
+        errno = EACCES
+        return -1
+    }
     if Fixture.nativeAcquisitionAtPublish && String(cString: to) == Fixture.oauthLock.path {
         Fixture.nativeAcquisitionAtPublish = false
         Fixture.nativeAcquisitionObserved = Darwin.mkdir(to, 0o700) == 0
@@ -362,10 +404,7 @@ private final class FixtureFileManager: Foundation.FileManager, @unchecked Senda
            url.path == denied || url.lastPathComponent.hasPrefix(".removed-") {
             throw CocoaError(.fileWriteNoPermission)
         }
-        if url.path == Fixture.denyCredentialFileRemovalPath { throw CocoaError(.fileWriteNoPermission) }
-        if Fixture.denyCredentialFileRemoval && ["auth.json", ".credentials.json"].contains(url.lastPathComponent) {
-            throw CocoaError(.fileWriteNoPermission)
-        }
+        if credentialRemovalDenied(url) { throw CocoaError(.fileWriteNoPermission) }
         try super.removeItem(at: url)
     }
 
@@ -3362,9 +3401,10 @@ enum Authentication {
         let id = AuthSwap$Codex.profileColumnID(home.lastPathComponent)
         try Fixture.codexLogin(home, account: "same-account", mode: mode, expired: true)
         guard let original = try AuthSwap$Codex.authData(home: home),
-              let directory = DirectoryIdentity.capture(home) else {
+              let directory = DirectoryIdentity.capture(home), let epoch = AuthSwap$Codex.usageLogin(original) else {
             throw Failure(description: "Expired login owner was not established")
         }
+        Fixture.seedUsageEpoch(epoch, columnID: id)
         // Seed a previous successful poll, then let the production provider renew
         // this already-expired login. No client rewrites credentials during the run.
         var cached = AccountColumn(id: id, provider: .codex, profileName: home.lastPathComponent)
@@ -9029,6 +9069,7 @@ enum Authentication {
             throw Failure(description: "Missing original Claude owner")
         }
         let id = fixtureAccount.id
+        Fixture.seedClaudeUsageEpoch(originalCredentials, columnID: id)
         var cached = AccountColumn(id: id, provider: .claude, profileName: "main")
         let window = LimitWindow(key: "five_hour", title: "Five hours", utilization: 7, resetsAt: nil)
         cached.windows = [window]
@@ -9475,9 +9516,10 @@ enum Authentication {
     private static func codexRejectedReceiptRetainedCache(replacing: Bool = true) async throws {
         let (account, live, originalSnapshot) = try routedUsageSetup(primary: false, mode: "file")
         guard case .codexHome(let home) = account.source,
-              let owner = DirectoryIdentity.capture(live) else {
+              let owner = DirectoryIdentity.capture(live), let epoch = AuthSwap$Codex.usageLogin(originalSnapshot.data) else {
             throw Failure(description: "Missing selected native directory owner")
         }
+        Fixture.seedUsageEpoch(epoch, columnID: account.id)
         var previous = AccountColumn(id: account.id, provider: .codex, profileName: account.profileName)
         previous.subtitle = "Synthetic original login A"
         previous.windows = [LimitWindow(key: "main.primary_window", title: "Five hours", utilization: 20, resetsAt: nil)]
@@ -9635,6 +9677,11 @@ enum Authentication {
             directory = ProfileDirectories.codexRoot.appendingPathComponent("own-renewal-state")
             id = AuthSwap$Codex.profileColumnID(directory.lastPathComponent)
             try Fixture.codexLogin(directory, account: "same-owner", mode: mode, expired: true)
+            guard let original = try AuthSwap$Codex.authData(home: directory),
+                  let epoch = AuthSwap$Codex.usageLogin(original) else {
+                throw Failure(description: "Missing original Codex usage epoch")
+            }
+            Fixture.seedUsageEpoch(epoch, columnID: id)
             provider = Provider$Codex()
         } else {
             let (account, file) = try claudeFileAccount(primary: true, expired: true)
@@ -9645,6 +9692,10 @@ enum Authentication {
                 Fixture.keychain = Fixture.claudeLogin("file-owner", expired: true)
                 Fixture.discoveredClaudeService = Fixture.service
             }
+            guard let original = AuthStorage$Claude.credentials(service: Fixture.service) else {
+                throw Failure(description: "Missing original Claude usage epoch")
+            }
+            Fixture.seedClaudeUsageEpoch(original, columnID: id)
             provider = Provider$Claude()
         }
         guard let owner = DirectoryIdentity.capture(directory) else { throw Failure(description: "Missing own-renewal owner") }

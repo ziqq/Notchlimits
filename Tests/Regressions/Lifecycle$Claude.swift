@@ -48,6 +48,12 @@ private enum ClaudeLifecycleSignals {
     static var storeReached = false
     static var searchList: ((UnsafeMutablePointer<CFArray?>) -> OSStatus)?
     static var deniedSelection: String?
+    static var cutAfterSelectionMove: String?
+    static var cutAfterProfileMove: String?
+    static var cutBeforeProfileMove: String?
+    static var cutAfterProfileCleanup: URL?
+    static var cutAfterCredentialDelete: String?
+    static var cutAfterCredentialRollback = false
     static var replacingLock: String?
     static var nativeLock: Int32 = -1
     static var crashOnSwap = false
@@ -95,6 +101,35 @@ private enum ClaudeLifecycleSignals {
         errno = EACCES
         return true
     }
+
+    static func afterSelectionRename(_ path: String, result: Int32) {
+        if result == 0, path == cutAfterSelectionMove { _exit(86) }
+    }
+
+    static func afterProfileMove(from source: URL, to destination: URL) {
+        if source.path == cutAfterProfileMove, destination.lastPathComponent.hasPrefix(".removed-") {
+            _exit(86)
+        }
+    }
+
+    static func beforeProfileMove(from source: URL, to destination: URL) {
+        if source.path == cutBeforeProfileMove, destination.lastPathComponent.hasPrefix(".removed-") {
+            _exit(86)
+        }
+    }
+
+    static func afterProfileCleanup(_ directory: URL) {
+        if directory.deletingLastPathComponent().path == cutAfterProfileCleanup?.path,
+           directory.lastPathComponent.hasPrefix(".removed-") { _exit(86) }
+    }
+
+    static func afterCredentialDelete(_ service: String) {
+        if service == cutAfterCredentialDelete { _exit(86) }
+    }
+
+    static func afterCredentialRollback(parent: Int32, name: String, result: Int32) {
+        if cutAfterCredentialRollback, result == 0, parent != AT_FDCWD, name == ".credentials.json" { _exit(86) }
+    }
 }
 
 @main
@@ -108,6 +143,22 @@ enum Lifecycle$Claude {
                 try filePointer(mode: args[1])
             case "cli-removed":
                 try cliRemoved(mode: args[1])
+            case "cli-retirement-cut":
+                try cliRetirementCut(phase: args[1], backend: args[2], selection: args[3])
+            case "cli-retirement-replay":
+                try cliRetirementReplay(phase: args[1], backend: args[2], selection: args[3], behavior: args[4])
+            case "desktop-retirement-cut":
+                try desktopRetirementCut(deleted: args[1] == "deleted")
+            case "desktop-retirement-replay":
+                try desktopRetirementReplay(deleted: args[1] == "deleted")
+            case "desktop-stub-cut":
+                try desktopStubCut(deleted: args[1] == "deleted")
+            case "desktop-stub-replay":
+                try desktopStubReplay(deleted: args[1] == "deleted")
+            case "desktop-rollback-cut":
+                try desktopRollbackCut(selected: args[1] != "restored")
+            case "desktop-rollback-replay":
+                try desktopRollbackReplay(mode: args[1])
             case "dotdir":
                 try dotdir(mode: args[1])
             case "lock-syscall":
@@ -164,6 +215,266 @@ enum Lifecycle$Claude {
         AppSwitcher$Claude().switchTo(account) { result = $0 }
         guard let result else { throw Failure(description: "Fixture switch did not complete") }
         try result.get()
+    }
+
+    private static var cliSupport: URL { DesktopApp.supportDirectory.appendingPathComponent("claude-cli") }
+    private static var cliPointer: URL { cliSupport.appendingPathComponent("selected-profile") }
+    private static let retiringProfileName = "retiring-claude"
+
+    private static func desktopDirectory() throws -> URL {
+        let prefix = "--user-data-dir="
+        guard let argument = Fixture.desktopArguments.first(where: { $0.hasPrefix(prefix) }) else {
+            throw Failure(description: "Desktop launch did not report its real data directory")
+        }
+        return URL(fileURLWithPath: String(argument.dropFirst(prefix.count)), isDirectory: true)
+    }
+
+    @MainActor
+    private static func desktopRetirementCut(deleted: Bool) throws {
+        Fixture.claudeEntries = [:]
+        try switchTo(profile(file: true, name: "previous").0)
+        CLISelection$Claude.isEnabled = false
+        let (target, directory) = try profile(file: true, name: retiringProfileName)
+        try switchTo(target)
+        try Data("previous Desktop session".utf8).write(to: desktopDirectory().appendingPathComponent("session"))
+        if deleted { ClaudeLifecycleSignals.cutAfterProfileCleanup = directory.deletingLastPathComponent() }
+        else { ClaudeLifecycleSignals.cutBeforeProfileMove = directory.path }
+        try AccountRemoval.remove(target)
+        throw Failure(description: "The Desktop retirement cut was not reached")
+    }
+
+    @MainActor
+    private static func desktopRetirementReplay(deleted: Bool, selectedName: String = "previous") throws {
+        Fixture.claudeEntries = [:]
+        CLISelection$Claude.isEnabled = false
+        let directory = ProfileDirectories.claudeRoot.appendingPathComponent(retiringProfileName)
+        let id = "claude:" + AuthStorage$Claude.profileService(forConfigPath: directory.path)
+        let priorDesktop = DesktopApp.supportDirectory.appendingPathComponent("claude-app/" + AccountSwitcher.slug(id))
+        let marker = priorDesktop.appendingPathComponent("session")
+        let manager = Foundation.FileManager.default
+        try expect(manager.fileExists(atPath: directory.path) != deleted && manager.fileExists(atPath: marker.path),
+                   "The interrupted child did not stop before changing the Desktop generation")
+        let selected = deleted ? try profile(file: true, name: retiringProfileName, login: "replacement").0
+            : Discovery$Real().discover().first(where: { $0.id == id })
+        guard let selected else { throw Failure(description: "Replay could not find the Claude profile") }
+        try switchTo(selected)
+        try expect((try desktopDirectory().path == priorDesktop.path) == !deleted,
+                   "Desktop reused the retired generation or discarded the unchanged generation")
+        try expect(try String(contentsOf: marker, encoding: .utf8) == "previous Desktop session",
+                   "An uncertain deletion destroyed the prior Desktop data")
+        let expected = ProfileDirectories.claudeRoot.appendingPathComponent(selectedName).path + "\n"
+        try expect(try String(contentsOf: cliPointer, encoding: .utf8) == expected,
+                   "Desktop retirement changed the independently selected CLI route")
+    }
+
+    @MainActor
+    private static func desktopStubCut(deleted: Bool) throws {
+        let service = AuthStorage$Claude.baseService
+        let id = "claude:" + service
+        let directory = ProfileDirectories.home.appendingPathComponent(".claude")
+        try Foundation.FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        CLISelection$Claude.isEnabled = false
+        Fixture.claudeEntries = [service: Fixture.claudeLogin("old-primary", expired: false)]
+        guard let signedIn = Discovery$Real().discover().first(where: { $0.id == id }) else {
+            throw Failure(description: "The main login was not discovered")
+        }
+        try switchTo(signedIn)
+        try Data("previous Desktop session".utf8).write(to: desktopDirectory().appendingPathComponent("session"))
+
+        Fixture.claudeEntries = [service: ["trustedDeviceToken": "synthetic-logged-out-primary"]]
+        guard let stub = Discovery$Real().discover().first(where: { $0.id == id }), stub.claudePrimaryOwner == .keychain,
+              AuthStorage$Claude.hasNoLogin(service: service, interactive: false) else {
+            throw Failure(description: "Discovery did not present the main Keychain stub for removal")
+        }
+        if deleted { ClaudeLifecycleSignals.cutAfterCredentialDelete = service }
+        else { Fixture.beforeCredentialDelete = { _exit(86) } }
+        try AccountRemoval.remove(stub)
+        throw Failure(description: "The synthetic Keychain stub deletion boundary was not reached")
+    }
+
+    @MainActor
+    private static func desktopStubReplay(deleted: Bool) throws {
+        let service = AuthStorage$Claude.baseService
+        let id = "claude:" + service
+        let previous = DesktopApp.supportDirectory.appendingPathComponent("claude-app/" + AccountSwitcher.slug(id))
+        let manager = Foundation.FileManager.default
+        let marker = previous.appendingPathComponent("session")
+        try expect(manager.fileExists(atPath: marker.path), "Child did not stop before changing Desktop generation")
+        Fixture.claudeEntries = deleted ? [:] : [service: ["trustedDeviceToken": "synthetic-logged-out-primary"]]
+        _ = Discovery$Real().discover()
+        CLISelection$Claude.isEnabled = false
+        Fixture.claudeEntries = [service: Fixture.claudeLogin("new-primary", expired: false)]
+        guard let signedIn = Discovery$Real().discover().first(where: { $0.id == id }) else {
+            throw Failure(description: "The replacement main login was not discovered")
+        }
+        try switchTo(signedIn)
+        try expect((try desktopDirectory().path == previous.path) == !deleted
+                   && manager.fileExists(atPath: marker.path) == !deleted,
+                   "Replaying stub removal reused a retired Desktop or discarded an unchanged session")
+    }
+
+    @MainActor
+    private static func desktopRollbackCut(selected: Bool) throws {
+        Fixture.claudeEntries = [:]
+        try switchTo(profile(file: true, name: "previous").0)
+        CLISelection$Claude.isEnabled = selected
+        let (target, directory) = try profile(file: true, name: retiringProfileName)
+        try switchTo(target)
+        try Data("previous Desktop session".utf8).write(to: desktopDirectory().appendingPathComponent("session"))
+        Fixture.beforeCredentialDelete = {
+            try! Foundation.FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        Fixture.denyKeychainDelete = true
+        ClaudeLifecycleSignals.cutAfterCredentialRollback = true
+        try AccountRemoval.remove(target)
+        throw Failure(description: "Refused deletion did not reach the exclusive file restore")
+    }
+
+    @MainActor
+    private static func desktopRollbackReplay(mode: String) throws {
+        Fixture.claudeEntries = [:]
+        let directory = ProfileDirectories.claudeRoot.appendingPathComponent(retiringProfileName)
+        let service = AuthStorage$Claude.profileService(forConfigPath: directory.path)
+        try expect(AuthStorage$Claude.credentials(service: service, interactive: false, verifyingOwner: true)?.accessToken
+                   == "synthetic-" + retiringProfileName,
+                   "The child did not restore the original credential before it stopped")
+        if mode == "restored" {
+            try desktopRetirementReplay(deleted: false)
+            return
+        }
+
+        let manager = Foundation.FileManager.default
+        try expect(!manager.fileExists(atPath: cliPointer.path),
+                   "The child had already published the old selection")
+        if mode == "copied" {
+            let file = directory.appendingPathComponent(".credentials.json")
+            let original = try manager.attributesOfItem(atPath: file.path)[.systemFileNumber] as? NSNumber
+            try Data(contentsOf: file).write(to: file, options: .atomic)
+            let copy = try manager.attributesOfItem(atPath: file.path)[.systemFileNumber] as? NSNumber
+            try expect(original != nil && copy != nil && original != copy,
+                       "The matching credentials were not replaced by a different file")
+            _ = Discovery$Real().discover()
+            let invoked = try invokeCLI()
+            try expect(!manager.fileExists(atPath: cliPointer.path) && invoked.0 != 0,
+                       "The CLI restored a byte-identical copy without the recorded credential inode")
+            return
+        }
+
+        if mode == "locked" {
+            let native = directory.appendingPathComponent(".oauth_refresh.lock")
+            try manager.createDirectory(at: native, withIntermediateDirectories: false)
+            _ = Discovery$Real().discover()
+            try expect(!manager.fileExists(atPath: cliPointer.path),
+                       "Replay took over a live native OAuth lock")
+            try manager.removeItem(at: native)
+        }
+        _ = Discovery$Real().discover()
+        let expected = directory.path + "\n"
+        try expect((try? String(contentsOf: cliPointer, encoding: .utf8)) == expected,
+                   "Restart did not restore the selection for the exact rolled-back credential file")
+        let invoked = try invokeCLI()
+        try expect(invoked.0 == 0 && invoked.1 == expected, "The rebound selection could not route CLI")
+        try desktopRetirementReplay(deleted: false, selectedName: retiringProfileName)
+    }
+
+    @MainActor
+    private static func cliRetirementCut(phase: String, backend: String, selection: String) throws {
+        Fixture.claudeEntries = [:]
+        let (target, directory) = try profile(file: backend == "file", name: retiringProfileName)
+        if selection == "target" {
+            try switchTo(target)
+        } else if selection == "previous" {
+            try switchTo(profile(file: true, name: "previous").0)
+        }
+        if phase == "pointer" {
+            ClaudeLifecycleSignals.cutAfterSelectionMove = cliPointer.path
+        } else {
+            ClaudeLifecycleSignals.cutAfterProfileMove = directory.path
+        }
+        try AccountRemoval.remove(target)
+        throw Failure(description: "The interrupted removal boundary was not reached")
+    }
+
+    @MainActor
+    private static func cliRetirementReplay(phase: String, backend: String, selection: String, behavior: String) throws {
+        let manager = Foundation.FileManager.default
+        let directory = ProfileDirectories.claudeRoot.appendingPathComponent(retiringProfileName)
+        let service = AuthStorage$Claude.profileService(forConfigPath: directory.path)
+        let id = "claude:" + service
+        let file = directory.appendingPathComponent(".credentials.json")
+        let staged = try manager.contentsOfDirectory(at: ProfileDirectories.claudeRoot, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix(".removed-") }
+        try expect(staged.count == (phase == "directory" ? 1 : 0)
+                   && manager.fileExists(atPath: directory.path) == (phase == "pointer"),
+                   "The child did not stop at the expected physical removal boundary")
+        guard let originalOwner = DirectoryIdentity.capture(staged.first ?? directory) else {
+            throw Failure(description: "Cannot capture the profile at the interrupted removal boundary")
+        }
+        let archivedFile = staged.first?.appendingPathComponent(".credentials.json")
+        let originalFile = backend == "file" ? try Data(contentsOf: archivedFile ?? file) : nil
+        Fixture.claudeEntries = backend == "file" ? [:] : [service: Fixture.claudeLogin(retiringProfileName, expired: false)]
+        let prior = try? String(contentsOf: cliPointer, encoding: .utf8)
+        let previous = ProfileDirectories.claudeRoot.appendingPathComponent("previous").path + "\n"
+        try expect(prior == (selection == "previous" ? previous : nil),
+                   "The cut unexpectedly changed a different profile's CLI route")
+
+        if behavior == "replacement" || behavior == "replacement-before-discovery" {
+            let replacement = try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("replacement", expired: false))
+            try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try replacement.write(to: file, options: .atomic)
+            if behavior == "replacement" { _ = Discovery$Real().discover() }
+            try expect(try Data(contentsOf: file) == replacement
+                       && !manager.fileExists(atPath: cliPointer.path),
+                       "Replay overwrote or selected an independent same-path login")
+            if let archivedFile {
+                let replacementAccount = DiscoveredAccount(id: id, provider: .claude, profileName: retiringProfileName,
+                                                           source: .claudeKeychain(service: service, configDir: directory))
+                try AccountRemoval.remove(replacementAccount)
+                _ = Discovery$Real().discover()
+                try expect(!manager.fileExists(atPath: directory.path),
+                           "Removing the replacement resurrected the original profile")
+                try expect(try Data(contentsOf: archivedFile) == originalFile,
+                           "Reoccupation destroyed the independently staged old login")
+            }
+            let rejected = try invokeCLI()
+            try expect(rejected.0 != 0, "The CLI used a retired route after a replacement login")
+            return
+        }
+
+        var newerSelection: String?
+        if behavior == "denied" || behavior == "newer" {
+            Fixture.denyClaudeRead = true
+            _ = Discovery$Real().discover()
+            try expect(!manager.fileExists(atPath: cliPointer.path)
+                       && (phase != "directory" || !manager.fileExists(atPath: directory.path)),
+                       "Replay published an unreadable login")
+            if behavior == "newer" {
+                let (newer, newerDirectory) = try profile(file: true, name: "newer")
+                try switchTo(newer)
+                newerSelection = newerDirectory.path + "\n"
+            }
+            Fixture.denyClaudeRead = false
+        }
+
+        // Recovery is discovery-driven and restores the old choice independently
+        // of whether future Desktop switches are allowed to change CLI.
+        CLISelection$Claude.isEnabled = false
+        let discovered = Discovery$Real().discover()
+        try expect(DirectoryIdentity.capture(directory)?.isSameDirectory(as: originalOwner) == true
+                   && discovered.contains(where: { $0.id == id })
+                   && AuthStorage$Claude.credentials(service: service, interactive: false, verifyingOwner: true)?.accessToken
+                        == "synthetic-" + retiringProfileName,
+                   "A fresh discovery did not recover the original Claude login")
+        if backend == "file" {
+            try expect(try Data(contentsOf: file) == originalFile, "Replay changed the original file credential")
+        }
+        let expectedRoute = newerSelection ?? (selection == "target" ? directory.path + "\n" : prior)
+        try expect((try? String(contentsOf: cliPointer, encoding: .utf8)) == expectedRoute,
+                   "Replay lost the verified prior CLI route or replaced a newer choice")
+        if let expectedRoute {
+            let invoked = try invokeCLI()
+            try expect(invoked.0 == 0 && invoked.1 == expectedRoute, "The recovered CLI route did not work")
+        }
     }
 
     @MainActor
@@ -288,6 +599,26 @@ enum Lifecycle$Claude {
                    "Recovery moved the new native lock from the public path")
     }
 
+    private static func invokeCLI() throws -> (Int32, String) {
+        let manager = Foundation.FileManager.default
+        let script = cliSupport.appendingPathComponent("profile.sh")
+        let fakeBin = Fixture.root.appendingPathComponent("bin")
+        try manager.createDirectory(at: fakeBin, withIntermediateDirectories: true)
+        let fake = fakeBin.appendingPathComponent("claude")
+        try Data("#!/bin/sh\nprintf '%s\\n' \"$CLAUDE_CONFIG_DIR\"\n".utf8).write(to: fake)
+        try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fake.path)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-f", "-c", ". \"$1\"; claude", "fixture", script.path]
+        process.environment = ["PATH": fakeBin.path + ":/usr/bin:/bin"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+    }
+
     @MainActor
     private static func cliRemoved(mode: String) throws {
         Fixture.claudeEntries = [:]
@@ -295,31 +626,16 @@ enum Lifecycle$Claude {
         let old = try profile(file: true, name: "previous")
         try switchTo(mode == "previous" ? old.0 : account)
         let manager = Foundation.FileManager.default
-        let script = DesktopApp.supportDirectory.appendingPathComponent("claude-cli/profile.sh")
-        let fakeBin = Fixture.root.appendingPathComponent("bin")
-        try manager.createDirectory(at: fakeBin, withIntermediateDirectories: true)
-        let fake = fakeBin.appendingPathComponent("claude")
-        try Data("#!/bin/sh\nprintf '%s\\n' \"$CLAUDE_CONFIG_DIR\"\n".utf8).write(to: fake)
-        try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fake.path)
-        func invoke() throws -> (Int32, String) {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments = ["-f", "-c", ". \"$1\"; claude", "fixture", script.path]
-            process.environment = ["PATH": fakeBin.path + ":/usr/bin:/bin"]
-            let output = Pipe()
-            process.standardOutput = output
-            process.standardError = Pipe()
-            try process.run()
-            process.waitUntilExit()
-            return (process.terminationStatus, String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
-        }
-        let before = try invoke()
+        let before = try invokeCLI()
         let expected = (mode == "previous" ? old.1 : directory).path + "\n"
         try expect(before.0 == 0 && before.1 == expected, "Original selected route did not work")
         if mode == "rollback-replacement" || mode == "rollback-empty" {
             let replacesLogin = mode == "rollback-replacement"
             let credentials = directory.appendingPathComponent(".credentials.json")
             let original = try Data(contentsOf: credentials)
+            let previousDesktop = try desktopDirectory()
+            let savedSession = previousDesktop.appendingPathComponent("session")
+            try Data("desktop session before refusal".utf8).write(to: savedSession)
             let replacement = try JSONSerialization.data(
                 withJSONObject: Fixture.claudeLogin("independent-new-login", expired: false))
             var reached = false
@@ -335,8 +651,15 @@ enum Lifecycle$Claude {
                        && (try Data(contentsOf: credentials)) == (replacesLogin ? replacement : original),
                        "Expected refused deletion to preserve an independent profile at the same path")
             CLISelection$Claude.isEnabled = false
+            guard let rediscovered = Discovery$Real().discover().first(where: { $0.id == account.id }) else {
+                throw Failure(description: "The profile was not rediscovered after refused removal")
+            }
+            try switchTo(rediscovered)
+            try expect((try desktopDirectory().path == previousDesktop.path) == !replacesLogin
+                       && (try String(contentsOf: savedSession, encoding: .utf8)) == "desktop session before refusal",
+                       "Desktop rollback reused the retired owner or lost the verified restored session")
             try switchTo(old.0)
-            let invoked = try invoke()
+            let invoked = try invokeCLI()
             print("rollback collision reached=\(reached) refused=\(refused) CLI used replacement=\(invoked.0 == 0 && invoked.1 == expected)")
             try expect(replacesLogin ? invoked.0 != 0 && invoked.1.isEmpty : invoked.0 == 0 && invoked.1 == expected,
                        "Rollback did not retain the route matching the credentials after recovery")
@@ -344,8 +667,7 @@ enum Lifecycle$Claude {
         } else if mode == "refused" || mode == "pointer-refused" {
             Fixture.denyCredentialFileRemoval = mode == "refused"
             if mode == "pointer-refused" {
-                ClaudeLifecycleSignals.deniedSelection = script.deletingLastPathComponent()
-                    .appendingPathComponent("selected-profile").path
+                ClaudeLifecycleSignals.deniedSelection = cliPointer.path
             }
             var refused = false
             do { try AccountRemoval.remove(account) } catch { refused = true }
@@ -361,7 +683,7 @@ enum Lifecycle$Claude {
             }
             try expect(!manager.fileExists(atPath: directory.path), "Production removal left the original directory")
             if mode != "previous" {
-                let removed = try invoke()
+                let removed = try invokeCLI()
                 try expect(removed.0 != 0 && removed.1.isEmpty, "Removed target still ran while absent")
             }
             let (_, replacement) = try profile(file: true, login: "different-login")
@@ -370,7 +692,7 @@ enum Lifecycle$Claude {
             CLISelection$Claude.isEnabled = false
             try switchTo(old.0)
         }
-        let after = try invoke()
+        let after = try invokeCLI()
         print("cli-removed", mode, "status", after.0, "routed into reusable path", after.1 == expected)
         if ["replacement", "orphan"].contains(mode) {
             try expect(after.0 != 0 && after.1.isEmpty, "The retired selection resumed under a replacement login without a CLI switch")
@@ -379,7 +701,7 @@ enum Lifecycle$Claude {
                 throw Failure(description: "Real discovery missed the re-added profile")
             }
             try switchTo(replacement)
-            let selected = try invoke()
+            let selected = try invokeCLI()
             try expect(selected.0 == 0 && selected.1 == expected, "An explicit switch could not select the re-added profile")
         } else {
             try expect(after.0 == 0 && after.1 == expected, "An unchanged or independent selected profile stopped routing")

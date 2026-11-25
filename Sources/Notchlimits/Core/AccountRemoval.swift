@@ -86,13 +86,16 @@ enum AccountRemoval {
                 // Logout removes Keychain metadata but leaves the profile and
                 // its Desktop session. Retire every supported path spelling.
                 let desktopServices = Set(services + AuthStorage$Claude.profileServices(in: directory))
-                try CLISelection$Claude.withRetiredSelection(services: desktopServices) { _ in
-                    try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot, move: { try move($0, $1) }) { _ in
-                        for service in services { try deleteKeychainEntry(service: service, validating: { try validate() }) }
+                try AppSwitcher$Claude.withDesktopRetirement(services: desktopServices, directory: directory) { recordMove, _ in
+                    try CLISelection$Claude.withRetiredSelection(services: desktopServices) { _, beforeMove in
+                        try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot, move: { try move($0, $1) },
+                                                 beforeStaging: { source, staged in
+                            try recordMove(staged)
+                            try beforeMove(source, staged)
+                        }) { _ in
+                            for service in services { try deleteKeychainEntry(service: service, validating: { try validate() }) }
+                        }
                     }
-                }
-                for service in desktopServices {
-                    AppSwitcher$Claude.accountRemoved(columnID: "claude:" + service)
                 }
             })
         } catch is StorageLock$Claude.Failure {
@@ -127,26 +130,35 @@ enum AccountRemoval {
                     // another Keychain owner has appeared, including native main.
                     guard !shared || owners.contains(service) else { throw Failure.busy }
                     var retainedFile: DirectoryIdentity?
-                    try CLISelection$Claude.withRetiredSelection(services: [service]) { fileRestored in
-                        if shared {
-                            // Other owners retain their shared configuration and fallback.
-                            if FileManager.default.fileExists(atPath: owner.appendingPathComponent(".credentials.json").path) {
-                                guard let identity = DirectoryIdentity.capture(owner) else { throw Failure.busy }
-                                retainedFile = identity
-                            }
-                            try deleteKeychainEntry(service: service, validating: { try validate() })
-                            if service == AuthStorage$Claude.baseService {
-                                AuthStorage$Claude.recordSharedPrimaryRemoval()
-                            }
-                        } else {
-                            try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot,
-                                                     move: { try move($0, $1) },
-                                                     restoredClaudeFileOwner: fileRestored) { moved in
-                                try deleteClaudeCredentials(service: service, configDir: moved, validating: { try validate() })
+                    let recoveryService = !shared && directory?.path.hasPrefix(ProfileDirectories.claudeRoot.path + "/") == true
+                        ? service : nil
+                    try AppSwitcher$Claude.withDesktopRetirement(services: [service], directory: owner,
+                                                                 keychainOnly: shared) { recordMove, recordDesktopRollback in
+                        try CLISelection$Claude.withRetiredSelection(services: [service],
+                                                                    directoryRecoveryService: recoveryService) { fileRestored, beforeMove in
+                            if shared {
+                                // Other owners retain their shared configuration and fallback.
+                                if FileManager.default.fileExists(atPath: owner.appendingPathComponent(".credentials.json").path) {
+                                    guard let identity = DirectoryIdentity.capture(owner) else { throw Failure.busy }
+                                    retainedFile = identity
+                                }
+                                try deleteKeychainEntry(service: service, validating: { try validate() })
+                                if service == AuthStorage$Claude.baseService {
+                                    AuthStorage$Claude.recordSharedPrimaryRemoval()
+                                }
+                            } else {
+                                try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot,
+                                                         move: { try move($0, $1) },
+                                                         beforeStaging: { source, staged in
+                                    try recordMove(staged)
+                                    try beforeMove(source, staged)
+                                }, restoringClaudeFile: recordDesktopRollback,
+                                   restoredClaudeFileOwner: fileRestored) { moved in
+                                    try deleteClaudeCredentials(service: service, configDir: moved, validating: { try validate() })
+                                }
                             }
                         }
                     }
-                    AppSwitcher$Claude.accountRemoved(columnID: account.id)
                     claudeRemoval?(ClaudeRemoval(service: service, retainedFile: retainedFile))
                 })
             } catch is StorageLock$Claude.Failure {
@@ -226,10 +238,12 @@ enum AccountRemoval {
     /// Cleanup of a hidden, logged-out directory cannot block same-name re-addition.
     private static func withProfileDirectory(_ directory: URL?, root: URL,
                                              move: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) },
+                                             beforeStaging: ((URL, URL) throws -> Void)? = nil,
                                              expectedOwner: DirectoryIdentity? = nil,
                                              rollbackFile: ((Bool) -> Void)? = nil,
                                              codexAuthRestoreCheck: ((URL, Int32) -> (() -> Bool)?)? = nil,
                                              restoredFileOwner: ((Int32, Int32) -> Void)? = nil,
+                                             restoringClaudeFile: ((Int32, Int32) -> Void)? = nil,
                                              restoredClaudeFileOwner: ((Int32, Int32) -> Void)? = nil,
                                              operation: (URL?) throws -> Void) throws {
         let manager = FileManager.default
@@ -244,6 +258,7 @@ enum AccountRemoval {
         guard !ProfileDirectories.containsNativeHome(directory) else { throw Failure.busy }
         let removed = directory.deletingLastPathComponent()
             .appendingPathComponent(".removed-" + UUID().uuidString, isDirectory: true)
+        try beforeStaging?(directory, removed)
         try move(directory, removed)
         do {
             if let expectedOwner {
@@ -281,7 +296,7 @@ enum AccountRemoval {
                                     authFileRestored: {
                                         rollbackFile?(true)
                                         restoredFileOwner?($0, $1)
-                                    }, claudeFileRestored: restoredClaudeFileOwner)
+                                    }, restoringClaudeFile: restoringClaudeFile, claudeFileRestored: restoredClaudeFileOwner)
             }
             throw error
         }
@@ -292,6 +307,7 @@ enum AccountRemoval {
                                         isProfileRoot: Bool = true,
                                         codexAuthRestoreCheck: ((URL, Int32) -> (() -> Bool)?)? = nil,
                                         authFileRestored: ((Int32, Int32) -> Void)? = nil,
+                                        restoringClaudeFile: ((Int32, Int32) -> Void)? = nil,
                                         claudeFileRestored: ((Int32, Int32) -> Void)? = nil) throws {
         let sourceFD = open(source.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard sourceFD >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
@@ -357,6 +373,7 @@ enum AccountRemoval {
                 try finishCodexAuthRestore()
                 throw error
             }
+            if isProfileRoot && name == ".credentials.json" { restoringClaudeFile?(sourceFD, destinationFD) }
             if renameatx_np(sourceFD, name, destinationFD, name, UInt32(RENAME_EXCL)) == 0 {
                 if let canRestore { codexFiles.append((name, stagedAuth, canRestore)) }
                 if isProfileRoot && name == "auth.json" {

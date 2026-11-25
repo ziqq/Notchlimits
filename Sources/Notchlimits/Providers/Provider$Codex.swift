@@ -25,6 +25,17 @@ struct Provider$Codex: UsageProvider {
         await fetchResult(account)
     }
 
+    /// nil means the routed login has no readable and current proof.
+    static func cachedUsageMatches(_ loginID: UUID, account: DiscoveredAccount,
+                                   route: AuthSwap$Codex.UsageOwner?) -> Bool? {
+        guard case .codexHome(let home) = account.source else { return nil }
+        let owner = AuthSwap$Codex.loginOwner(columnID: account.id, home: home)
+        guard owner.location == route, owner.authIdentity != nil,
+              (try? AuthSwap$Codex.isCurrent(owner, columnID: account.id, home: home)) == true,
+              let current = AuthSwap$Codex.usageLogin(owner) else { return nil }
+        return current == loginID
+    }
+
     private func fetchResult(_ account: DiscoveredAccount) async -> UsageFetchResult {
         guard case .codexHome(let home) = account.source else {
             return UsageFetchResult(outcome: .failure(L.t("error.unknownSource")))

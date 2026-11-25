@@ -7,6 +7,7 @@ private enum BackupSignals {
   static let manager = Foundation.FileManager.default
   static func main() async {
     do {
+      CodexFileMutation.afterTransfer = { source, _ in CleanupSignals.removed?(source) }
       Fixture.keychainExists = false
       let p = CommandLine.arguments[1].split(separator: ":").map(String.init)
       if p[0] == "empty" {

@@ -36,13 +36,90 @@ class ClaudeLifecycleRegressions(unittest.TestCase):
         assert support.count(rename) == 1
         support = support.replace(rename, """let result = Darwin.renameatx_np(fromFD, from, toFD, to, flags)
     ClaudeLifecycleSignals.afterRename(flags, result, parent: fromFD)
+    ClaudeLifecycleSignals.afterSelectionRename(String(cString: from), result: result)
+    ClaudeLifecycleSignals.afterCredentialRollback(parent: fromFD, name: String(cString: from), result: result)
     return result""")
+        move = "try super.moveItem(at: srcURL, to: dstURL)"
+        assert support.count(move) == 1
+        support = support.replace(move, "ClaudeLifecycleSignals.beforeProfileMove(from: srcURL, to: dstURL)\n        "
+                                  + move + "\n        ClaudeLifecycleSignals.afterProfileMove(from: srcURL, to: dstURL)")
+        remove = "try super.removeItem(at: url)"
+        assert support.count(remove) == 1
+        support = support.replace(remove, remove + "\n        ClaudeLifecycleSignals.afterProfileCleanup(url)")
+        delete = "Fixture.claudeEntries = entries\n        return errSecSuccess"
+        assert support.count(delete) == 1
+        support = support.replace(delete, "Fixture.claudeEntries = entries\n        ClaudeLifecycleSignals.afterCredentialDelete(service)\n        return errSecSuccess")
         name = "Lifecycle$Claude.swift"
         cls.fixture_path = pathlib.Path(fixture.name) / name
         cls.fixture_path.write_text(support + "\n" + (swift_regression.FIXTURES / name).read_text())
         authentication.AuthenticationRegressions.setUpClass.__func__(cls)
 
     check_scenario = authentication.AuthenticationRegressions.check_scenario
+
+    def check_cli_retirement_restart(self, phase, backend, selection, behavior="restore"):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-cli-retirement-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            cut = swift_regression.run_fixture(
+                self.executable, f"cli-retirement-cut:{phase}:{backend}:{selection}", root
+            )
+            self.assertEqual(cut.returncode, 86, cut.stdout + cut.stderr)
+            replay = swift_regression.run_fixture(
+                self.executable, f"cli-retirement-replay:{phase}:{backend}:{selection}:{behavior}", root
+            )
+            self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+
+    def test_interrupted_pointer_retirement_restores_the_verified_route(self):
+        for backend in ("file", "keychain"):
+            with self.subTest(backend=backend):
+                self.check_cli_retirement_restart("pointer", backend, "target")
+
+    def test_interrupted_directory_staging_restores_the_verified_profile(self):
+        for backend in ("file", "keychain"):
+            for selection in ("target", "previous", "none"):
+                with self.subTest(backend=backend, selection=selection):
+                    self.check_cli_retirement_restart("directory", backend, selection)
+
+    def test_interrupted_retirement_defers_while_keychain_is_denied(self):
+        for phase in ("pointer", "directory"):
+            with self.subTest(phase=phase):
+                self.check_cli_retirement_restart(phase, "keychain", "target", "denied")
+
+    def test_interrupted_retirement_preserves_a_new_same_path_login(self):
+        for phase in ("pointer", "directory"):
+            with self.subTest(phase=phase):
+                self.check_cli_retirement_restart(phase, "file", "target", "replacement")
+        self.check_cli_retirement_restart("directory", "file", "target", "replacement-before-discovery")
+
+    def test_interrupted_directory_staging_keeps_newer_cli_selection(self):
+        self.check_cli_retirement_restart("directory", "keychain", "target", "newer")
+
+    def check_desktop_retirement_restart(self, phase, case="desktop-retirement"):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-desktop-retirement-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            cut = swift_regression.run_fixture(self.executable, f"{case}-cut:{phase}", root)
+            self.assertEqual(cut.returncode, 86, cut.stdout + cut.stderr)
+            replay = swift_regression.run_fixture(self.executable, f"{case}-replay:{phase}", root)
+            self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+
+    def test_desktop_retirement_does_not_reuse_deleted_session_after_restart(self):
+        self.check_desktop_retirement_restart("deleted")
+
+    def test_desktop_retirement_keeps_session_when_restart_precedes_deletion(self):
+        self.check_desktop_retirement_restart("before")
+
+    def test_desktop_retirement_replays_main_stub_deletion_without_reusing_session(self):
+        self.check_desktop_retirement_restart("deleted", case="desktop-stub")
+
+    def test_desktop_retirement_keeps_main_session_if_stub_deletion_did_not_occur(self):
+        self.check_desktop_retirement_restart("before", case="desktop-stub")
+
+    def test_desktop_retirement_reuses_session_after_verified_rollback_rename(self):
+        self.check_desktop_retirement_restart("restored", case="desktop-rollback")
+
+    def test_cli_retirement_rebinds_only_the_original_rollback_file(self):
+        for phase in ("selected", "locked", "copied"):
+            with self.subTest(phase=phase):
+                self.check_desktop_retirement_restart(phase, case="desktop-rollback")
 
     def test_file_logout_during_selection_validation_preserves_the_previous_route(self):
         self.check_scenario("file-pointer:logout")

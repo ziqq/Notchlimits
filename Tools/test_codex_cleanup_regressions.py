@@ -35,7 +35,7 @@ class CodexCleanupRegressions(unittest.TestCase):
         cleanup = (swift_regression.FIXTURES / "Cleanup$Authentication.swift").read_text().replace(
             "@main enum Cleanup$Authentication", "enum Cleanup$Authentication", 1)
         cls.fixture_path = pathlib.Path(fixture.name) / "Cleanup$Codex.swift"
-        cls.fixture_path.write_text(support + "\n" + cleanup + "\n" +
+        cls.fixture_path.write_text(swift_regression.instrument_codex_file_transfer(support) + "\n" + cleanup + "\n" +
                                     (swift_regression.FIXTURES / "Cleanup$Codex.swift").read_text())
         authentication.AuthenticationRegressions.setUpClass.__func__(cls)
 

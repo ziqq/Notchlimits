@@ -17,7 +17,8 @@ class CodexRestorationRegressions(unittest.TestCase):
         support = (swift_regression.FIXTURES / "Authentication.swift").read_text().split("\n@main\n", 1)[0]
         boundaries = {
             "guard let data = Fixture.codexKeychain[key] else { return errSecItemNotFound }":
-                """if RestorationSignals.keychainDenied || key == RestorationSignals.unavailableKey { return errSecInteractionNotAllowed }
+                """if RestorationSignals.keychainDenied || key == RestorationSignals.unavailableKey
+            || RestorationSignals.denyRead?(key) == true { return errSecInteractionNotAllowed }
         guard let data = Fixture.codexKeychain[key] else { return errSecItemNotFound }""",
             "func SecItemDelete(_ query: CFDictionary) -> OSStatus {":
                 """func SecItemDelete(_ query: CFDictionary) -> OSStatus {
@@ -50,10 +51,6 @@ class CodexRestorationRegressions(unittest.TestCase):
             + "                Fixture.denyCodexDeleteAccount = destination\n            }\n"
             + "            RestorationSignals.afterMove?(key, destination)"
         )
-        database = "        try Data().write(to: path, options: .withoutOverwriting)\n        codexDatabase = path"
-        boundaries[database] = ("        if !Foundation.FileManager.default.fileExists(atPath: path.path) {\n"
-                                "            try Data().write(to: path, options: .withoutOverwriting)\n"
-                                "        }\n        codexDatabase = path")
         for before, after in boundaries.items():
             assert support.count(before) == 1, before
             support = support.replace(before, after)
@@ -61,7 +58,8 @@ class CodexRestorationRegressions(unittest.TestCase):
         assert support.count(assignment) == 2
         support = support.replace(assignment, "RestorationSignals.beforeWrite?(key)\n        " + assignment + "\n        RestorationSignals.didWrite(key)")
         cls.fixture_path = pathlib.Path(fixture.name) / "Restoration$Codex.swift"
-        cls.fixture_path.write_text(support + "\n" + (swift_regression.FIXTURES / "Restoration$Codex.swift").read_text())
+        cls.fixture_path.write_text(swift_regression.instrument_codex_file_transfer(support) + "\n"
+                                    + (swift_regression.FIXTURES / "Restoration$Codex.swift").read_text())
         authentication.AuthenticationRegressions.setUpClass.__func__(cls)
 
     check_scenario = authentication.AuthenticationRegressions.check_scenario
@@ -466,3 +464,57 @@ def audit_live_takeover_restart(mode, action):
 for mode, action in product(("keyring", "auto"), ("return", "remove")):
     name = f"test_final_audit_live_{mode}_{action}_after_move_denied_native_restart"
     setattr(CodexRestorationRegressions, name, audit_live_takeover_restart(mode, action))
+
+CodexRestorationRegressions.test_file_transfer_keeps_late_source = scenario_test("audit-mixed-import:replace-source")
+
+for occupancy in ("vacant", "occupied"):
+    phase = "replace-source-cut" if occupancy == "vacant" else "replace-source-cut-occupied"
+    setattr(CodexRestorationRegressions, f"test_file_transfer_restart_{occupancy}",
+            audit_mixed_import_cut(phase, "audit-file-transfer-restart:" + occupancy))
+
+for mode, action in product(("file", "keyring", "auto"), ("return", "remove")):
+    setattr(CodexRestorationRegressions, f"test_file_transfer_{mode}_{action}",
+            scenario_test(f"audit-file-return:{mode}:{action}"))
+
+for mode in ("keyring", "auto"):
+    setattr(CodexRestorationRegressions, f"test_file_transfer_publication_{mode}",
+            scenario_test("audit-file-publication:" + mode))
+
+
+def audit_paired_return(mode, phase):
+    def test(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-paired-return-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            cut = swift_regression.run_fixture(self.executable, f"audit-paired-return:{mode}:{phase}", root)
+            self.assertEqual(cut.returncode, 86, cut.stdout + cut.stderr)
+            restart = swift_regression.run_fixture(self.executable, "audit-paired-return-restart:" + phase, root)
+            self.assertEqual(restart.returncode, 0, restart.stdout + restart.stderr)
+    return test
+
+
+for mode in ("keyring", "auto"):
+    setattr(CodexRestorationRegressions, f"test_paired_return_{mode}_restart_and_remove", audit_paired_return(mode, "ready"))
+    setattr(CodexRestorationRegressions, f"test_paired_return_{mode}_denied_restart", audit_paired_return(mode, "denied"))
+    for phase in ("late-denied", "file-only", "keyring-only"):
+        setattr(CodexRestorationRegressions, f"test_paired_return_{mode}_{phase.replace('-', '_')}_restart",
+                audit_paired_return(mode, phase))
+    setattr(CodexRestorationRegressions, f"test_paired_return_{mode}_live_rollback",
+            scenario_test("audit-paired-return:" + mode + ":live"))
+
+
+def audit_published_fallback_restart(mode, remove_new_file=False):
+    def test(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-published-fallback-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            cut = swift_regression.run_fixture(self.executable, f"audit-file-publication:{mode}:cut", root)
+            self.assertEqual(cut.returncode, 86, cut.stdout + cut.stderr)
+            scenario = "audit-file-publication-restart" + (":remove-file" if remove_new_file else "")
+            restart = swift_regression.run_fixture(self.executable, scenario, root)
+            self.assertEqual(restart.returncode, 0, restart.stdout + restart.stderr)
+    return test
+
+
+for mode in ("keyring", "auto"):
+    setattr(CodexRestorationRegressions, f"test_file_transfer_publication_{mode}_restart", audit_published_fallback_restart(mode))
+    setattr(CodexRestorationRegressions, f"test_file_transfer_publication_{mode}_restart_remove_file",
+            audit_published_fallback_restart(mode, remove_new_file=True))

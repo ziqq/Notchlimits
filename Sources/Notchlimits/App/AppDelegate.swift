@@ -473,7 +473,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let account = store.account(for: id),
               let column = store.columns.first(where: { $0.id == id }),
               let switcher = appAccountSwitcher(for: account.provider) else { return }
-        (switcher as? AppSwitcher$Codex)?.captureSelection(account)
+        switcher.captureSelection(account)
         let confirm = NSAlert()
         confirm.messageText = L.t("appswitch.confirm.title")
         confirm.informativeText = L.t("appswitch.confirm.body", switcher.appName, column.displayName)

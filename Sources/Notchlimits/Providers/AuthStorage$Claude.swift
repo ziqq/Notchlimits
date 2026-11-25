@@ -69,11 +69,14 @@ enum AuthStorage$Claude {
 
     /// Keep the fallback file and Classic Keychain generation from before a
     /// secret read. A replacement may leave the item date unchanged.
-    private static func captureCredentialRevision(for service: String) -> () -> Bool? {
+    private static func captureCredentialRevision(for service: String, directory: DirectoryIdentity? = nil) -> () -> Bool? {
         let keychainIsCurrent = AuthStorage$Codex.captureClassicKeychainRevision()
-        let file = credentialFile(service: service)
-        let revision = file.flatMap(fallbackIdentity)
-        let fileIsCurrent = { credentialFile(service: service).flatMap(fallbackIdentity) == revision }
+        let file = {
+            directory.map { URL(fileURLWithPath: $0.path).appendingPathComponent(".credentials.json") }
+                ?? credentialFile(service: service)
+        }
+        let revision = file().flatMap(fallbackIdentity)
+        let fileIsCurrent = { file().flatMap(fallbackIdentity) == revision }
         return {
             if let keychainIsCurrent { return keychainIsCurrent(fileIsCurrent) }
             return fileIsCurrent() ? nil : false
@@ -254,8 +257,9 @@ enum AuthStorage$Claude {
     }
 
     /// Чтение секрета. Блокирующий вызов — только вне главного потока.
-    static func credentials(service: String, interactive: Bool = true, verifyingOwner: Bool = false) -> Credentials? {
-        let item = readItem(service: service, interactive: interactive, verifyingOwner: verifyingOwner)
+    static func credentials(service: String, interactive: Bool = true, verifyingOwner: Bool = false,
+                            directory: DirectoryIdentity? = nil) -> Credentials? {
+        let item = readItem(service: service, interactive: interactive, verifyingOwner: verifyingOwner, directory: directory)
         guard let json = item.json, var credentials = parse(json) else { return nil }
         credentials.backend = item.backend
         credentials.directory = item.directory
@@ -264,9 +268,9 @@ enum AuthStorage$Claude {
 
     /// Recheck the exact usage login at publication without adopting a fallback
     /// when the preferred Keychain owner cannot be verified.
-    static func isCurrent(_ expected: Credentials, service: String) throws -> Bool {
-        let stillCurrent = captureCredentialRevision(for: service)
-        let item = readItem(service: service, interactive: false, verifyingOwner: true)
+    static func isCurrent(_ expected: Credentials, service: String, directory: DirectoryIdentity? = nil) throws -> Bool {
+        let stillCurrent = captureCredentialRevision(for: service, directory: directory)
+        let item = readItem(service: service, interactive: false, verifyingOwner: true, directory: directory)
         guard let json = item.json else {
             if item.status == errSecItemNotFound { return false }
             throw UnavailableCredentials()
@@ -278,8 +282,63 @@ enum AuthStorage$Claude {
         if let verified = stillCurrent() { return verified }
         // A custom Keychain may allow reading the item without exposing its
         // database file. Confirm the fresh secret again in that environment.
-        return credentials(service: service, interactive: false, verifyingOwner: true)
+        return credentials(service: service, interactive: false, verifyingOwner: true, directory: directory)
             .map { $0.hasSameTokens(as: expected) } == true && stillCurrent() != false
+    }
+
+    struct DesktopLoginProof: Codable, Equatable {
+        let directory: String?
+        let login: Data?
+        let stub: Data?
+
+        var hasCredential: Bool { login != nil || stub != nil }
+    }
+
+    static func desktopDirectoryProof(_ owner: DirectoryIdentity) -> String? {
+        let directory = URL(fileURLWithPath: owner.path)
+        var info = stat()
+        guard owner.path.withCString({ Darwin.lstat($0, &info) }) == 0, owner.matches(directory) else { return nil }
+        return "\(info.st_dev):\(info.st_ino):\(info.st_birthtimespec.tv_sec):\(info.st_birthtimespec.tv_nsec)"
+    }
+
+    /// A missing proof means the owner or login could not be verified.
+    static func desktopLoginProof(service: String, directory: URL, keychainOnly: Bool) -> DesktopLoginProof? {
+        let owner = DirectoryIdentity.capture(directory)
+        let directoryProof: String?
+        if let owner {
+            guard let proof = desktopDirectoryProof(owner) else { return nil }
+            directoryProof = proof
+        } else {
+            guard DirectoryIdentity.missingPath(directory) != nil else { return nil }
+            directoryProof = nil
+        }
+        func observe() -> DesktopLoginProof? {
+            var item = readItem(service: service, interactive: false, backend: .keychain)
+            if !keychainOnly, item.status == errSecItemNotFound {
+                if let owner {
+                    item = readFile(service: service, directory: owner)
+                    if item.status == errSecItemNotFound,
+                       DirectoryIdentity.missingPath(directory.appendingPathComponent(".credentials.json")) == nil { return nil }
+                }
+            }
+            if item.status == errSecItemNotFound {
+                return DesktopLoginProof(directory: directoryProof, login: nil, stub: nil)
+            }
+            guard let json = item.json else { return nil }
+            let backend = item.backend == .keychain ? "keychain" : "file"
+            if isNoLogin(json) {
+                guard let data = try? JSONSerialization.data(withJSONObject: json, options: .sortedKeys) else { return nil }
+                return DesktopLoginProof(directory: directoryProof, login: nil,
+                                         stub: Data(SHA256.hash(data: Data(backend.utf8) + data)))
+            }
+            guard let login = parse(json),
+                  let tokens = try? JSONEncoder().encode([backend, login.accessToken, login.refreshToken]) else { return nil }
+            return DesktopLoginProof(directory: directoryProof, login: Data(SHA256.hash(data: tokens)), stub: nil)
+        }
+        let stillCurrent = captureCredentialRevision(for: service, directory: owner)
+        guard let first = observe(), observe() == first, stillCurrent() != false,
+              owner.map({ $0.matches(directory) }) ?? (DirectoryIdentity.missingPath(directory) != nil) else { return nil }
+        return first
     }
 
     /// Capture the existing no-login check together with its publication proof.
@@ -590,7 +649,7 @@ enum AuthStorage$Claude {
         })
     }
 
-    static func withRemovalLock(directory: URL, createParent: Bool = false,
+    static func withRemovalLock(directory: URL, createParent: Bool = false, exclusiveMove: Bool = false,
                                 validating operation: (_ move: @escaping (URL, URL) throws -> Void,
                                                        _ validate: @escaping () throws -> Void) throws -> Void) throws {
         try RefreshLock$Claude.withRemovalLock(directory: directory, createParent: createParent) { lease in
@@ -600,7 +659,9 @@ enum AuthStorage$Claude {
                 guard lease.isHeld, storage.isHeld else { throw StorageLock$Claude.Failure.lost }
             }
             try validate()
-            try operation({ from, to in try lease.moveDirectory(from: from, to: to, storage: storage) }, validate)
+            try operation({ from, to in
+                try lease.moveDirectory(from: from, to: to, storage: storage, exclusive: exclusiveMove)
+            }, validate)
         }
     }
 

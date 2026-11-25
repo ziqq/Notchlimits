@@ -27,15 +27,16 @@ actor Provider$Claude: UsageProvider {
         let bytes = fields.map { "\($0.utf8.count):\($0)" }.joined()
         return SHA256.hash(data: Data(bytes.utf8)).map { String(format: "%02x", $0) }.joined()
     }
+    private static let usageLoginsKey = "claudeUsageLogins"
     private var usageLogins: [String: UUID] =
-        (UserDefaults.standard.dictionary(forKey: "claudeUsageLogins") as? [String: String] ?? [:])
+        (UserDefaults.standard.dictionary(forKey: Provider$Claude.usageLoginsKey) as? [String: String] ?? [:])
             .compactMapValues { UUID(uuidString: $0) }
 
     private func rememberUsageLogin(_ login: UUID, identity: String) {
         guard usageLogins[identity] != login else { return }
         usageLogins[identity] = login
         // Persistent history needs a durable epoch, never raw credentials.
-        UserDefaults.standard.set(usageLogins.mapValues(\.uuidString), forKey: "claudeUsageLogins")
+        UserDefaults.standard.set(usageLogins.mapValues(\.uuidString), forKey: Self.usageLoginsKey)
     }
 
     private func usageLogin(_ credentials: AuthStorage$Claude.Credentials, service: String) -> UUID {
@@ -45,6 +46,25 @@ actor Provider$Claude: UsageProvider {
         let login = UUID()
         rememberUsageLogin(login, identity: key)
         return login
+    }
+
+    /// nil means the current login could not be verified without prompting.
+    static func cachedUsageMatches(_ loginID: UUID, account: DiscoveredAccount) -> Bool? {
+        guard case .claudeKeychain(let service, let directory) = account.source,
+              let credentials = AuthStorage$Claude.credentials(service: service, interactive: false, verifyingOwner: true),
+              (try? AuthStorage$Claude.isCurrent(credentials, service: service)) == true else { return nil }
+        if let directory {
+            guard let owner = account.claudeConfigOwner, owner.matches(directory),
+                  credentials.backend == .keychain || credentials.directory == owner else { return nil }
+        }
+        if let expected = account.claudePrimaryOwner {
+            let observed: ClaudePrimaryOwner = credentials.directory.map(ClaudePrimaryOwner.file) ?? .keychain
+            guard expected == observed else { return nil }
+        }
+        let key = usageIdentity(service: service, accessToken: credentials.accessToken,
+                                refreshToken: credentials.refreshToken)
+        let stored = UserDefaults.standard.dictionary(forKey: usageLoginsKey)?[key] as? String
+        return stored.flatMap { UUID(uuidString: $0) } == loginID
     }
     private var terminating = false
     private var renewing: Set<String> = []
@@ -444,16 +464,19 @@ actor Provider$Claude: UsageProvider {
     /// released. Retry persistence only; never issue another refresh request.
     private func persist(_ pending: Pending, to service: String,
                          lease: RefreshLock$Claude, generation: UUID?) async -> AuthStorage$Claude.SaveResult {
+        guard lease.isHeld, removalGenerations[service] == generation else { return .failed }
+        // Pending tokens came from the verified original login. Record their
+        // epoch before writing so a restart can recognize the published rotation.
+        let login = usageLogin(pending.credentials, service: service)
+        let next = Self.usageIdentity(service: service, accessToken: pending.tokens.accessToken,
+                                     refreshToken: pending.tokens.refreshToken ?? pending.credentials.refreshToken)
+        rememberUsageLogin(login, identity: next)
         var delay: UInt64 = 250_000_000
         while lease.isHeld && removalGenerations[service] == generation {
             let result = await write(pending, to: service, lease: lease)
             guard removalGenerations[service] == generation else { return .failed }
             switch result {
             case .saved:
-                let login = usageLogin(pending.credentials, service: service)
-                let next = Self.usageIdentity(service: service, accessToken: pending.tokens.accessToken,
-                                             refreshToken: pending.tokens.refreshToken ?? pending.credentials.refreshToken)
-                rememberUsageLogin(login, identity: next)
                 issues[service] = nil
                 return result
             case .changed:

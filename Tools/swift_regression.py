@@ -9,6 +9,14 @@ SOURCES = ROOT / "Sources" / "Notchlimits"
 FIXTURES = ROOT / "Tests" / "Regressions"
 
 
+def instrument_codex_file_transfer(support):
+    signature = """func renameatx_np(_ fromFD: Int32, _ from: UnsafePointer<CChar>, _ toFD: Int32,
+                  _ to: UnsafePointer<CChar>, _ flags: UInt32) -> Int32 {"""
+    assert support.count(signature) == 1
+    hook = "\n    if let result = stageCodexAuth(fromFD, from, toFD, to, flags) { return result }"
+    return support.replace(signature, signature + hook) + "\n" + (FIXTURES / "FileMutation$Codex.swift").read_text()
+
+
 def compile_fixture(directory, name, sources, flags=(), extra_sources=(), fixture_path=None):
     executable = Path(directory) / name
     dependencies = []

@@ -35,7 +35,8 @@ class CodexTransactionRegressions(unittest.TestCase):
             assert support.count(before) == 1, before
             support = support.replace(before, after)
         cls.fixture_path = pathlib.Path(fixture.name) / "Transactions$Codex.swift"
-        cls.fixture_path.write_text(support + "\n" + (swift_regression.FIXTURES / "Transactions$Codex.swift").read_text())
+        cls.fixture_path.write_text(swift_regression.instrument_codex_file_transfer(support) + "\n"
+                                    + (swift_regression.FIXTURES / "Transactions$Codex.swift").read_text())
         authentication.AuthenticationRegressions.setUpClass.__func__(cls)
 
     check_scenario = authentication.AuthenticationRegressions.check_scenario

@@ -195,6 +195,11 @@ enum Lifecycle$Authentication {
             home = ProfileDirectories.codexRoot.appendingPathComponent("usage-login")
             id = "codex:usage-login"
             try login(home, account: "old-usage", mode: mode)
+            guard let original = try AuthSwap$Codex.authData(home: home),
+                  let epoch = AuthSwap$Codex.usageLogin(original) else {
+                throw Failure(description: "Missing original Codex usage epoch")
+            }
+            Fixture.seedUsageEpoch(epoch, columnID: id)
             provider = Provider$Codex()
         } else {
             home = Fixture.storageDirectory
@@ -208,6 +213,10 @@ enum Lifecycle$Authentication {
                 try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("old-usage", expired: false))
                     .write(to: home.appendingPathComponent(".credentials.json"))
             }
+            guard let original = AuthStorage$Claude.credentials(service: Fixture.service) else {
+                throw Failure(description: "Missing original Claude usage epoch")
+            }
+            Fixture.seedClaudeUsageEpoch(original, columnID: id)
             provider = Provider$Claude()
         }
         let owner = DirectoryIdentity.capture(home)
@@ -225,7 +234,21 @@ enum Lifecycle$Authentication {
         try expect(history(id, window) == [7, 12] && Fixture.refreshCalls == 0,
                    "The first completed production poll did not establish the original usage epoch")
 
-        if change != "stable" {
+        if change == "denied" {
+            // Even a readable fallback with the same tokens cannot prove who
+            // owns the preferred Keychain login while selected reads are denied.
+            if codex {
+                guard let credentials = Fixture.codexKeychain[Fixture.codexKey(home)] else {
+                    throw Failure(description: "Missing preferred Codex login")
+                }
+                try credentials.write(to: home.appendingPathComponent("auth.json"))
+            } else {
+                try JSONSerialization.data(withJSONObject: Fixture.keychain)
+                    .write(to: home.appendingPathComponent(".credentials.json"))
+            }
+        } else if change == "unowned" {
+            UserDefaults.standard.removeObject(forKey: "usageLoginEpochs")
+        } else if change != "stable" {
             if codex {
                 if change == "renew" {
                     let result = await Renewal$Codex.shared.renew(columnID: id, home: home, force: true)
@@ -337,9 +360,46 @@ enum Lifecycle$Authentication {
         let kind: Provider = codex ? .codex : .claude
         let provider: any UsageProvider = codex ? Provider$Codex() : Provider$Claude()
         let store = UsageStore(providers: [kind: provider], discovery: RoutedUsageDiscovery(accountID: id))
+        let denied = change == "denied"
+        let replaced = change == "replace" || change == "unowned"
+        Fixture.denyCodexRead = codex && denied
+        Fixture.denyClaudeRead = !codex && denied
+        store.rediscover(force: true)
+        guard let initial = store.columns.first(where: { $0.id == id }) else {
+            throw Failure(description: "The restarted store did not discover the existing profile")
+        }
+        try expect(Fixture.usageCalls == 0 && Fixture.refreshCalls == 0,
+                   "Startup verification issued a usage request or renewed credentials")
+        print("COLD mode=\(mode) change=\(change) cached=\(initial.fromCache) usage=\(initial.windows.first?.utilization as Any)")
+        if replaced || denied {
+            try expect(initial.windows.isEmpty && initial.subtitle == nil && initial.stats.isEmpty
+                       && initial.updatedAt == nil && !initial.fromCache && initial.status == .loading,
+                       "Cold startup exposed usage before proving ownership of the cached login")
+        } else {
+            try expect(initial.fromCache && initial.windows.first?.utilization == 12 && initial.status == .ok,
+                       "Cold startup hid the current owner's verified usage before polling")
+        }
+        if denied {
+            try expect(UsageCache().load(id: id)?.windows.first?.utilization == 12 && history(id, window) == [7, 12],
+                       "Temporary Keychain denial retired the continuing owner's persisted usage")
+            Fixture.denyCodexRead = false
+            Fixture.denyClaudeRead = false
+            Fixture.usageStatus = 503
+            store.start()
+            for _ in 0..<400 {
+                if case .failed = store.columns.first?.status { break }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            guard let restored = store.columns.first(where: { $0.id == id }), case .failed = restored.status else {
+                throw Failure(description: "The continuing login did not reach the unavailable usage endpoint")
+            }
+            try expect(restored.fromCache && restored.windows.first?.utilization == 12 && Fixture.usageCalls == 1
+                       && Fixture.refreshCalls == 0 && history(id, window) == [7, 12] && Fixture.notifications.isEmpty,
+                       "A verified continuing login did not recover its cache after Keychain access returned")
+            return
+        }
         store.start()
         try await waitForUsage(store, id: id, value: 85)
-        let replaced = change == "replace"
         try expect(history(id, window) == (replaced ? [85] : [7, 12, 85]),
                    "A restarted process inherited another login's history or retired a continuing session")
         try expect(Fixture.notifications.count == (replaced ? 1 : 0),

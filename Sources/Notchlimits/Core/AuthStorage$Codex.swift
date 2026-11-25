@@ -581,23 +581,25 @@ struct AuthStorage$Codex {
                 return SecItemAdd(item as CFDictionary, nil)
             }
             guard status == errSecSuccess else { throw Failure.keychain(status) }
-            if let fallback, let fallbackOwner,
+            if let fallback, let fallbackOwner, let publishedLogin = AuthSwap$Codex.authIdentity(data),
                Self.sameCredentials(fallback.data, data) || Self.sameCredentials(fallback.data, previous?.data),
                !AuthSwap$Codex.fileIsShared(home: home, fileHome: home) {
-                try? removeFile(validating: {
+                try? AuthSwap$Codex.deleteReturnedCopy(fallback, from: self, owner: fallbackOwner,
+                                                       publishedLogin: publishedLogin) { candidate, owner in
                     let inventory = try Self.profileRevision()
-                    try Self.validateMutation(homes: [home], includesKeyring: true) {
+                    try Self.validateMutation(homes: [home, candidate.home], includesKeyring: true,
+                                              tracksDirectoryContents: false) {
                         guard !AuthSwap$Codex.fileIsShared(home: home, fileHome: home) else { throw Failure.settings }
                         let published = try loadKeyring()
                         let current = try Self.configuredMode(home: home)
-                        let file = try loadFile()
+                        let file = try candidate.load(backend: .file)
                         guard current.usesKeyring,
                               Self.sameCredentials(published?.data, data),
                               Self.sameCredentials(file?.data, fallback.data),
-                              fallbackOwner.matches(home),
+                              fallbackOwner.matches(home), owner.matches(candidate.home),
                               try inventory == Self.profileRevision() else { throw Failure.settings }
                     }
-                })
+                }
             }
         } catch {
             guard backend == nil, mode == .auto, keyringStatus() == errSecItemNotFound else { throw error }
@@ -755,6 +757,30 @@ struct AuthStorage$Codex {
         if status == errSecDuplicateItem || status == errSecItemNotFound { return false }
         guard status == errSecSuccess else { throw Failure.keychain(status) }
         return true
+    }
+
+    var hasRegularAuthFile: Bool {
+        var info = stat()
+        return lstat(file.path, &info) == 0 && info.st_mode & S_IFMT == S_IFREG
+    }
+
+    /// Move the entry that actually occupies the path, without replacing either owner.
+    func moveRecoveryFile(to destination: Self, owner: DirectoryIdentity,
+                          destinationOwner: DirectoryIdentity, validating: () throws -> Void) throws -> Bool {
+        let sourceFD = open(home.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard sourceFD >= 0 else { throw Failure.settings }
+        defer { close(sourceFD) }
+        let destinationFD = open(destination.home.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard destinationFD >= 0 else { throw Failure.settings }
+        defer { close(destinationFD) }
+        guard DirectoryIdentity.capture(descriptor: sourceFD) == owner,
+              DirectoryIdentity.capture(descriptor: destinationFD) == destinationOwner else { throw Failure.settings }
+        try validating()
+        guard owner.matches(home), destinationOwner.matches(destination.home) else { throw Failure.settings }
+        if renameatx_np(sourceFD, "auth.json", destinationFD, "auth.json", UInt32(RENAME_EXCL)) == 0 { return true }
+        let error = errno
+        guard error == ENOENT || error == EEXIST else { throw POSIXError(POSIXErrorCode(rawValue: error) ?? .EIO) }
+        return false
     }
 
     /// Restore the deleted copy without updating a login created in its place.

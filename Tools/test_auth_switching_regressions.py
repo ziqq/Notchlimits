@@ -63,6 +63,15 @@ class AuthenticationSwitchingRegressions(unittest.TestCase):
     def test_claude_missing_desktop_preserves_shell(self):
         self.check_scenario("claude-missing-desktop")
 
+    def test_claude_refuses_readded_profile_during_stop_with_cli_disabled(self):
+        self.check_scenario("claude-readded-stop-cli-off")
+
+    def test_claude_refuses_readded_profile_during_stop_with_cli_enabled(self):
+        self.check_scenario("claude-readded-stop-cli-on")
+
+    def test_claude_refuses_original_confirmation_after_profile_readd(self):
+        self.check_scenario("claude-readded-confirmation-cli-off")
+
     def test_codex_refuses_owner_replaced_during_stop(self):
         self.check_scenario("codex-replaced-owner")
 

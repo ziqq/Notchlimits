@@ -118,18 +118,20 @@ final class UsageStore: ObservableObject {
                                            profileName: account.profileName)
                 column.customName = customNames[account.id]
                 column.isActive = account.isActive
+                var loginID = replaced ? nil : loginEpochs[account.id].flatMap { UUID(uuidString: $0) }
                 if let cached = cache.load(id: account.id) {
-                    column.windows = cached.windows
-                    column.subtitle = cached.subtitle
-                    column.stats = cached.stats ?? []
-                    column.updatedAt = cached.updatedAt
-                    column.fromCache = true
-                    column.status = .ok
+                    switch cachedUsageMatches(account, loginID: loginID, route: usageOwners[account.id]) {
+                    case .some(true): Self.restoreUsage(cached, to: &column)
+                    case .some(false):
+                        retireUsage(account.id)
+                        loginID = nil
+                    case nil: break // Keep unreadable or unowned data private until a verified poll.
+                    }
                 }
                 next.append(column)
                 runtime[account.id] = Runtime(codexUsageOwner: usageOwners[account.id],
                                               nextDue: now.addingTimeInterval(Double(index) * Schedule.stagger),
-                                              loginID: loginEpochs[account.id].flatMap { UUID(uuidString: $0) })
+                                              loginID: loginID)
             }
         }
         // Забываем расписание исчезнувших профилей.
@@ -265,6 +267,29 @@ final class UsageStore: ObservableObject {
 
     // MARK: - Опрос
 
+    private func cachedUsageMatches(_ account: DiscoveredAccount, loginID: UUID?,
+                                    route: AuthSwap$Codex.UsageOwner?) -> Bool? {
+        switch account.source {
+        case .codexHome:
+            guard let loginID else { return nil }
+            return Provider$Codex.cachedUsageMatches(loginID, account: account, route: route)
+        case .claudeKeychain:
+            guard let loginID else { return nil }
+            return Provider$Claude.cachedUsageMatches(loginID, account: account)
+        case .kimiHome, .grokAuth, .mock:
+            return true
+        }
+    }
+
+    private static func restoreUsage(_ cached: CachedColumn, to column: inout AccountColumn) {
+        column.windows = cached.windows
+        column.subtitle = cached.subtitle
+        column.stats = cached.stats ?? []
+        column.updatedAt = cached.updatedAt
+        column.fromCache = true
+        column.status = .ok
+    }
+
     /// Usage, history and notification state belong to one verified login epoch.
     private func retireUsage(_ id: String) {
         cache.remove(id: id)
@@ -295,7 +320,7 @@ final class UsageStore: ObservableObject {
             }
         }
         if let loginID = result.loginID {
-            if let previous = runtime[account.id]?.loginID, previous != loginID {
+            if runtime[account.id]?.loginID != loginID {
                 retireUsage(account.id)
                 if let index = columns.firstIndex(where: { $0.id == account.id }) {
                     columns[index].windows = []
@@ -305,6 +330,16 @@ final class UsageStore: ObservableObject {
                     columns[index].fromCache = false
                 }
                 runtime[account.id]?.backoffStep = 0
+            } else if result.isCurrent != nil,
+                      let index = columns.firstIndex(where: { $0.id == account.id }), columns[index].updatedAt == nil,
+                      let cached = cache.load(id: account.id) {
+                switch result.outcome {
+                case .failure, .rateLimited, .reauth:
+                    // A verified login can recover its cache even when usage is unavailable.
+                    Self.restoreUsage(cached, to: &columns[index])
+                case .success, .superseded, .notAnAccount:
+                    break
+                }
             }
             runtime[account.id]?.loginID = loginID
             var epochs = UserDefaults.standard.dictionary(forKey: "usageLoginEpochs") as? [String: String] ?? [:]
