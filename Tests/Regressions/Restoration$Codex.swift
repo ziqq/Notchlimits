@@ -60,6 +60,11 @@ enum Restoration$Codex {
             case "retained-audit-legacy-copies": try retainedAuditLegacyCopies(mode: parts[1], single: parts[2] == "single")
             case "retained-audit-return": try retainedAuditReturn(operation: parts[1])
             case "retained-audit-stage-restart": try retainedAuditStageRestart()
+            case "audit-live-cleanup": try auditLiveCleanup(mode: parts[1], operation: parts[2], phase: parts[3])
+            case "audit-live-restart-after-takeover": try auditLiveRestartAfterTakeover()
+            case "audit-mixed-import": try auditMixedImport(operation: parts[1])
+            case "audit-mixed-import-restart": try auditMixedImportRestart(operation: parts.count > 1 ? parts[1] : nil)
+            case "audit-independent-staged-removal": try auditIndependentStagedRemoval()
             case "extra-audit-restart": try await extraAuditRestart(denyDelete: parts[1] == "denied", operation: parts[2])
             case "audit-stale-keychain": try await staleKeychainAction(action: parts[1], condition: parts[2])
             case "migration": try backupMigration(operation: parts[1], mode: parts[2], phase: parts[3])
@@ -240,8 +245,13 @@ enum Restoration$Codex {
             try! mutate(backup, mode: mode, change: change, original: primary)
             replacement = bytes(backup)
         }
+        let backupKey = Fixture.codexKey(backup)
+        var isolatedBackupKey: String?
+        RestorationSignals.beforeMove = { from, to in
+            if from == backupKey { isolatedBackupKey = to }
+        }
         RestorationSignals.beforeDelete = { key in
-            guard key != Fixture.codexKey(backup) else { return }
+            guard key != backupKey && key != isolatedBackupKey else { return }
             refused = true
             Fixture.denyCodexDelete = true
             if phase == "before" { mutation() }
@@ -257,6 +267,7 @@ enum Restoration$Codex {
         var failed = false
         do { try AccountRemoval.remove(account) } catch { failed = true }
         RestorationSignals.beforeDelete = nil
+        RestorationSignals.beforeMove = nil
         RestorationSignals.attributes = nil
         Fixture.denyCodexDelete = false
         let current = try AuthSwap$Codex.authData(home: AuthSwap$Codex.stashHome)
@@ -684,8 +695,13 @@ enum Restoration$Codex {
         let backupKey = Fixture.codexKey(backup)
         let account = Discovery$Real().discover().first { $0.id == "codex:selected" }!
         var reached = false
+        var isolatedBackupKey: String?
+        RestorationSignals.beforeMove = { from, to in
+            if from == backupKey { isolatedBackupKey = to }
+        }
         RestorationSignals.beforeDelete = { key in
-            guard key != backupKey && key != nativeKey && Fixture.codexKeychain[backupKey] == nil else { return }
+            guard key != backupKey && key != isolatedBackupKey && key != nativeKey,
+                  Fixture.codexKeychain[backupKey] == nil else { return }
             RestorationSignals.beforeDelete = nil
             reached = true
             if fileBackup {
@@ -707,6 +723,7 @@ enum Restoration$Codex {
         do { try AccountRemoval.remove(account) } catch { refused = true }
         Fixture.denyCodexDelete = false
         RestorationSignals.beforeDelete = nil
+        RestorationSignals.beforeMove = nil
         Fixture.beforeCodexSecretRead = nil
         Fixture.denyCodexRead = false
         RestorationSignals.unavailableKey = nil
@@ -1218,8 +1235,16 @@ enum Restoration$Codex {
                 else { RestorationSignals.afterWrite = publication }
             } else if mode == "file" {
                 RestorationSignals.afterFileRemoval = { removed in if removed.path == file.path { cut(key) } }
-            } else if fault == "cut-before-delete" { RestorationSignals.beforeDelete = cut }
-            else { RestorationSignals.afterDelete = cut }
+            } else {
+                var deletionKey = key
+                RestorationSignals.beforeMove = { from, to in
+                    guard from == key else { return }
+                    deletionKey = to
+                    if fault == "cut-before-delete" { cut(key) }
+                }
+                if fault == "cut-before-delete" { RestorationSignals.beforeDelete = cut }
+                else { RestorationSignals.afterDelete = { if $0 == deletionKey { cut(key) } } }
+            }
             if fault == "cut-during-removal" {
                 guard let selected = Discovery$Real().discover().first(where: { $0.id == chosen.id }) else {
                     throw Failure(description: "The selected profile was missing before removal")
@@ -1466,6 +1491,268 @@ enum Restoration$Codex {
         }
     }
 
+    private static func auditLiveCleanup(mode: String, operation: String, phase: String) throws {
+        let native = AuthSwap$Codex.baseHome
+        try Fixture.codexLogin(native, account: "primary", mode: mode)
+        let original = try AuthSwap$Codex.authData(home: native)!
+        let chosen = try Fixture.codexAccount("live-cleanup-selected")
+        guard case .codexHome(let selected) = chosen.source else { throw Failure(description: "Missing selected profile") }
+        try AuthSwap$Codex.activate(columnID: chosen.id, home: selected)
+        let backup = AuthSwap$Codex.stashHome
+        let backupKey = Fixture.codexKey(backup)
+        let newHome = Fixture.root.appendingPathComponent("other-owner")
+        try Fixture.codexLogin(newHome, account: "new-backup-owner", mode: "keyring")
+        let latest = Fixture.codexKeychain.removeValue(forKey: Fixture.codexKey(newHome))!
+        let nativeReplacement = phase.hasPrefix("after-move-denied-native")
+        let deniesStage = phase.hasPrefix("after-move-denied")
+        var newNative: Data?
+        if nativeReplacement {
+            let source = Fixture.root.appendingPathComponent("new-native-owner")
+            try Fixture.codexLogin(source, account: "new-native-owner", mode: "keyring")
+            newNative = Fixture.codexKeychain.removeValue(forKey: Fixture.codexKey(source))
+        }
+        var reached = false
+        if phase != "earlier" {
+            let write: (String) -> Void = { key in
+                guard key == backupKey else { return }
+                RestorationSignals.beforeDelete = nil
+                RestorationSignals.beforeMove = nil
+                reached = true
+                Fixture.codexKeychain[backupKey] = latest
+            }
+            RestorationSignals.beforeDelete = write
+            if phase.hasPrefix("after-move") {
+                RestorationSignals.afterMove = { from, stage in
+                    guard from == backupKey else { return }
+                    write(from)
+                    if deniesStage { RestorationSignals.unavailableKey = stage }
+                    if nativeReplacement { Fixture.codexKeychain[Fixture.codexKey(native)] = newNative }
+                }
+            } else {
+                RestorationSignals.beforeMove = { from, _ in write(from) }
+            }
+        } else {
+            Fixture.codexKeychain[backupKey] = latest
+            reached = true
+        }
+        let result = Result {
+            if operation == "remove" {
+                guard let account = Discovery$Real().discover().first(where: { $0.id == chosen.id }) else {
+                    throw Failure(description: "Selected profile was not found")
+                }
+                try AccountRemoval.remove(account)
+            } else { try AuthSwap$Codex.restoreDefault() }
+        }
+        if deniesStage, let stage = RestorationSignals.unavailableKey {
+            try expect(Fixture.codexKeychain[stage] == original, "Read denial destroyed the isolated login")
+            _ = Discovery$Real().discover()
+            if phase.hasSuffix("restart") {
+                try checkpointCycle(updated: latest, primary: original, selectedID: chosen.id, previous: newNative)
+                _exit(86)
+            }
+            RestorationSignals.unavailableKey = nil
+        }
+        let logins = try visibleLogins()
+        let visible = logins.filter { $0 == latest }.count
+        let preserved = Fixture.codexKeychain[backupKey] == latest || visible == 1
+        print("Replacement arrived: \(reached); survived: \(preserved); requested operation succeeded: \((try? result.get()) != nil)")
+        try expect(reached && preserved, "The first cleanup attempt deleted a replacement login")
+        if phase.hasPrefix("after-move") {
+            try expect(logins.filter { $0 == original }.count == 1 && visible == 1,
+                       "Rollback lost or duplicated a login after the source was reoccupied")
+            let selectedLogin = try AuthSwap$Codex.authData(columnID: chosen.id, home: selected)
+            try expect(selectedLogin != nil, "Refused cleanup removed the selected login")
+            if nativeReplacement {
+                try expect(Fixture.codexKeychain[Fixture.codexKey(native)] == newNative,
+                           "Rollback overwrote the new native login")
+            }
+        }
+    }
+
+    private static func auditLiveRestartAfterTakeover() throws {
+        let saved = try Data(contentsOf: Fixture.root.appendingPathComponent("cycle-restart.plist"))
+        let state = try PropertyListSerialization.propertyList(from: saved, format: nil) as! [String: Any]
+        for (key, value) in state["defaults"] as! [String: Any] { UserDefaults.standard.set(value, forKey: key) }
+        Fixture.codexKeychain = state["keychain"] as! [String: Data]
+        Fixture.codexHome = state["home"] as? String
+        let active = state["previous"] as! Data
+        let expected = [state["updated"] as! Data, state["primary"] as! Data, active]
+        let selected = state["selectedID"] as! String
+        for _ in 0..<3 {
+            let accounts = Discovery$Real().discover()
+            let logins = try visibleLogins()
+            try expect(accounts.contains { $0.id == selected }
+                       && AuthSwap$Codex.activeColumnID == AuthSwap$Codex.defaultColumnID
+                       && expected.allSatisfy { login in logins.filter { $0 == login }.count == 1 },
+                       "Restart lost the selected profile, active route or a unique login")
+            try expect(try AuthSwap$Codex.authData(home: AuthSwap$Codex.baseHome) == active,
+                       "Restart overwrote the new native login")
+        }
+    }
+
+    private static func auditMixedImport(operation: String) throws {
+        let native = AuthSwap$Codex.baseHome
+        try Fixture.codexLogin(native, account: "native", mode: "file")
+        let root = AuthSwap$Codex.stashHome.deletingLastPathComponent()
+        let first = root.appendingPathComponent("orphaned-00000000-0000-0000-0000-000000000001")
+        let second = root.appendingPathComponent("orphaned-00000000-0000-0000-0000-000000000002")
+        try Fixture.codexLogin(first, account: "same-file-copy", mode: "file")
+        let shared = try AuthSwap$Codex.authData(home: first)!
+        try Fixture.codexMode(second, "file")
+        try shared.write(to: second.appendingPathComponent("auth.json"))
+        var dormant: Data?
+        if operation != "single-backend" {
+            let source = Fixture.root.appendingPathComponent("dormant-keychain")
+            try Fixture.codexLogin(source, account: "independent", mode: "keyring")
+            dormant = Fixture.codexKeychain.removeValue(forKey: Fixture.codexKey(source))
+            Fixture.codexKeychain[Fixture.codexKey(second)] = dormant
+        }
+        if operation == "denied" || operation == "cut" { RestorationSignals.unavailableKey = Fixture.codexKey(second) }
+        if operation == "cut" {
+            RestorationSignals.afterFileRemoval = { file in
+                guard file.path == second.appendingPathComponent("auth.json").path else { return }
+                try! checkpointCycle(updated: dormant!, primary: shared, backup: second.path)
+                _exit(86)
+            }
+        }
+        if operation.hasPrefix("replace-retained") {
+            let denied = operation == "replace-retained-denied"
+            let cut = operation.hasPrefix("replace-retained-cut")
+            let reoccupiesSource = denied || cut
+            if denied {
+                try Fixture.codexMode(first, "keyring")
+                Fixture.codexKeychain[Fixture.codexKey(first)] = shared
+                try manager.removeItem(at: first.appendingPathComponent("auth.json"))
+            }
+            let source = Fixture.root.appendingPathComponent("replacement-file-login")
+            try Fixture.codexLogin(source, account: "replacement", mode: "file")
+            let latest = try AuthSwap$Codex.authData(home: source)!
+            let occupiedHome = Fixture.root.appendingPathComponent("reoccupied-file-login")
+            try Fixture.codexLogin(occupiedHome, account: "reoccupied-file-login", mode: "file")
+            let occupied = try AuthSwap$Codex.authData(home: occupiedHome)!
+            var replaced = false
+            RestorationSignals.afterFileRemoval = { file in
+                guard file.path == second.appendingPathComponent("auth.json").path else { return }
+                RestorationSignals.afterFileRemoval = nil
+                replaced = true
+                if denied {
+                    Fixture.codexKeychain[Fixture.codexKey(first)] = latest
+                    RestorationSignals.unavailableKey = Fixture.codexKey(first)
+                } else { try! latest.write(to: first.appendingPathComponent("auth.json"), options: .atomic) }
+                if reoccupiesSource {
+                    try! occupied.write(to: file)
+                    if operation == "replace-retained-cut-ephemeral" { try! Fixture.codexMode(second, "ephemeral") }
+                    else if operation != "replace-retained-cut-file" { try! Fixture.codexMode(second, "keyring") }
+                }
+                if cut {
+                    try! checkpointCycle(updated: dormant!, primary: shared, backup: second.path)
+                    _exit(86)
+                }
+            }
+            _ = Discovery$Real().discover()
+            RestorationSignals.unavailableKey = nil
+            let logins = try visibleLogins()
+            try expect(replaced && logins.filter { $0 == latest }.count == 1
+                       && logins.filter { $0 == shared }.count == 1,
+                       "Replacing the retained file login during unlink lost or duplicated a login")
+            try expect(Fixture.codexKeychain[Fixture.codexKey(second)] == dormant,
+                       "Rollback overwrote the independent Keychain login")
+            if reoccupiesSource {
+                try expect(Data(contentsOf: second.appendingPathComponent("auth.json")) == occupied,
+                           "Rollback overwrote the new independent file login")
+            }
+            return
+        }
+        func matches() throws -> [DiscoveredAccount] {
+            try Discovery$Real().discover().filter {
+                guard case .codexHome(let home) = $0.source else { return false }
+                return try AuthSwap$Codex.authData(columnID: $0.id, home: home) == shared
+            }
+        }
+        let visible = try matches()
+        if let one = visible.first { try AccountRemoval.remove(one) }
+        let remaining = try matches().count
+        let preserved = Fixture.codexKeychain[Fixture.codexKey(second)] == dormant
+        print("Visible duplicates: \(visible.count); after removal: \(remaining); independent Keychain item preserved: \(preserved)")
+        try expect(visible.count == 1 && remaining == 0 && preserved,
+                   "An inactive Keychain login prevented deduplication of identical active file logins")
+        if dormant != nil {
+            RestorationSignals.unavailableKey = nil
+            try Fixture.codexMode(second, "keyring")
+            try expect(try visibleLogins().filter { $0 == dormant }.count == 1,
+                       "Removing the file duplicate hid the independent Keychain login")
+        }
+    }
+
+    private static func auditMixedImportRestart(operation: String?) throws {
+        let snapshot = try Data(contentsOf: Fixture.root.appendingPathComponent("cycle-restart.plist"))
+        let state = try PropertyListSerialization.propertyList(from: snapshot, format: nil) as! [String: Any]
+        for (key, value) in state["defaults"] as! [String: Any] { UserDefaults.standard.set(value, forKey: key) }
+        Fixture.codexKeychain = state["keychain"] as! [String: Data]
+        Fixture.codexHome = state["home"] as? String
+        let home = URL(fileURLWithPath: state["backup"] as! String)
+        let dormant = state["updated"] as! Data
+        let file = state["primary"] as! Data
+        if let operation {
+            let foreign = try AuthSwap$Codex.authData(home: Fixture.root.appendingPathComponent("replacement-file-login"))!
+            let replacement = try AuthSwap$Codex.authData(home: Fixture.root.appendingPathComponent("reoccupied-file-login"))!
+            RestorationSignals.keychainDenied = operation.hasSuffix("denied")
+            let visible = try visibleLogins()
+            let activeInSource = operation == "file-denied" ? replacement : operation == "occupied" ? dormant : nil
+            try expect([foreign, activeInSource, file].compactMap { $0 }.allSatisfy { login in
+                visible.filter { $0 == login }.count == 1
+            },
+                       "Restart lost or duplicated a login after both imported paths were reoccupied")
+            try expect(Data(contentsOf: home.appendingPathComponent("auth.json")) == replacement,
+                       "Restart overwrote the new independent file login")
+            try expect(Fixture.codexKeychain[Fixture.codexKey(home)] == dormant,
+                       "Restart overwrote the dormant Keychain login")
+            RestorationSignals.keychainDenied = false
+            try Fixture.codexMode(home, "keyring")
+            let recovered = try visibleLogins()
+            try expect([foreign, dormant, file].allSatisfy { login in recovered.filter { $0 == login }.count == 1 },
+                       "Restoring Keychain access lost or duplicated a login")
+            return
+        }
+        RestorationSignals.unavailableKey = Fixture.codexKey(home)
+        let profiles = try Discovery$Real().discover().filter {
+            guard case .codexHome(let profile) = $0.source else { return false }
+            return try AuthSwap$Codex.authData(columnID: $0.id, home: profile) == file
+        }
+        try expect(profiles.count == 1, "Restart lost or duplicated the retained file profile")
+        try AccountRemoval.remove(profiles[0])
+        try expect(try !visibleLogins().contains(file), "Removing the retained file profile resurrected the duplicate")
+        RestorationSignals.unavailableKey = nil
+        try Fixture.codexMode(home, "keyring")
+        try expect(try visibleLogins().filter { $0 == dormant }.count == 1,
+                   "Restart lost the independent Keychain login")
+    }
+
+    private static func auditIndependentStagedRemoval() throws {
+        let snapshot = try Data(contentsOf: Fixture.root.appendingPathComponent("cycle-restart.plist"))
+        let state = try PropertyListSerialization.propertyList(from: snapshot, format: nil) as! [String: Any]
+        for (key, value) in state["defaults"] as! [String: Any] { UserDefaults.standard.set(value, forKey: key) }
+        Fixture.codexKeychain = state["keychain"] as! [String: Data]
+        Fixture.codexHome = state["home"] as? String
+        let staged = state["updated"] as! Data
+        guard let stageKey = Fixture.codexKeychain.first(where: { $0.value == staged })?.key else {
+            throw Failure(description: "The previously staged entry was missing")
+        }
+        RestorationSignals.unavailableKey = stageKey
+        _ = Discovery$Real().discover()
+        let independent = try Fixture.codexAccount("independent-of-stage")
+        guard case .codexHome(let home) = independent.source else { throw Failure(description: "Missing independent profile") }
+        try AuthSwap$Codex.activate(columnID: independent.id, home: home)
+        guard let selected = Discovery$Real().discover().first(where: { $0.id == independent.id }) else {
+            throw Failure(description: "Independent selected profile was missing")
+        }
+        try AccountRemoval.remove(selected)
+        try expect(!Discovery$Real().discover().contains { $0.id == independent.id }
+                   && Fixture.codexKeychain[stageKey] == staged, "Independent removal modified the unreadable staged entry")
+        RestorationSignals.unavailableKey = nil
+        try expect(try visibleLogins().filter { $0 == staged }.count == 1, "The old staged login did not recover")
+    }
+
     private static func retainedAuditLegacyCopies(mode: String, single: Bool) throws {
         let native = AuthSwap$Codex.baseHome
         try Fixture.codexLogin(native, account: "native", mode: mode)
@@ -1608,7 +1895,21 @@ enum Restoration$Codex {
         try Fixture.codexLogin(newHome, account: "independent-current-user", mode: "keyring")
         let relogin = Fixture.codexKeychain.removeValue(forKey: Fixture.codexKey(newHome))!
         Fixture.codexKeychain[nativeKey] = relogin
-        if operation != "rotate-then-relogin-denied" { Fixture.denyCodexDeleteAccount = nil }
+        if operation != "rotate-then-relogin-denied" && operation != "remove-new-primary-denied" {
+            Fixture.denyCodexDeleteAccount = nil
+        }
+        if operation.hasPrefix("remove-new-primary") {
+            let result = Result {
+                guard let current = discovery.discover().first(where: { $0.id == AuthSwap$Codex.defaultColumnID }) else {
+                    throw Failure(description: "New primary was not discovered")
+                }
+                try AccountRemoval.remove(current)
+            }
+            let removed = Fixture.codexKeychain[nativeKey] == nil
+            print("New primary removed: \(removed); removal operation succeeded: \((try? result.get()) != nil)")
+            try expect((try? result.get()) != nil && removed, "A retired copy of a different login blocked removing the new primary")
+            return
+        }
         let counts = try (0..<3).map { _ in try visibleLogins().filter { $0 == primary }.count }
         let expectedCount = operation == "relogin-without-rotation" ? 1 : 0
         print("Old login visible across discovery: \(counts); new native login preserved: \(Fixture.codexKeychain[nativeKey] == relogin)")

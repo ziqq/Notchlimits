@@ -35,6 +35,7 @@ enum AuthSwap$Codex {
     private static let recoveredBackupKey = "codexAppRecoveredBackups"
     private static let recoveredBackupIDPrefix = "codex-recovery:"
     private static let duplicateRecoverySettings = Data("cli_auth_credentials_store = \"keyring\"\n".utf8)
+    private static let duplicateFileSettings = Data("cli_auth_credentials_store = \"file\"\n".utf8)
     private static let sourceAuthKey = "codexAppSourceAuth"
     private static let primarySessionKey = "codexAppPrimarySession"
     private static let nativeGrantKey = "codexNativeGrant"
@@ -192,6 +193,7 @@ enum AuthSwap$Codex {
     private static func recoverPrimaryReturnLocked() throws {
         guard let data = UserDefaults.standard.data(forKey: primaryReturnKey) else { return }
         let operation = try PropertyListDecoder().decode(PrimaryReturn.self, from: data)
+        resumeReturnedStages()
         let native = try storage(at: baseHome)
         guard native.mode != .ephemeral else { throw AuthStorage$Codex.Failure.ephemeral }
         let owner = DirectoryIdentity.capture(native.home)
@@ -253,6 +255,11 @@ enum AuthSwap$Codex {
                         }
                     } catch {
                         try requirePublication(record?.data, storage: native, owner: owner)
+                        deferredCleanup = ["returnedLogin": login, "returnedBackend": backend.rawValue]
+                        deferredCleanup["returnedOwner"] = operation.primaryAccountOwner
+                        deferredCleanup["returnedGrant"] = operation.primaryGrant
+                    }
+                    if hasReturnedStage(source: path, owner: key) {
                         deferredCleanup = ["returnedLogin": login, "returnedBackend": backend.rawValue]
                         deferredCleanup["returnedOwner"] = operation.primaryAccountOwner
                         deferredCleanup["returnedGrant"] = operation.primaryGrant
@@ -334,9 +341,11 @@ enum AuthSwap$Codex {
                                                     owner: DirectoryIdentity,
                                                     validating: @escaping (AuthStorage$Codex, DirectoryIdentity) throws -> Void) throws {
         let defaults = UserDefaults.standard
-        guard defaults.object(forKey: returnedStageKey) == nil, let login = authIdentity(record.data),
-              let sourceKey = try availableFileOwnerKey(source.home), owner.matches(source.home) else { throw Failure.busy }
-        let home = source.home.deletingLastPathComponent().appendingPathComponent(".returned-" + UUID().uuidString)
+        guard let login = authIdentity(record.data), let sourceKey = try availableFileOwnerKey(source.home),
+              owner.matches(source.home), !hasReturnedStage(source: source.home, owner: sourceKey)
+        else { throw Failure.busy }
+        let home = source.home.deletingLastPathComponent()
+            .appendingPathComponent(".returned-" + UUID().uuidString, isDirectory: true)
         guard mkdir(home.path, 0o700) == 0 else { throw Failure.busy }
         let staged = try AuthStorage$Codex(home: home, mode: .keyring)
         guard let stageOwner = DirectoryIdentity.capture(home), let stageKey = try availableFileOwnerKey(home) else {
@@ -347,7 +356,7 @@ enum AuthSwap$Codex {
         stage["returnedOwner"] = primaryAccountOwner(record.data)
         stage["returnedGrant"] = grantIdentity(record.data)
         let journal = ["source": ["home": source.home.path, "owner": sourceKey], "stage": stage]
-        defaults.set(journal, forKey: returnedStageKey)
+        setReturnedStage(journal, for: home.path)
         guard defaults.synchronize() else { throw Failure.busy }
         do {
             guard try source.moveRecoveryKeychainItem(to: staged, validating: {
@@ -370,12 +379,52 @@ enum AuthSwap$Codex {
             guard try storage.load(backend: .keyring) == nil, try storage.load(backend: .file) == nil,
                   try availableRecoveredBackupHome(entry) == home else { throw Failure.busy }
         }
-        clearReturnedStage()
+        clearReturnedStage(home.path)
     }
 
-    private static func clearReturnedStage() {
-        UserDefaults.standard.removeObject(forKey: returnedStageKey)
+    private static func clearReturnedStage(_ path: String) {
+        setReturnedStage(nil, for: path)
         _ = UserDefaults.standard.synchronize()
+    }
+
+    private typealias ReturnedStage = [String: [String: String]]
+
+    private static var returnedStages: [String: ReturnedStage] {
+        let stored = UserDefaults.standard.dictionary(forKey: returnedStageKey)
+        if let previous = stored as? ReturnedStage, let path = previous["stage"]?["home"] {
+            return [path: previous]
+        }
+        return stored as? [String: ReturnedStage] ?? [:]
+    }
+
+    private static func setReturnedStage(_ stage: ReturnedStage?, for path: String) {
+        var entries = returnedStages
+        entries[path] = stage
+        if entries.isEmpty { UserDefaults.standard.removeObject(forKey: returnedStageKey) }
+        else { UserDefaults.standard.set(entries, forKey: returnedStageKey) }
+    }
+
+    private static func hasReturnedStage(source: URL, owner: String) -> Bool {
+        returnedStages.values.contains {
+            $0["source"]?["home"] == source.path && $0["source"]?["owner"] == owner
+        }
+    }
+
+    private static func hasStagedBackup(_ record: AuthStorage$Codex.Record, from source: URL,
+                                        owner: DirectoryIdentity?) throws -> Bool {
+        guard record.backend == .keyring, owner?.matches(source) == true,
+              let key = try availableFileOwnerKey(source),
+              let journal = returnedStages.values.first(where: {
+                  $0["source"]?["home"] == source.path && $0["source"]?["owner"] == key
+              }) else { return false }
+        guard let entry = journal["stage"], let path = try availableRecoveredBackupHome(entry) else { throw Failure.busy }
+        let saved = try AuthStorage$Codex(home: path, mode: .keyring).load(backend: .keyring)
+        guard try availableRecoveredBackupHome(entry) == path else { throw Failure.busy }
+        return AuthStorage$Codex.sameCredentials(saved?.data, record.data)
+    }
+
+    private static func resumeReturnedStages() {
+        for journal in returnedStages.values { try? restoreReturnedStage(journal, promote: true) }
     }
 
     private static func restoreReturnedStage(_ journal: [String: [String: String]], promote: Bool) throws {
@@ -386,13 +435,22 @@ enum AuthSwap$Codex {
             guard lstat(name, &info) != 0, errno == ENOENT, !isRoutedRecoveryHome(home),
                   try AuthStorage$Codex(home: home, mode: .keyring).load(backend: .keyring) == nil
             else { throw Failure.busy }
-            clearReturnedStage()
+            clearReturnedStage(name)
             return
         }
         guard !isRoutedRecoveryHome(path), let stageOwner = DirectoryIdentity.capture(path) else { throw Failure.busy }
         let staged = try AuthStorage$Codex(home: path, mode: .keyring)
         let record = try staged.load(backend: .keyring)
-        if let record, let sourceEntry = journal["source"], let sourceHome = try availableRecoveredBackupHome(sourceEntry),
+        var fallbackID: String?
+        if promote, let record, authIdentity(record.data) == entry["returnedLogin"],
+           let id = journal["fallback"]?["id"], let fallback = recoveredBackups[id],
+           fallback["pendingOn"] == nil, fallback["returnedLogin"] == nil, fallback["cleanupSource"] == nil,
+           let home = try availableRecoveredBackupHome(fallback), let owner = DirectoryIdentity.capture(home),
+           try checkedRecord(record, storage: storage(at: home), home: home, owner: owner).matches {
+            fallbackID = id
+        }
+        if fallbackID == nil, let record, let sourceEntry = journal["source"],
+           let sourceHome = try availableRecoveredBackupHome(sourceEntry),
            let owner = DirectoryIdentity.capture(sourceHome), try staged.load(backend: .file) == nil {
             let source = try AuthStorage$Codex(home: sourceHome, mode: .keyring)
             let restored = try staged.moveRecoveryKeychainItem(to: source, validating: {
@@ -410,11 +468,16 @@ enum AuthSwap$Codex {
         var state = recoveredBackupState
         var entries = recoveredBackups
         let id = entries.first { $0.value["home"] == path.path && $0.value["owner"] == entry["owner"] }?.key ?? UUID().uuidString
-        entries[id] = entry
+        var promoted = entry
+        if let fallbackID {
+            for key in ["returnedLogin", "returnedBackend", "returnedOwner", "returnedGrant"] { promoted[key] = nil }
+            promoted["pendingOn"] = fallbackID
+        }
+        entries[id] = promoted
         state["profiles"] = entries
         UserDefaults.standard.set(state, forKey: recoveredBackupKey)
         guard UserDefaults.standard.synchronize() else { throw Failure.busy }
-        clearReturnedStage()
+        clearReturnedStage(name)
     }
 
     static func recoveredBackupHomes() -> [(id: String, home: URL)] {
@@ -443,9 +506,7 @@ enum AuthSwap$Codex {
         -> (profiles: [(id: String, home: URL)], reservedPaths: Set<String>) {
         lock.lock()
         defer { lock.unlock() }
-        if let journal = UserDefaults.standard.dictionary(forKey: returnedStageKey) as? [String: [String: String]] {
-            try? restoreReturnedStage(journal, promote: true)
-        }
+        resumeReturnedStages()
         discoverPreviouslySavedNativeLogins()
         let replay = resumeCleanup ? resolveRecoveredBackups(managedDirectories: managedDirectories) : CleanupReplay()
         let backups = recoveredBackupHomes()
@@ -509,7 +570,10 @@ enum AuthSwap$Codex {
         let retained = try storage(at: retainedRoute)
         guard retained.mode != .ephemeral else { throw Failure.busy }
         let retainedOwner = DirectoryIdentity.capture(retained.home)
-        guard let record = try retained.load(verifyingOwner: true) else { throw Failure.busy }
+        let record = try retained.load(verifyingOwner: true)
+        let originalGrant = entry["returnedGrant"]
+        let spent = try originalGrant.map { try retiredNativeGrants().contains($0) } ?? false
+        guard record != nil || spent else { throw Failure.busy }
         func validate() throws {
             guard liveHome(columnID: defaultColumnID, home: baseHome) == retainedRoute,
                   !isRoutedRecoveryHome(path),
@@ -519,7 +583,7 @@ enum AuthSwap$Codex {
         }
         try validate()
         let sameSession: Bool
-        if let originalGrant = entry["returnedGrant"], let currentGrant = grantIdentity(record.data) {
+        if let record, let originalGrant, let currentGrant = grantIdentity(record.data) {
             if let originalOwner = entry["returnedOwner"], let currentOwner = primaryAccountOwner(record.data) {
                 sameSession = originalOwner == currentOwner
             } else { sameSession = originalGrant == currentGrant }
@@ -528,9 +592,7 @@ enum AuthSwap$Codex {
                 try flushNativeGrants()
             }
         } else { sameSession = false }
-        let originalGrant = entry["returnedGrant"]
-        let spent = try originalGrant.map { try retiredNativeGrants().contains($0) } ?? false
-        if authIdentity(record.data) == login || sameSession || spent {
+        if record.flatMap({ authIdentity($0.data) }) == login || sameSession || spent {
             let backup = try AuthStorage$Codex(home: path, mode: backend == .file ? .file : .keyring)
             try cleanupReturnedCopies(in: backup, owner: owner, backend: backend, login: login,
                                       retainedRoute: retainedRoute, retainedUsesKeyring: retained.mode.usesKeyring,
@@ -617,7 +679,7 @@ enum AuthSwap$Codex {
                         entries[id]?["matchedPrimaryHome"] = nil
                         entries[id]?["matchedPrimaryOwner"] = nil
                     }
-                }, recordStage: { home in
+                }, recordStage: { home, backend in
                     if let home {
                         guard let owner = try availableFileOwnerKey(home) else { throw Failure.busy }
                         var stage = entries[id] ?? entry
@@ -627,6 +689,7 @@ enum AuthSwap$Codex {
                         stage["cleanupRetainedHome"] = retained["home"]
                         stage["cleanupRetainedOwner"] = retained["owner"]
                         stage["cleanupRetainedID"] = UUID().uuidString
+                        if backend == .file { stage["cleanupBackend"] = "file" }
                         entries[stageID] = stage
                         state["profiles"] = entries
                         UserDefaults.standard.set(state, forKey: recoveredBackupKey)
@@ -670,6 +733,7 @@ enum AuthSwap$Codex {
             guard let sourceID = stage["cleanupSource"], let retainedID = stage["cleanupRetainedID"],
                   let retainedPath = stage["cleanupRetainedHome"], let retainedOwner = stage["cleanupRetainedOwner"]
             else { continue }
+            let fileCleanup = stage["cleanupBackend"] == "file"
             replay.resumed.formUnion([sourceID, stageID])
             let retained = ["home": retainedPath, "owner": retainedOwner]
             let source = entries[sourceID]
@@ -681,20 +745,35 @@ enum AuthSwap$Codex {
             let participants = [source, stage, retained]
             let homes: [URL?]
             var credentials: [CleanupCredentials?] = []
+            var unavailableActiveStore = false
             let primaryHome = liveHome(columnID: defaultColumnID, home: baseHome)
             let primaryPath = homeKey(primaryHome)
             var primaryData: Data?
             do {
                 if let stageHome = try availableRecoveredBackupHome(stage),
                    !managedDirectories.contains(where: { homeKey($0) == stageHome.path }) {
-                    _ = try retireEmptyDuplicateStage(at: stageHome, matching: stage)
+                    if fileCleanup {
+                        // An inactive Keychain read must not hide an available file.
+                        _ = try? retireEmptyDuplicateStage(at: stageHome, matching: stage)
+                    } else {
+                        _ = try retireEmptyDuplicateStage(at: stageHome, matching: stage)
+                    }
                 }
                 homes = try participants.map { try $0.flatMap(availableRecoveredBackupHome) }
                 try AuthStorage$Codex.validateMutation(homes: homes.compactMap { $0 }, includesKeyring: true,
                                                        tracksDirectoryContents: false) {
                     let stores = try homes.map { try $0.map(storage(at:)) }
-                    credentials = try stores.map { try $0.map(duplicateRecoveryCredentials) }
-                    if credentials.contains(where: { $0?.hasInactiveLogin == true }) {
+                    credentials = try stores.map { store in
+                        guard let store else { return nil }
+                        if fileCleanup, store.mode == .ephemeral { return (nil, true) }
+                        do { return try duplicateRecoveryCredentials(store) }
+                        catch {
+                            guard fileCleanup else { throw error }
+                            unavailableActiveStore = true
+                            return (nil, true)
+                        }
+                    }
+                    if unavailableActiveStore || (!fileCleanup && credentials.contains(where: { $0?.hasInactiveLogin == true })) {
                         if let index = homes.firstIndex(where: { $0?.path == primaryPath }) {
                             primaryData = credentials[index]?.active
                         } else {
@@ -718,7 +797,7 @@ enum AuthSwap$Codex {
             let (sourceData, stageData, retainedData) = (credentials[0]?.active, credentials[1]?.active, credentials[2]?.active)
             let retainedIsPrimary = primaryPath == retainedPath
             let retainedIsManaged = managedDirectories.contains { homeKey($0) == retainedPath }
-            if credentials.contains(where: { $0?.hasInactiveLogin == true }) {
+            if unavailableActiveStore || (!fileCleanup && credentials.contains(where: { $0?.hasInactiveLogin == true })) {
                 // Keep the checkpoint for inactive stores. Discovery can still show
                 // each currently selected login, once, without retiring its owner.
                 replay.hidden.formUnion([sourceID, stageID, retainedTargetID])
@@ -745,9 +824,11 @@ enum AuthSwap$Codex {
             if retainedData != nil, !isRetainedVisible, !hasRetainedCopy, registeredRetained == nil {
                 entries[retainedTargetID] = retained
             }
-            func reconciled(_ entry: [String: String]?, data: Data?, matchingSource: Bool = false) -> [String: String]? {
-                guard let entry, let data, let path = entry["home"], let owner = entry["owner"] else { return nil }
+            func reconciled(_ entry: [String: String]?, data: Data?, matchingSource: Bool = false,
+                            retainsInactive: Bool = false) -> [String: String]? {
+                guard let entry, let path = entry["home"], let owner = entry["owner"] else { return nil }
                 var result = ["home": path, "owner": owner]
+                guard let data else { return retainsInactive ? result : nil }
                 if isRoutedRecoveryHome(URL(fileURLWithPath: path)) { return result }
                 if let (primaryID, primary, primaryData) = primaryCopy,
                    AuthStorage$Codex.sameCredentials(data, primaryData) {
@@ -769,8 +850,11 @@ enum AuthSwap$Codex {
             if retainedIsManaged, !retainedIsPrimary, hasRetainedCopy, registeredRetained == nil {
                 entries[retainedTargetID] = retained
             }
-            entries[sourceID] = reconciled(source, data: sourceData)
-            entries[stageID] = reconciled(stage, data: stageData, matchingSource: true)
+            entries[sourceID] = reconciled(source, data: sourceData,
+                                           retainsInactive: fileCleanup && credentials[0]?.hasInactiveLogin == true)
+            entries[stageID] = reconciled(stage, data: stageData, matchingSource: true,
+                                          retainsInactive: fileCleanup && credentials[1]?.hasInactiveLogin == true)
+            if fileCleanup { replay.resumed.remove(stageID) }
         }
         return replay
     }
@@ -810,7 +894,8 @@ enum AuthSwap$Codex {
                 var info = stat()
                 guard fstatat(descriptor, "config.toml", &info, AT_SYMLINK_NOFOLLOW) == 0,
                       info.st_mode & S_IFMT == S_IFREG,
-                      try Data(contentsOf: config) == duplicateRecoverySettings else { return }
+                      try Data(contentsOf: config) == (entry["cleanupBackend"] == "file"
+                          ? duplicateFileSettings : duplicateRecoverySettings) else { return }
                 hasConfig = true
             } else if !names.isEmpty {
                 return
@@ -841,8 +926,26 @@ enum AuthSwap$Codex {
     private static func hasPendingRecovery(for home: URL) -> Bool {
         let entries = recoveredBackups
         return entries.values.contains { entry in
-            if entry["returnedLogin"] != nil {
-                return homeKey(liveHome(columnID: defaultColumnID, home: baseHome)) == home.path
+            if let login = entry["returnedLogin"] {
+                let route = liveHome(columnID: defaultColumnID, home: baseHome)
+                guard homeKey(route) == home.path else { return false }
+                do {
+                    let current = try storage(at: route)
+                    guard current.mode != .ephemeral,
+                          let owner = DirectoryIdentity.capture(current.home),
+                          let record = try current.load(verifyingOwner: true),
+                          try checkedRecord(record, storage: current, home: route, owner: owner).matches
+                    else { return true }
+                    if authIdentity(record.data) == login { return true }
+                    if let originalGrant = entry["returnedGrant"] {
+                        if originalGrant == grantIdentity(record.data) { return true }
+                        if try retiredNativeGrants().contains(originalGrant) { return false }
+                    }
+                    if let original = entry["returnedOwner"], let active = primaryAccountOwner(record.data) {
+                        return original == active
+                    }
+                } catch { return true }
+                return true
             }
             guard let original = entry["pendingOn"] else { return false }
             if let primary = matchedPrimaryRecovery(entry) {
@@ -858,7 +961,7 @@ enum AuthSwap$Codex {
                                                  retainedRouteIsCurrent: @escaping () -> Bool,
                                                  onDuplicate: () -> Void,
                                                  onDetachedRetainedLogin: (Bool) -> Void,
-                                                 recordStage: (URL?) throws -> Void) throws -> Bool {
+                                                 recordStage: (URL?, AuthStorage$Codex.Backend) throws -> Void) throws -> Bool {
         guard let savedOwner = DirectoryIdentity.capture(snapshot),
               let retainedOwner = DirectoryIdentity.capture(original),
               recoveredBackupHome(savedEntry) == snapshot, recoveredBackupHome(retainedEntry) == original else {
@@ -883,7 +986,10 @@ enum AuthSwap$Codex {
             try requireStorage(retained, home: original, owner: retainedOwner)
         }
         guard retainedRouteIsCurrent() else { throw Failure.busy }
-        guard let savedRecord else { return true }
+        func mayRetainKeychain() -> Bool {
+            saved.mode != .keyring && (try? saved.load(backend: .keyring) == nil) != true
+        }
+        guard let savedRecord else { return !mayRetainKeychain() }
         guard let retainedRecord, AuthStorage$Codex.sameCredentials(savedRecord.data, retainedRecord.data) else {
             return false
         }
@@ -899,7 +1005,8 @@ enum AuthSwap$Codex {
         func validateDuplicate(_ candidate: AuthStorage$Codex, owner: DirectoryIdentity) throws {
             try AuthStorage$Codex.validateMutation(homes: [candidate.home, original], includesKeyring: includesKeyring,
                                                    tracksDirectoryContents: false) {
-                if candidate.mode.usesKeyring, try candidate.load(backend: .file) != nil { throw Failure.busy }
+                if savedRecord.backend == .keyring, candidate.mode.usesKeyring,
+                   try candidate.load(backend: .file) != nil { throw Failure.busy }
                 guard try checkedRecord(savedRecord, storage: candidate, home: candidate.home, owner: owner).matches,
                       try checkedRecord(retainedRecord, storage: retained, home: original, owner: retainedOwner).matches else {
                     throw Failure.busy
@@ -921,12 +1028,12 @@ enum AuthSwap$Codex {
             defer {
                 if !stageHasItem, stageOwner.matches(staged.home),
                    (try? retireEmptyDuplicateStage(at: staged.home, matching: stageEntry)) == true {
-                    try? recordStage(nil)
+                    try? recordStage(nil, .keyring)
                 }
             }
             try duplicateRecoverySettings.write(to: config, options: .withoutOverwriting)
             // Register before moving the item so discovery can resume a cut transaction.
-            try recordStage(staged.home)
+            try recordStage(staged.home, .keyring)
             guard try saved.moveRecoveryKeychainItem(to: staged, validating: {
                 try validateDuplicate(saved, owner: savedOwner)
             }) else { throw Failure.busy }
@@ -950,11 +1057,36 @@ enum AuthSwap$Codex {
                 throw error
             }
         } else {
-            try saved.delete(validating: { try validateDuplicate(saved, owner: savedOwner) })
+            let fileStorage = try AuthStorage$Codex(home: saved.home, mode: .file)
+            let staging = snapshot.deletingLastPathComponent()
+                .appendingPathComponent(".duplicate-" + UUID().uuidString, isDirectory: true)
+            guard mkdir(staging.path, 0o700) == 0, let stageOwner = DirectoryIdentity.capture(staging),
+                  let stageKey = try availableFileOwnerKey(staging) else { throw Failure.busy }
+            let staged = try AuthStorage$Codex(home: staging, mode: .file)
+            let stageEntry = ["home": staging.path, "owner": stageKey, "cleanupBackend": "file"]
+            try duplicateFileSettings.write(to: staging.appendingPathComponent("config.toml"), options: .withoutOverwriting)
+            try recordStage(staging, .file)
+            try staged.save(savedRecord.data, backend: .file)
+            try fileStorage.delete(validating: {
+                guard !fileIsShared(home: saved.home, fileHome: saved.home) else { throw Failure.busy }
+                try validateDuplicate(saved, owner: savedOwner)
+            })
+            // Keep a durable copy across both unlink and the final retained
+            // login check. Replay can promote it if either route changed.
+            let current = try saved.load(verifyingOwner: true)
+            let keepSavedNamespace = mayRetainKeychain()
+            try requireStorage(saved, home: snapshot, owner: savedOwner)
+            if let current, AuthStorage$Codex.sameCredentials(current.data, savedRecord.data) { throw Failure.busy }
+            try staged.delete(validating: { try validateDuplicate(staged, owner: stageOwner) })
+            if (try? retireEmptyDuplicateStage(at: staging, matching: stageEntry)) == true {
+                try recordStage(nil, .file)
+            }
+            return current == nil && !keepSavedNamespace
         }
         if retainedRouteIsCurrent(), retainedOwner.matches(original) {
             let loaded = Result { try saved.load(verifyingOwner: true) }
-            if retainedRouteIsCurrent(), retainedOwner.matches(original) {
+            if (try? checkedRecord(retainedRecord, storage: retained, home: original, owner: retainedOwner).matches) == true,
+               retainedRouteIsCurrent() {
                 guard let current = try loaded.get() else { return true }
                 if AuthStorage$Codex.sameCredentials(current.data, savedRecord.data) { throw Failure.busy }
                 return false
@@ -965,7 +1097,8 @@ enum AuthSwap$Codex {
         // copy exclusively, then let discovery reconcile the new route.
         let restored = try? saved.restoreRecoveryRecordIfAbsent(savedRecord) {
             try requireStorage(saved, home: snapshot, owner: savedOwner)
-            if saved.mode.usesKeyring, try saved.load(backend: .file) != nil { throw Failure.busy }
+            if savedRecord.backend == .keyring, saved.mode.usesKeyring,
+               try saved.load(backend: .file) != nil { throw Failure.busy }
         }
         if restored == true { throw Failure.busy }
         if (try? checkedRecord(savedRecord, storage: saved, home: snapshot, owner: savedOwner).matches) == true {
@@ -1921,14 +2054,18 @@ enum AuthSwap$Codex {
         return record
     }
 
-    private static func preserveUnexpectedNativeLogin(_ record: AuthStorage$Codex.Record) throws {
+    private static func preserveUnexpectedNativeLogin(_ record: AuthStorage$Codex.Record,
+                                                      onReserved: ((String) throws -> Void)? = nil) throws {
         let login = authIdentity(record.data)
         // Reuse a copy saved by an interrupted switch.
         discoverPreviouslySavedNativeLogins()
-        for entry in recoveredBackups.values where login != nil && entry["nativeLogin"] == login {
+        for (id, entry) in recoveredBackups where login != nil && entry["nativeLogin"] == login {
+            if onReserved != nil,
+               entry["pendingOn"] != nil || entry["returnedLogin"] != nil || entry["cleanupSource"] != nil { continue }
             guard let home = recoveredBackupHome(entry),
                   let saved = try? storage(at: home).load(backend: record.backend),
                   AuthStorage$Codex.sameCredentials(saved.data, record.data) else { continue }
+            try onReserved?(id)
             return
         }
         let root = defaultStashHome.deletingLastPathComponent()
@@ -1956,6 +2093,7 @@ enum AuthSwap$Codex {
         entries[id] = entry
         state["profiles"] = entries
         UserDefaults.standard.set(state, forKey: recoveredBackupKey)
+        try onReserved?(id)
         guard UserDefaults.standard.synchronize() else { throw Failure.busy }
         guard try destination.restoreRecoveryRecordIfAbsent(record, validating: validate) else { throw Failure.busy }
     }
@@ -1988,7 +2126,8 @@ enum AuthSwap$Codex {
             if let login = authIdentity(record.data) {
                 entry["nativeLogin"] = entry["nativeLogin"] ?? login
                 if let retained = retainedByLogin[login],
-                   let credentials = try? duplicateRecoveryCredentials(candidate), !credentials.hasInactiveLogin,
+                   let credentials = try? duplicateRecoveryCredentials(candidate),
+                   record.backend == .file || !credentials.hasInactiveLogin,
                    credentials.active.flatMap(authIdentity) == login {
                     entry["pendingOn"] = retained
                 } else if retainedByLogin[login] == nil {
@@ -2314,8 +2453,33 @@ enum AuthSwap$Codex {
             }
         }
         try validate(record, fileRemoved: false)
-        try backup.delete(preservingFile: retainsFileLogin, validating: { try validate(record, fileRemoved: false) }, afterFileRemoval: {
+        try backup.delete(preservingFile: retainsFileLogin, validating: {
+            try validate(record, fileRemoved: false)
+        }, afterFileRemoval: {
             try validate(record?.backend == .file ? nil : record, fileRemoved: true)
+        }, restoreFileValidating: {
+            guard try matchesLocation(backup, home: stashHome, owner: owner) else { throw Failure.busy }
+        }, removeKeyring: { validateSource in
+            guard let record, record.backend == .keyring else {
+                // An empty namespace cannot authorize deleting a newly created item.
+                try validateSource()
+                return
+            }
+            guard let owner else { throw Failure.busy }
+            try deleteReturnedKeychainCopy(record, from: backup, owner: owner) { storage, stagedOwner in
+                if storage.home == backup.home {
+                    try validateSource()
+                } else {
+                    try AuthStorage$Codex.validateMutation(homes: [stashHome, storage.home] + owners.map { $0.home },
+                                                           includesKeyring: true, tracksDirectoryContents: false) {
+                        try validate(nil, fileRemoved: true)
+                        let staged = try storage.load(backend: .keyring)
+                        guard AuthStorage$Codex.sameCredentials(staged?.data, record.data),
+                              try matchesLocation(storage, home: storage.home, owner: stagedOwner)
+                        else { throw Failure.busy }
+                    }
+                }
+            }
         })
         try validate(nil, fileRemoved: true)
         return retainsFileLogin || !backup.canRetireProfileDirectory()
@@ -2340,9 +2504,11 @@ enum AuthSwap$Codex {
            let replacement = try? configuredBackup(replacing: record, pinnedMode: backup.mode, at: configured),
            (try? matchesLocation(backup, home: stashHome, owner: owner)) == true {
             if let record, !AuthStorage$Codex.sameCredentials(record.data, replacement.data) {
-                let recovery = ProfileDirectories.codexRoot
-                    .appendingPathComponent("recovered-" + UUID().uuidString, isDirectory: true)
-                try saveRecoveredBackup(record, mode: backup.mode, at: recovery)
+                if try !hasStagedBackup(record, from: backup.home, owner: owner) {
+                    let recovery = ProfileDirectories.codexRoot
+                        .appendingPathComponent("recovered-" + UUID().uuidString, isDirectory: true)
+                    try saveRecoveredBackup(record, mode: backup.mode, at: recovery)
+                }
                 recovered = record
             }
             try AuthStorage$Codex.validateMutation(homes: [stashHome], includesKeyring: configured.mode.usesKeyring,
@@ -2375,6 +2541,12 @@ enum AuthSwap$Codex {
             // Preserve a new primary's credentials and route. Its former login
             // remains discoverable in a separate managed recovery namespace.
             let replaced = (try? backup.load(verifyingOwner: true)) != nil
+            // Leave the verified native publication in place if the stage
+            // cannot yet prove whether it already holds this login.
+            if replaced, try hasStagedBackup(record, from: backup.home, owner: owner) {
+                recovered = record
+                return
+            }
             let recovery = replaced
                 ? ProfileDirectories.codexRoot.appendingPathComponent("recovered-" + UUID().uuidString, isDirectory: true)
                 : DesktopApp.supportDirectory.appendingPathComponent("codex-app/recovery-" + UUID().uuidString, isDirectory: true)
@@ -2432,6 +2604,20 @@ enum AuthSwap$Codex {
         for record in [removed].compactMap({ $0 }) + observed {
             guard !visible.contains(where: { AuthStorage$Codex.sameCredentials($0, record.data) }) else { continue }
             if let native, (try? requirePublication(record.data, storage: native, owner: nativeOwner)) != nil {
+                continue
+            }
+            if record.backend == .keyring, let removed, AuthStorage$Codex.sameCredentials(removed.data, record.data),
+               owner?.matches(backup.home) == true, let source = try availableFileOwnerKey(backup.home),
+               let (path, staged) = returnedStages.first(where: {
+                   $0.value["source"]?["home"] == backup.home.path && $0.value["source"]?["owner"] == source
+               }) {
+                try preserveUnexpectedNativeLogin(record) { id in
+                    var journal = staged
+                    journal["fallback"] = ["id": id]
+                    setReturnedStage(journal, for: path)
+                    guard UserDefaults.standard.synchronize() else { throw Failure.busy }
+                }
+                visible.append(record.data)
                 continue
             }
             let recoveryRoot = retainedID == nil ? ProfileDirectories.codexRoot : defaultStashHome.deletingLastPathComponent()

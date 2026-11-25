@@ -673,7 +673,9 @@ struct AuthStorage$Codex {
     func delete(fileHome: URL? = nil, keyring: AuthStorage$Codex? = nil, preservingFile: Bool = false,
                 validating: (() throws -> Void)? = nil,
                 afterFileRemoval: (() throws -> Void)? = nil,
-                beforeKeyringMutation: (() throws -> Void)? = nil) throws {
+                beforeKeyringMutation: (() throws -> Void)? = nil,
+                restoreFileValidating: (() throws -> Void)? = nil,
+                removeKeyring: ((@escaping () throws -> Void) throws -> Void)? = nil) throws {
         guard mode != .ephemeral else { throw Failure.ephemeral }
         let validate = {
             try mutationValidation?()
@@ -699,7 +701,7 @@ struct AuthStorage$Codex {
         }
         do {
             if backup == nil { try validate() }
-            let status = try Self.withKeychainAccess {
+            func validateKeyringMutation() throws {
                 if backup == nil { try validate() }
                 else { try afterFileRemoval?() }
                 try proof.validate(destination)
@@ -709,11 +711,18 @@ struct AuthStorage$Codex {
                     guard lstat(file.path, &info) != 0, errno == ENOENT else { throw Failure.settings }
                 }
                 try proof.validateDatabase()
-                return SecItemDelete(destination.query as CFDictionary)
             }
-            guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.keychain(status) }
+            if let removeKeyring {
+                try removeKeyring(validateKeyringMutation)
+            } else {
+                let status = try Self.withKeychainAccess {
+                    try validateKeyringMutation()
+                    return SecItemDelete(destination.query as CFDictionary)
+                }
+                guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.keychain(status) }
+            }
         } catch {
-            if let backup { try restoreFile(backup, at: file) }
+            if let backup { try restoreFile(backup, at: file, validating: restoreFileValidating) }
             throw error
         }
     }

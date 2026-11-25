@@ -397,3 +397,72 @@ def retained_stage_restart(mode, occupied):
 for mode, occupied in product(("keyring", "auto"), (False, True)):
     name = f"test_retained_audit_stage_{mode}_" + ("occupied" if occupied else "empty_source")
     setattr(CodexRestorationRegressions, name, retained_stage_restart(mode, occupied))
+
+for mode, action, phase in product(
+    ("keyring", "auto"), ("return", "remove"),
+    ("earlier", "late", "after-move", "after-move-denied", "after-move-denied-native"),
+):
+    setattr(CodexRestorationRegressions, f"test_final_audit_live_{mode}_{action}_" + phase.replace("-", "_"),
+            scenario_test(f"audit-live-cleanup:{mode}:{action}:{phase}"))
+for option in ("mixed", "single-backend", "denied", "replace-retained", "replace-retained-denied"):
+    setattr(CodexRestorationRegressions, "test_final_audit_import_" + option.replace("-", "_"),
+            scenario_test("audit-mixed-import:" + option))
+for mode, phase in product(("keyring", "auto"), ("denied", "allowed")):
+    setattr(CodexRestorationRegressions, f"test_final_audit_primary_removal_{mode}_{phase}",
+            retained_return(mode, "remove-new-primary-" + phase))
+
+def audit_mixed_import_cut(phase, resumed="audit-mixed-import-restart"):
+    def test(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-import-cut-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            cut = swift_regression.run_fixture(self.executable, "audit-mixed-import:" + phase, root)
+            self.assertEqual(cut.returncode, 86, cut.stdout + cut.stderr)
+            restart = swift_regression.run_fixture(self.executable, resumed, root)
+            self.assertEqual(restart.returncode, 0, restart.stdout + restart.stderr)
+    return test
+
+CodexRestorationRegressions.test_final_audit_import_restart = audit_mixed_import_cut("cut")
+CodexRestorationRegressions.test_final_audit_import_occupied_restart = audit_mixed_import_cut(
+    "replace-retained-cut", "audit-mixed-import-restart:occupied",
+)
+CodexRestorationRegressions.test_final_audit_import_file_denied_restart = audit_mixed_import_cut(
+    "replace-retained-cut-file", "audit-mixed-import-restart:file-denied",
+)
+CodexRestorationRegressions.test_final_audit_import_occupied_denied_restart = audit_mixed_import_cut(
+    "replace-retained-cut", "audit-mixed-import-restart:keyring-denied",
+)
+CodexRestorationRegressions.test_final_audit_import_ephemeral_restart = audit_mixed_import_cut(
+    "replace-retained-cut-ephemeral", "audit-mixed-import-restart:ephemeral",
+)
+
+def audit_independent_staged_removal(mode):
+    def test(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-staged-removal-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            for scenario, code in (
+                (f"audit-backup:{mode}:cut-before-delete", 86),
+                ("retained-audit-return:stage-crash-occupied", 86),
+                ("audit-independent-staged-removal", 0),
+            ):
+                result = swift_regression.run_fixture(self.executable, scenario, root)
+                self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+    return test
+
+for mode in ("keyring", "auto"):
+    setattr(CodexRestorationRegressions, f"test_final_audit_independent_stage_{mode}",
+            audit_independent_staged_removal(mode))
+
+def audit_live_takeover_restart(mode, action):
+    def test(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-live-takeover-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            first = f"audit-live-cleanup:{mode}:{action}:after-move-denied-native-restart"
+            cut = swift_regression.run_fixture(self.executable, first, root)
+            self.assertEqual(cut.returncode, 86, cut.stdout + cut.stderr)
+            restart = swift_regression.run_fixture(self.executable, "audit-live-restart-after-takeover", root)
+            self.assertEqual(restart.returncode, 0, restart.stdout + restart.stderr)
+    return test
+
+for mode, action in product(("keyring", "auto"), ("return", "remove")):
+    name = f"test_final_audit_live_{mode}_{action}_after_move_denied_native_restart"
+    setattr(CodexRestorationRegressions, name, audit_live_takeover_restart(mode, action))

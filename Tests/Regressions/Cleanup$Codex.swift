@@ -1,6 +1,7 @@
 private enum BackupSignals {
   static var deleted: ((String) -> Void)?
   static var nativeRead: ((String) -> Void)?
+  static var moving: ((String, String) -> Void)?
 }
 @main enum Cleanup$Codex {
   static let manager = Foundation.FileManager.default
@@ -224,11 +225,16 @@ private enum BackupSignals {
         replacement = try! Cleanup$Authentication.bytes(backup, mode: "file")
       }
     }
+    let backupKey = Fixture.codexKey(backup)
+    var deletionKey = backupKey
+    BackupSignals.moving = { source, destination in
+      if source == backupKey { deletionKey = destination }
+    }
     if phase == "completed" {
       BackupSignals.deleted = { key in
-        if key == Fixture.codexKey(backup) {
+        if key == deletionKey {
           BackupSignals.nativeRead = { observed in
-            if observed == Fixture.codexKey(backup) {
+            if observed == backupKey {
               BackupSignals.nativeRead = nil
               mutate()
             }
@@ -236,7 +242,7 @@ private enum BackupSignals {
         }
       }
     } else if phase == "keychain" {
-      BackupSignals.deleted = { key in if key == Fixture.codexKey(backup) { mutate() } }
+      BackupSignals.deleted = { key in if key == deletionKey { mutate() } }
     } else {
       CleanupSignals.removed = { url in
         if url.path == backup.appendingPathComponent("auth.json").path { mutate() }
@@ -259,6 +265,7 @@ private enum BackupSignals {
     CleanupSignals.removed = nil
     BackupSignals.deleted = nil
     BackupSignals.nativeRead = nil
+    BackupSignals.moving = nil
     let accounts = Discovery$Real().discover().filter { $0.provider == .codex }
     let visible = accounts.compactMap { a -> Data? in
       guard case .codexHome(let home) = a.source else { return nil }

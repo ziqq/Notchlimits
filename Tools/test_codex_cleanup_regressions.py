@@ -21,6 +21,9 @@ class CodexCleanupRegressions(unittest.TestCase):
                 "let exists = super.fileExists(atPath: configPath(path))\n        CleanupSignals.io?(path)",
             "        Fixture.codexKeychain[key] = nil\n        return errSecSuccess":
                 "        Fixture.codexKeychain[key] = nil\n        BackupSignals.deleted?(key)\n        return errSecSuccess",
+            "            Fixture.codexKeychain[destination] = Fixture.codexKeychain.removeValue(forKey: key)":
+                "            BackupSignals.moving?(key, destination)\n"
+                "            Fixture.codexKeychain[destination] = Fixture.codexKeychain.removeValue(forKey: key)",
         }
         boundaries["func SecItemCopyMatching(_ query: CFDictionary, _ result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus {"] = """func SecItemCopyMatching(_ query: CFDictionary, _ result: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus {
     if (query as NSDictionary)[kSecAttrService as String] as? String == "Codex Auth",
