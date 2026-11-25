@@ -44,7 +44,12 @@ class CodexRestorationRegressions(unittest.TestCase):
             keychain_add + "\n        guard Fixture.codexKeychain[key] == nil else { return errSecDuplicateItem }"
         )
         move = "            Fixture.codexKeychain[destination] = Fixture.codexKeychain.removeValue(forKey: key)"
-        boundaries[move] = "            RestorationSignals.beforeMove?(key, destination)\n" + move + "\n            RestorationSignals.afterMove?(key, destination)"
+        boundaries[move] = (
+            "            RestorationSignals.beforeMove?(key, destination)\n" + move
+            + "\n            if RestorationSignals.followsDeleteDenial && Fixture.denyCodexDeleteAccount == key {\n"
+            + "                Fixture.denyCodexDeleteAccount = destination\n            }\n"
+            + "            RestorationSignals.afterMove?(key, destination)"
+        )
         database = "        try Data().write(to: path, options: .withoutOverwriting)\n        codexDatabase = path"
         boundaries[database] = ("        if !Foundation.FileManager.default.fileExists(atPath: path.path) {\n"
                                 "            try Data().write(to: path, options: .withoutOverwriting)\n"
@@ -350,3 +355,45 @@ for mode, change in product(("file", "keyring"), ("rotation", "same-workspace"))
 for mode, operation in product(("keyring", "auto"), ("rotate-primary", "relogin-primary", "access-only-primary")):
     name = "test_extra_restart_" + mode + "_deferred_" + operation.replace("-", "_")
     setattr(CodexRestorationRegressions, name, extra_audit_restart(mode, "denied", operation))
+
+def retained_return(mode, operation):
+    def test(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-retained-audit-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            before = swift_regression.run_fixture(self.executable, f"audit-backup:{mode}:cut-before-delete", root)
+            self.assertEqual(before.returncode, 86, before.stdout + before.stderr)
+            after = swift_regression.run_fixture(self.executable, f"retained-audit-return:{operation}", root)
+            print(after.stdout.strip(), flush=True)
+            self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
+    return test
+
+for mode, operation in product(("file", "keyring"), ("single", "duplicate")):
+    setattr(CodexRestorationRegressions, f"test_retained_audit_legacy_{mode}_{operation}",
+            scenario_test(f"retained-audit-legacy-copies:{mode}:{operation}"))
+for mode, operation in product(("keyring", "auto"), (
+    "delete-race", "retry-delete-race", "read-before-delete", "auto-fallback", "file-fallback",
+    "rotate-then-relogin", "rotate-then-relogin-denied", "relogin-without-rotation",
+)):
+    setattr(CodexRestorationRegressions, f"test_retained_audit_{mode}_" + operation.replace("-", "_"),
+            retained_return(mode, operation))
+
+for mode, operation in product(("keyring", "auto"), ("restore-directory", "stable-directory")):
+    setattr(CodexRestorationRegressions, f"test_retained_audit_{mode}_" + operation.replace("-", "_"),
+            retained_return(mode, operation))
+
+def retained_stage_restart(mode, occupied):
+    def test(self):
+        with tempfile.TemporaryDirectory(prefix="notchlimits-returned-stage-", dir="/private/tmp") as directory:
+            root = pathlib.Path(directory)
+            cut = swift_regression.run_fixture(self.executable, f"audit-backup:{mode}:cut-before-delete", root)
+            self.assertEqual(cut.returncode, 86, cut.stdout + cut.stderr)
+            phase = "stage-crash-occupied" if occupied else "stage-crash"
+            second_cut = swift_regression.run_fixture(self.executable, f"retained-audit-return:{phase}", root)
+            self.assertEqual(second_cut.returncode, 86, second_cut.stdout + second_cut.stderr)
+            replay = swift_regression.run_fixture(self.executable, "retained-audit-stage-restart", root)
+            self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
+    return test
+
+for mode, occupied in product(("keyring", "auto"), (False, True)):
+    name = f"test_retained_audit_stage_{mode}_" + ("occupied" if occupied else "empty_source")
+    setattr(CodexRestorationRegressions, name, retained_stage_restart(mode, occupied))
