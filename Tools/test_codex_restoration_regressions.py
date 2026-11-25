@@ -346,3 +346,7 @@ def extra_audit_copy_restart(mode, change):
 for mode, change in product(("file", "keyring"), ("rotation", "same-workspace")):
     name = "_".join((mode, change)).replace("-", "_")
     setattr(CodexRestorationRegressions, "test_extra_primary_copy_" + name, extra_audit_copy_restart(mode, change))
+
+for mode, operation in product(("keyring", "auto"), ("rotate-primary", "relogin-primary", "access-only-primary")):
+    name = "test_extra_restart_" + mode + "_deferred_" + operation.replace("-", "_")
+    setattr(CodexRestorationRegressions, name, extra_audit_restart(mode, "denied", operation))

@@ -418,12 +418,17 @@ enum AuthSwap$Codex {
             }
         }
         try validate()
-        let rotated: Bool
-        if let account = entry["returnedOwner"], primaryAccountOwner(record.data) == account,
-           let grant = entry["returnedGrant"] {
-            rotated = try retiredNativeGrants().contains(grant)
-        } else { rotated = false }
-        if authIdentity(record.data) == login || rotated {
+        let sameSession: Bool
+        if let originalGrant = entry["returnedGrant"], let currentGrant = grantIdentity(record.data) {
+            if let originalOwner = entry["returnedOwner"], let currentOwner = primaryAccountOwner(record.data) {
+                sameSession = originalOwner == currentOwner
+            } else { sameSession = originalGrant == currentGrant }
+            if sameSession, originalGrant != currentGrant {
+                try retireNativeGrant(originalGrant)
+                try flushNativeGrants()
+            }
+        } else { sameSession = false }
+        if authIdentity(record.data) == login || sameSession {
             let backup = try AuthStorage$Codex(home: path, mode: backend == .file ? .file : .keyring)
             try cleanupReturnedCopies(in: backup, owner: owner, backend: backend, login: login,
                                       retainedRoute: retainedRoute, retainedUsesKeyring: retained.mode.usesKeyring,
@@ -1808,16 +1813,13 @@ enum AuthSwap$Codex {
         } else {
             guard proof?.isPending != true else { throw Failure.busy }
             if let record {
-                try preserveUnexpectedNativeLogin(record, storage: live, owner: owner)
+                try preserveUnexpectedNativeLogin(record)
             }
         }
         return record
     }
 
-    private static func preserveUnexpectedNativeLogin(_ record: AuthStorage$Codex.Record,
-                                                      storage native: AuthStorage$Codex,
-                                                      owner: DirectoryIdentity?) throws {
-        try requirePublication(record.data, storage: native, owner: owner)
+    private static func preserveUnexpectedNativeLogin(_ record: AuthStorage$Codex.Record) throws {
         let login = authIdentity(record.data)
         // Reuse a copy saved by an interrupted switch.
         discoverPreviouslySavedNativeLogins()
@@ -1831,13 +1833,15 @@ enum AuthSwap$Codex {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let id = UUID().uuidString
         let recovery = root.appendingPathComponent("orphaned-" + id, isDirectory: true)
-        guard mkdir(recovery.path, 0o700) == 0 else { throw Failure.busy }
+        try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: false,
+                                                attributes: [.posixPermissions: 0o700])
         let mode: AuthStorage$Codex.Mode = record.backend == .file ? .file : .keyring
         let destination = try AuthStorage$Codex(home: recovery, mode: mode)
         guard let recoveryOwner = DirectoryIdentity.capture(destination.home),
               let key = try availableFileOwnerKey(destination.home) else { throw Failure.busy }
         func validate() throws {
-            try requirePublication(record.data, storage: native, owner: owner)
+            // Keep the captured login even if the native client signs in again.
+            // The caller separately revalidates its native write.
             guard try matchesLocation(destination, home: recovery, owner: recoveryOwner) else { throw Failure.busy }
         }
         let config = recovery.appendingPathComponent("config.toml")

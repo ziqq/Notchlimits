@@ -1499,6 +1499,37 @@ enum Restoration$Codex {
             if let routes { try expect(routes == 1, "An undeletable duplicate appeared as a second profile") }
             try expect(Fixture.codexKeychain[stashKey] == primary, "The denied backup deletion was not retried safely")
         }
+        if ["rotate-primary", "relogin-primary", "access-only-primary"].contains(operation) {
+            let nativeKey = Fixture.codexKey(native)
+            if operation == "access-only-primary" {
+                let document = try JSONSerialization.jsonObject(with: primary) as! [String: Any]
+                let tokens = document["tokens"] as! [String: Any]
+                let response = OAuth$Codex.Tokens(idToken: nil, accessToken: Fixture.accessToken(expiresAt: 10), refreshToken: nil)
+                Fixture.codexKeychain[nativeKey] = AuthSwap$Codex.renewedAuth(
+                    primary, usedRefreshToken: tokens["refresh_token"] as! String, tokens: response, now: Date())
+            } else { try mutate(native, mode: "keyring", change: "rotation", original: primary) }
+            if operation == "relogin-primary" {
+                Fixture.codexKeychain[nativeKey] = try withAccountSubject(Fixture.codexKeychain[nativeKey]!, subject: "replacement-user")
+            } else {
+                _ = discovery.discover()
+            }
+            let latest = Fixture.codexKeychain[nativeKey]
+            Fixture.denyCodexDeleteAccount = nil
+            _ = discovery.discover()
+            let old = Fixture.codexKeychain[stashKey]
+            let expected = operation == "relogin-primary" ? primary : nil
+            try expect(old == expected && Fixture.codexKeychain[nativeKey] == latest,
+                       "Retry lost the original ownership decision after the primary credentials changed")
+            let counts = try (0..<3).map { _ in try visibleLogins().filter { $0 == primary }.count }
+            let expectedCount = expected == nil ? 0 : 1
+            try expect(counts == Array(repeating: expectedCount, count: 3), "Retry exposed the spent duplicate or lost the independent original login")
+            let retired = UserDefaults.standard.stringArray(forKey: "codexRetiredNativeGrants") ?? []
+            if operation != "relogin-primary" {
+                try expect(retired.count == (operation == "rotate-primary" ? 1 : 0),
+                           "Cleanup confused access-only renewal with spending the original refresh grant")
+            }
+            return
+        }
         let requests = Fixture.usageCalls
         if operation == "usage" {
             let results = await [Provider$Codex().fetch(found), Provider$Codex().fetch(found), Provider$Codex().fetch(found)]
