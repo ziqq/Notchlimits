@@ -287,6 +287,7 @@ enum AuthSwap$Codex {
             }
         }
         try requirePublication(record?.data, storage: native, owner: owner)
+        rememberFormerStash(path.path)
         clearActiveRouting()
         UserDefaults.standard.removeObject(forKey: stashStoreKey)
         UserDefaults.standard.removeObject(forKey: stashHomeKey)
@@ -609,6 +610,7 @@ enum AuthSwap$Codex {
         // CLI can keep using this CODEX_HOME. A future swap needs another stash.
         if homeKey(stashHome) == backup.home.path {
             state["stashHome"] = nextStashHome().path
+            state["formerStashHome"] = nil
         }
         state["profiles"] = entries
         UserDefaults.standard.set(state, forKey: recoveredBackupKey)
@@ -1856,10 +1858,12 @@ enum AuthSwap$Codex {
         var incomingRecord = try source.load(verifyingOwner: true)
         try requireSelectedRecord(incomingRecord, account: expectedAccount, owner: expectedLogin)
         let selectedRecord = incomingRecord
+        var copiedBackPrimary: Data?
         func matchesSelected(_ record: AuthStorage$Codex.Record?) -> Bool {
             guard record?.backend == selectedRecord?.backend else { return false }
             return AuthStorage$Codex.sameCredentials(record?.data, selectedRecord?.data)
                 || AuthStorage$Codex.sameCredentials(record?.data, selectedRecord.map { forwarded($0.data) })
+                || copiedBackPrimary.map { AuthStorage$Codex.sameCredentials(record?.data, $0) } == true
         }
         if let record = incomingRecord {
             try requireIdleGrant(record.data)
@@ -1886,7 +1890,11 @@ enum AuthSwap$Codex {
         try FileManager.default.createDirectory(at: base.home, withIntermediateDirectories: true)
         if baseOwner == nil { baseOwner = DirectoryIdentity.capture(base.home) }
         try requireNative(base, owner: baseOwner)
-        let previous = try giveBackCurrent(base)
+        let previous = try giveBackCurrent(base) { backup, owner, before, after in
+            guard columnID == defaultColumnID, backup.home.path == source.home.path,
+                  owner == sourceOwner, matchesSelected(before) else { return }
+            copiedBackPrimary = after
+        }
         // Copyback can advance a primary backup that shared the selected grant.
         // Publish that updated record instead of its pre-copyback token snapshot.
         incomingRecord = try source.load(verifyingOwner: true)
@@ -1979,6 +1987,7 @@ enum AuthSwap$Codex {
             throw error
         }
         if columnID == defaultColumnID {
+            if !keepBackup { rememberFormerStash(backup.home.path) }
             UserDefaults.standard.removeObject(forKey: activeIDKey)
             UserDefaults.standard.removeObject(forKey: activeHomeKey)
             UserDefaults.standard.removeObject(forKey: activePhysicalHomeKey)
@@ -1995,6 +2004,10 @@ enum AuthSwap$Codex {
             UserDefaults.standard.set(home.path, forKey: activeHomeKey)
             UserDefaults.standard.set(source.home.path, forKey: activePhysicalHomeKey)
             UserDefaults.standard.set(payload.flatMap(authIdentity), forKey: sourceAuthKey)
+            var state = recoveredBackupState
+            if state.removeValue(forKey: "formerStashHome") != nil {
+                UserDefaults.standard.set(state, forKey: recoveredBackupKey)
+            }
         }
         return (previous, checked.record)
     }
@@ -2314,6 +2327,21 @@ enum AuthSwap$Codex {
 
     /// A CLI relogin can finish in a former stash after the primary has returned.
     /// Only empty stores and copies of the current primary can be reused.
+    private static var isFormerStash: Bool {
+        recoveredBackupState["formerStashHome"] as? String == stashHome.path
+    }
+
+    private static func rememberFormerStash(_ path: String) {
+        let stash = stashHome
+        guard homeKey(stash) == path else { return }
+        var state = recoveredBackupState
+        state["formerStashHome"] = stash.path
+        // A rollback may have selected a replacement namespace temporarily.
+        // Keep observing that namespace after clearing its active override.
+        if UserDefaults.standard.string(forKey: stashHomeKey) != nil { state["stashHome"] = stash.path }
+        UserDefaults.standard.set(state, forKey: recoveredBackupKey)
+    }
+
     private static func inactiveStashMatches(_ stash: AuthStorage$Codex, owner: DirectoryIdentity?,
                                              primary: AuthStorage$Codex.Record?, checkingKeyring: Bool) throws -> Bool {
         var matches = false
@@ -2335,6 +2363,16 @@ enum AuthSwap$Codex {
         guard stash.home.path != native.home.path else { throw Failure.busy }
         guard let stashOwner = DirectoryIdentity.capture(stash.home) else {
             guard DirectoryIdentity.missingPath(stash.home) != nil else { throw Failure.busy }
+            // A missing directory is not proof that its native Keychain item
+            // is absent. Leave the former namespace behind before reuse.
+            var state = recoveredBackupState
+            state["stashHome"] = nextStashHome().path
+            state["formerStashHome"] = nil
+            let defaults = UserDefaults.standard
+            defaults.set(state, forKey: recoveredBackupKey)
+            defaults.removeObject(forKey: stashStoreKey)
+            defaults.removeObject(forKey: stashHomeKey)
+            guard defaults.synchronize() else { throw Failure.busy }
             return nil
         }
         guard owner?.isSameDirectory(as: stashOwner) != true else { throw Failure.busy }
@@ -2349,7 +2387,10 @@ enum AuthSwap$Codex {
     }
 
     /// Вход, что сейчас в `~/.codex`, — обратно владельцу.
-    private static func giveBackCurrent(_ expected: AuthStorage$Codex? = nil) throws -> AuthStorage$Codex.Record? {
+    private static func giveBackCurrent(
+        _ expected: AuthStorage$Codex? = nil,
+        didAdvancePrimary: ((AuthStorage$Codex, DirectoryIdentity?, AuthStorage$Codex.Record, Data) -> Void)? = nil
+    ) throws -> AuthStorage$Codex.Record? {
         let live = try expected ?? storage(at: baseHome)
         let owner = DirectoryIdentity.capture(live.home)
         try requireNative(live, owner: owner)
@@ -2360,11 +2401,15 @@ enum AuthSwap$Codex {
         if !isSwapped {
             try advancePrimaryCopies()
             if let payload { trackCopies(of: payload) }
-            let reusedOwner = try reusableInactiveStash(primary: record, native: live, owner: owner)
-            if reusedOwner == nil {
+            let formerStash = isFormerStash
+            let reusedOwner = formerStash ? try reusableInactiveStash(primary: record, native: live, owner: owner) : nil
+            if formerStash, reusedOwner == nil {
                 let freshHome = stashHome
                 try FileManager.default.createDirectory(at: freshHome.deletingLastPathComponent(), withIntermediateDirectories: true)
-                guard mkdir(freshHome.path, 0o700) == 0 else { throw Failure.busy }
+                try FileManager.default.createDirectory(at: freshHome, withIntermediateDirectories: false,
+                                                        attributes: [.posixPermissions: 0o700])
+            } else {
+                try FileManager.default.createDirectory(at: stashHome, withIntermediateDirectories: true)
             }
             let stashMode = record?.backend == .file ? AuthStorage$Codex.Mode.file : live.mode
             let stash = try AuthStorage$Codex(home: stashHome, mode: stashMode)
@@ -2372,13 +2417,17 @@ enum AuthSwap$Codex {
             let checksKeyring = reusedOwner != nil || stashMode.usesKeyring
             try requireIdle(stash)
             let previousStash = try stash.load(verifyingOwner: true)
-            guard try checkedRecord(record, storage: live, home: baseHome, owner: owner).matches,
-                  try inactiveStashMatches(stash, owner: stashOwner, primary: record, checkingKeyring: checksKeyring)
-            else { throw Failure.busy }
+            func validateStash() throws {
+                guard try matchesLocation(stash, home: stashHome, owner: stashOwner) else { throw Failure.busy }
+                if formerStash, try !inactiveStashMatches(stash, owner: stashOwner, primary: record, checkingKeyring: checksKeyring) {
+                    throw Failure.busy
+                }
+            }
+            guard try checkedRecord(record, storage: live, home: baseHome, owner: owner).matches else { throw Failure.busy }
+            try validateStash()
             let validateBackup = {
-                guard try checkedRecord(record, storage: live, home: baseHome, owner: owner).matches,
-                      try inactiveStashMatches(stash, owner: stashOwner, primary: record, checkingKeyring: checksKeyring)
-                else { throw Failure.busy }
+                guard try checkedRecord(record, storage: live, home: baseHome, owner: owner).matches else { throw Failure.busy }
+                try validateStash()
                 let current = try stash.load(verifyingOwner: true)
                 guard current?.backend == previousStash?.backend,
                       current.flatMap({ authIdentity($0.data) }) == previousStash.flatMap({ authIdentity($0.data) }),
@@ -2386,7 +2435,8 @@ enum AuthSwap$Codex {
                 try requireNativeLocation(live, owner: owner)
             }
             if let payload { try stash.save(payload, backend: record?.backend, replacing: previousStash, validating: validateBackup) }
-            else { try validateBackup() }
+            else if formerStash { try validateBackup() }
+            else { try stash.delete(validating: validateBackup) }
             // A CLI re-login into our internal backup must use that same backend.
             try ("cli_auth_credentials_store = \"" + stashMode.rawValue + "\"\n")
                 .write(to: stash.home.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
@@ -2436,17 +2486,18 @@ enum AuthSwap$Codex {
                 // These are copies of one proven session, rather than separate
                 // sessions of the same account. Preserve its native rotation in
                 // the primary backup before advancing the selected baseline.
-                guard let backupIdentity, let intended = authIdentity(payload) else { throw Failure.busy }
+                guard let primary, let backupIdentity, let intended = authIdentity(payload) else { throw Failure.busy }
                 try requireIdle(backup)
                 UserDefaults.standard.set([identity, backupIdentity, intended], forKey: sourceAuthKey)
                 changedProof = true
-                try backup.save(payload, replacing: primary, validating: {
+                try backup.save(payload, backend: primary.backend, replacing: primary, validating: {
                     guard try checkedRecord(primary, storage: backup, home: stashHome, owner: backupOwner).matches,
                           try checkedRecord(record, storage: live, home: baseHome, owner: owner).matches else {
                         throw Failure.busy
                     }
                     try validateProfile()
                 })
+                didAdvancePrimary?(backup, backupOwner, primary, payload)
             }
             guard try checkedRecord(record, storage: live, home: baseHome, owner: owner).matches else { throw Failure.busy }
             try validateProfile()
@@ -2701,15 +2752,14 @@ enum AuthSwap$Codex {
         if restore || columnID == defaultColumnID {
             let base = try storage(at: baseHome)
             var baseOwner = DirectoryIdentity.capture(base.home)
-            let inactiveOwner = restore ? nil : try reusableInactiveStash(primary: removalRecord, native: base, owner: baseOwner)
-            let cleansBackup = restore || inactiveOwner != nil
+            let formerStash = !restore && isFormerStash
+            let inactiveOwner = formerStash ? try reusableInactiveStash(primary: removalRecord, native: base, owner: baseOwner) : nil
+            let cleansBackup = !formerStash || inactiveOwner != nil
             let backup = try cleansBackup ? storage(at: stashHome) : AuthStorage$Codex(home: stashHome, mode: .file)
-            let backupOwner = restore ? DirectoryIdentity.capture(backup.home) : inactiveOwner
+            let backupOwner = inactiveOwner ?? DirectoryIdentity.capture(backup.home)
+            if cleansBackup { try requireRemovalOwners(backup) }
             try requireIdle(base)
-            if cleansBackup {
-                try requireRemovalOwners(backup)
-                try requireIdle(backup)
-            }
+            if cleansBackup { try requireIdle(backup) }
             if !restore, try nativeGrantOwner(home: base.home.path) != nil {
                 // Deletion must not erase an unobserved native rotation before
                 // its spent grant has been durably reserved across copies.
@@ -2740,7 +2790,7 @@ enum AuthSwap$Codex {
                     }
                 }
                 let primary = cleansBackup ? try backup.load(verifyingOwner: true) : nil
-                if !restore, let primary, !AuthStorage$Codex.sameCredentials(primary.data, removalRecord?.data) {
+                if formerStash, let primary, !AuthStorage$Codex.sameCredentials(primary.data, removalRecord?.data) {
                     throw Failure.busy
                 }
                 if let activation {
@@ -2793,6 +2843,7 @@ enum AuthSwap$Codex {
                 }
                 throw error
             }
+            if restore { rememberFormerStash(backup.home.path) }
             UserDefaults.standard.removeObject(forKey: stashStoreKey)
             UserDefaults.standard.removeObject(forKey: stashHomeKey)
             UserDefaults.standard.removeObject(forKey: sourceAuthKey)
