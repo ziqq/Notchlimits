@@ -15,6 +15,7 @@ private enum RestorationSignals {
     static var beforeMove: ((String, String) -> Void)?
     static var afterMove: ((String, String) -> Void)?
     static var keychainDenied = false
+    static var keychainSearchUnavailable = false
     static var followsDeleteDenial = false
     static var afterNativeFileWrite: (() -> Void)?
 
@@ -78,6 +79,9 @@ enum Restoration$Codex {
             case "audit-stale-keychain": try await staleKeychainAction(action: parts[1], condition: parts[2])
             case "migration": try backupMigration(operation: parts[1], mode: parts[2], phase: parts[3])
             case "routing": try routing(returning: parts[1] == "return", foreign: parts[2] == "foreign")
+            case "inactive-stash": try inactiveStash(action: parts[1], mode: parts[2], reloginMode: parts[3], unavailable: parts.last == "unavailable")
+            case "incoming-selection": try incomingSelection(mode: parts[1], replaced: parts[2] == "replaced")
+            case "incoming-rotation": try incomingRotation(mode: parts[1])
             default: try restoration(kind: parts[0], mode: parts[1], phase: parts[2], change: parts[3])
             }
         } catch { print("FAIL: \(error)"); exit(1) }
@@ -682,6 +686,116 @@ enum Restoration$Codex {
                        && (try visibleLogins()).contains(primary),
                        "Refused switch hid the former primary or kept a false active route")
         }
+    }
+
+    private static func inactiveStash(action: String, mode: String, reloginMode: String, unavailable: Bool) throws {
+        let native = AuthSwap$Codex.baseHome
+        let selected = ProfileDirectories.codexRoot.appendingPathComponent("selected-before-relogin")
+        let selectedID = AuthSwap$Codex.profileColumnID(selected.lastPathComponent)
+        try login(native, name: "original-primary", mode: mode)
+        try login(selected, name: "selected-profile", mode: "file")
+        guard let original = try AuthSwap$Codex.authData(home: native),
+              let selection = try AuthSwap$Codex.authData(home: selected) else { throw Failure(description: "Missing fixture login") }
+        try AuthSwap$Codex.activate(columnID: selectedID, home: selected)
+        let formerStash = AuthSwap$Codex.stashHome
+        try AuthSwap$Codex.restoreDefault()
+        try expect(try AuthSwap$Codex.authData(home: native) == original, "Fixture did not return the primary")
+
+        // A Terminal login already started against the parked primary can
+        // finish after the primary has returned to its original CODEX_HOME.
+        try login(formerStash, name: "late-independent-login", mode: reloginMode)
+        guard let relogin = try AuthSwap$Codex.authData(home: formerStash) else { throw Failure(description: "Missing independent login") }
+        let config = formerStash.appendingPathComponent("config.toml")
+        let originalConfig = try Data(contentsOf: config)
+        RestorationSignals.keychainSearchUnavailable = unavailable
+        defer { RestorationSignals.keychainSearchUnavailable = false }
+        if action == "remove" {
+            guard let primary = Discovery$Real().discover().first(where: { $0.id == AuthSwap$Codex.defaultColumnID }) else {
+                throw Failure(description: "Fixture lost the primary before removal")
+            }
+            try AccountRemoval.remove(primary)
+            try expect(try AuthSwap$Codex.authData(home: native) == nil, "Primary removal did not sign out the primary")
+        } else {
+            try AuthSwap$Codex.activate(columnID: selectedID, home: selected)
+            try expect(AuthSwap$Codex.activeColumnID == selectedID && (try AuthSwap$Codex.authData(home: native)) == selection,
+                       "The selected profile did not become active")
+            try expect(try AuthSwap$Codex.authData(columnID: AuthSwap$Codex.defaultColumnID, home: native) == original,
+                       "The new stash did not keep the primary login")
+        }
+        RestorationSignals.keychainSearchUnavailable = false
+
+        try expect(try AuthSwap$Codex.authData(home: formerStash) == relogin && visibleLogins().filter { $0 == relogin }.count == 1,
+                   "The independent login in the former stash was lost or hidden")
+        try expect(AuthSwap$Codex.stashHome.path != formerStash.path && (try Data(contentsOf: config)) == originalConfig,
+                   "The former stash was reused or its storage mode changed")
+    }
+
+    private static func incomingSelection(mode: String, replaced: Bool) throws {
+        let native = AuthSwap$Codex.baseHome
+        let selected = ProfileDirectories.codexRoot.appendingPathComponent("incoming-selection")
+        let other = Fixture.root.appendingPathComponent("incoming-replacement")
+        try login(native, name: "primary-before-selection", mode: mode)
+        try login(selected, name: "expected-selection", mode: mode)
+        try login(other, name: "different-selection", mode: mode)
+        let primary = try AuthSwap$Codex.authData(home: native)
+        let expected = try AuthSwap$Codex.authData(home: selected)
+        let selectedID = AuthSwap$Codex.profileColumnID(selected.lastPathComponent)
+        guard let replacement = try AuthSwap$Codex.authData(home: other),
+              let account = Discovery$Real().discover().first(where: { $0.id == selectedID }) else {
+            throw Failure(description: "Missing replacement login or selected profile")
+        }
+        let expectedLogin = AuthSwap$Codex.actionLogin(for: account)
+        let stash = AuthSwap$Codex.stashHome
+        var reached = false
+        let replaceDuringBackup = {
+            reached = true
+            if replaced {
+                if mode == "file" { try! replacement.write(to: selected.appendingPathComponent("auth.json"), options: .atomic) }
+                else { Fixture.codexKeychain[Fixture.codexKey(selected)] = replacement }
+            }
+        }
+        RestorationSignals.attributes = { path in
+            let prepared = URL(fileURLWithPath: path)
+            guard prepared.lastPathComponent.hasPrefix(".auth-"), prepared.deletingLastPathComponent().path == stash.path else { return }
+            RestorationSignals.attributes = nil
+            replaceDuringBackup()
+        }
+        RestorationSignals.beforeWrite = { key in
+            guard key == Fixture.codexKey(stash) else { return }
+            RestorationSignals.beforeWrite = nil
+            replaceDuringBackup()
+        }
+        let result = Result {
+            try AuthSwap$Codex.activate(columnID: account.id, home: selected, expectedAccount: account, expectedLogin: expectedLogin)
+        }
+        try expect(reached && ((try? result.get()) == nil) == replaced, "Incoming login was not checked across backup preparation")
+        try expect(try AuthSwap$Codex.authData(home: native) == (replaced ? primary : expected), "The switch published an unselected login")
+        try expect(try AuthSwap$Codex.authData(home: selected) == (replaced ? replacement : expected), "The incoming owner’s credentials changed")
+    }
+
+    private static func incomingRotation(mode: String) throws {
+        let native = AuthSwap$Codex.baseHome
+        let selected = ProfileDirectories.codexRoot.appendingPathComponent("active-rotating-profile")
+        let incoming = ProfileDirectories.codexRoot.appendingPathComponent("incoming-copied-profile")
+        try login(native, name: "primary-before-rotation", mode: mode)
+        try login(selected, name: "selected-rotating-login", mode: mode)
+        try Fixture.codexMode(incoming, mode)
+        guard let original = try AuthSwap$Codex.authData(home: selected) else { throw Failure(description: "Missing selected login") }
+        if mode == "file" { try original.write(to: incoming.appendingPathComponent("auth.json")) }
+        else { Fixture.codexKeychain[Fixture.codexKey(incoming)] = original }
+        try AuthSwap$Codex.activate(columnID: AuthSwap$Codex.profileColumnID(selected.lastPathComponent), home: selected)
+        try mutate(native, mode: mode, change: "rotation", original: original)
+        let rotated = try AuthSwap$Codex.authData(home: native)
+        let incomingID = AuthSwap$Codex.profileColumnID(incoming.lastPathComponent)
+        guard let account = Discovery$Real().discover().first(where: { $0.id == incomingID }) else {
+            throw Failure(description: "Missing profile with the shared login")
+        }
+        try AuthSwap$Codex.activate(columnID: account.id, home: incoming, expectedAccount: account,
+                                   expectedLogin: AuthSwap$Codex.actionLogin(for: account))
+        try expect(AuthSwap$Codex.activeColumnID == account.id &&
+                   (try AuthStorage$Codex.sameCredentials(AuthSwap$Codex.authData(home: native), rotated)) &&
+                   (try AuthStorage$Codex.sameCredentials(AuthSwap$Codex.authData(home: incoming), rotated)),
+                   "Switching refused the known token rotation of a shared login")
     }
 
     private static func compensationLogins(both: Bool, fileBackup: Bool, denied: Bool, unavailable: Bool) throws {

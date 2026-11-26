@@ -29,11 +29,7 @@ struct Provider$Codex: UsageProvider {
     static func cachedUsageMatches(_ loginID: UUID, account: DiscoveredAccount,
                                    route: AuthSwap$Codex.UsageOwner?) -> Bool? {
         guard case .codexHome(let home) = account.source else { return nil }
-        let owner = AuthSwap$Codex.loginOwner(columnID: account.id, home: home)
-        guard owner.location == route, owner.authIdentity != nil,
-              (try? AuthSwap$Codex.isCurrent(owner, columnID: account.id, home: home)) == true,
-              let current = AuthSwap$Codex.usageLogin(owner) else { return nil }
-        return current == loginID
+        return AuthSwap$Codex.cachedUsageMatches(loginID, columnID: account.id, home: home, route: route)
     }
 
     private func fetchResult(_ account: DiscoveredAccount) async -> UsageFetchResult {

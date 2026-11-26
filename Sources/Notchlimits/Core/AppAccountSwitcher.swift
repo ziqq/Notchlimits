@@ -125,7 +125,10 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
         let generation: UUID
         var staged: URL?
         var rollback: Rollback?
+        var nativeFallback: Rollback?
         var removed = false
+
+        var nativeFallbackName: String { ".credentials-" + generation.uuidString + ".removal" }
 
         func currentLogin() -> AuthStorage$Claude.DesktopLoginProof? {
             AuthStorage$Claude.desktopLoginProof(service: service, directory: directory, keychainOnly: keychainOnly)
@@ -134,6 +137,9 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
         func matchesPreviousLogin(_ current: AuthStorage$Claude.DesktopLoginProof) -> Bool {
             guard let previousLogin, current.directory != nil else { return false }
             if current == previousLogin { return true }
+            if let opaque = previousLogin.opaqueKeychain, current.directory == previousLogin.directory {
+                return AuthStorage$Claude.removalKeychainProof(service: service) == opaque
+            }
             guard let rollback, current.directory == rollback.directory,
                   current.login == previousLogin.login, current.stub == previousLogin.stub,
                   let owner = DirectoryIdentity.capture(directory) else { return false }
@@ -148,9 +154,9 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
         }
     }
 
-    static func credentialFileProof(_ parent: Int32) -> String? {
+    static func credentialFileProof(_ parent: Int32, name: String = ".credentials.json") -> String? {
         var info = stat()
-        guard fstatat(parent, ".credentials.json", &info, AT_SYMLINK_NOFOLLOW) == 0,
+        guard fstatat(parent, name, &info, AT_SYMLINK_NOFOLLOW) == 0,
               info.st_mode & S_IFMT == S_IFREG else { return nil }
         return "\(info.st_dev):\(info.st_ino):\(info.st_birthtimespec.tv_sec):\(info.st_birthtimespec.tv_nsec)"
     }
@@ -210,7 +216,26 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
         try FileManager.default.removeItem(at: receipt(for: retirement.columnID))
     }
 
-    private static func recover(_ retirement: Retirement) throws {
+    private static func recover(_ retirement: Retirement, underLease: (() throws -> Void)? = nil) throws {
+        guard retirement.nativeFallback != nil else { try recoverDesktop(retirement); return }
+        // The receipt is visible before the file moves. Keep preparation and
+        // replay under the same native leases even when the checkpoint is absent.
+        func reconcile(_ validate: () throws -> Void) throws {
+            guard let saved = try load(from: receipt(for: retirement.columnID)),
+                  saved.generation == retirement.generation else { return }
+            try recoverNativeFallback(saved, validating: validate)
+            try validate()
+            try recoverDesktop(saved)
+        }
+        if let underLease { try reconcile(underLease) }
+        else {
+            try AuthStorage$Claude.withRemovalLock(directory: retirement.directory, validating: { _, validate in
+                try reconcile(validate)
+            })
+        }
+    }
+
+    private static func recoverDesktop(_ retirement: Retirement) throws {
         if retirement.removed {
             try finish(retirement, removingOldData: true)
             return
@@ -234,7 +259,36 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
         try finish(retirement, removingOldData: !current.hasCredential && retirement.previousLogin?.hasCredential == true)
     }
 
+    private static func hasNativeFallbackCheckpoint(_ retirement: Retirement) -> Bool {
+        retirement.nativeFallback != nil
+            && DirectoryIdentity.missingPath(retirement.directory.appendingPathComponent(retirement.nativeFallbackName)) == nil
+    }
+
+    private static func recoverNativeFallback(_ retirement: Retirement, validating validate: () throws -> Void) throws {
+        guard let fallback = retirement.nativeFallback, hasNativeFallbackCheckpoint(retirement) else { return }
+        let directory = retirement.directory
+        guard let owner = DirectoryIdentity.capture(directory),
+              AuthStorage$Claude.desktopDirectoryProof(owner) == fallback.directory else { throw RetiredAccount() }
+        func shouldRestore() throws -> Bool {
+            if retirement.removed { return false }
+            guard let current = AuthStorage$Claude.desktopLoginProof(service: retirement.service, directory: directory,
+                                                                     keychainOnly: true),
+                  current.directory == fallback.directory, owner.matches(directory) else { throw RetiredAccount() }
+            if !current.hasCredential { return false }
+            guard retirement.matchesPreviousLogin(current) else { throw RetiredAccount() }
+            return true
+        }
+        let restore = try shouldRestore()
+        try AccountRemoval.resolveClaudeFallback(in: directory, matching: fallback.credentialFile,
+                                                   named: retirement.nativeFallbackName, restoring: restore) {
+            guard try shouldRestore() == restore, owner.matches(directory) else { throw RetiredAccount() }
+            try validate()
+        }
+        guard !hasNativeFallbackCheckpoint(retirement) else { throw RetiredAccount() }
+    }
+
     static func recoverInterruptedRemovals() {
+        AuthStorage$Claude.recoverSharedPrimaryRemoval()
         let files = (try? FileManager.default.contentsOfDirectory(at: retirements, includingPropertiesForKeys: nil)) ?? []
         for file in files {
             if let retirement = try? load(from: file) { try? recover(retirement) }
@@ -253,21 +307,35 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
     }
 
     static func withDesktopRetirement(services: Set<String>, directory: URL, keychainOnly: Bool = false,
+                                      protectsNativeFallback: Bool = false,
+                                      validating validate: @escaping () throws -> Void,
                                       operation: (_ recordMove: @escaping (URL) throws -> Void,
-                                                  _ recordRollback: @escaping (Int32, Int32) -> Void) throws -> Void) throws {
+                                                  _ recordRollback: @escaping (Int32, Int32) -> Void,
+                                                  _ nativeFallback: (name: String, proof: String)?) throws -> Void) throws {
         var pending: [Retirement] = []
         try FileManager.default.createDirectory(at: retirements, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
         for service in services.sorted() {
             let columnID = "claude:" + service
             let file = receipt(for: columnID)
-            if let existing = try load(from: file) { try recover(existing) }
+            if let existing = try load(from: file) { try recover(existing, underLease: validate) }
             guard try load(from: file) == nil else { throw RetiredAccount() }
-            let retirement = Retirement(columnID: columnID, service: service, directory: directory,
+            var retirement = Retirement(columnID: columnID, service: service, directory: directory,
                                         keychainOnly: keychainOnly, previousKey: key(for: columnID),
                                         previousLogin: AuthStorage$Claude.desktopLoginProof(service: service, directory: directory,
-                                                                                            keychainOnly: keychainOnly),
+                                                                                            keychainOnly: keychainOnly || protectsNativeFallback),
                                         generation: UUID())
+            if protectsNativeFallback,
+               DirectoryIdentity.missingPath(directory.appendingPathComponent(".credentials.json")) == nil {
+                guard let owner = DirectoryIdentity.capture(directory),
+                      let directoryProof = AuthStorage$Claude.desktopDirectoryProof(owner) else { throw RetiredAccount() }
+                let descriptor = open(owner.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                guard descriptor >= 0 else { throw RetiredAccount() }
+                defer { close(descriptor) }
+                guard DirectoryIdentity.capture(descriptor: descriptor) == owner, owner.matches(directory),
+                      let file = credentialFileProof(descriptor) else { throw RetiredAccount() }
+                retirement.nativeFallback = Retirement.Rollback(directory: directoryProof, credentialFile: file)
+            }
             try save(retirement)
             pending.append(retirement)
         }
@@ -293,9 +361,11 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
                     pending[index].rollback = Retirement.Rollback(directory: restoredProof, credentialFile: file)
                     try? save(pending[index])
                 }
+            }, pending.first.flatMap { retirement in
+                retirement.nativeFallback.map { (retirement.nativeFallbackName, $0.credentialFile) }
             })
         } catch {
-            for retirement in pending {
+            for retirement in pending where !hasNativeFallbackCheckpoint(retirement) {
                 if let current = retirement.currentLogin(), retirement.matchesPreviousLogin(current) {
                     try? finishRollback(retirement)
                 }
@@ -305,7 +375,9 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
         for var retirement in pending {
             retirement.removed = true
             try save(retirement)
-            try finish(retirement, removingOldData: true)
+            if !hasNativeFallbackCheckpoint(retirement) {
+                try finish(retirement, removingOldData: true)
+            }
         }
     }
 

@@ -212,7 +212,11 @@ private enum Fixture {
         }
     }
 
-    enum Response { case renewed, lost, temporary, unreadable, delayedLost, changedClaude, nativeLogin, forbidden, delayedRenewed, slowRenewed, heldRenewed, heldTemporary, heldLost, heldRejected }
+    enum Response {
+        case renewed, lost, temporary, unreadable, delayedLost, changedClaude, nativeLogin, forbidden
+        case delayedRenewed, slowRenewed, heldRenewed, heldTemporary, heldLost, heldRejected
+        case invalidClaudeGrant, unchangedClaudeGrant, accessOnlyClaudeGrant
+    }
     static var response: Response = .renewed
 
     static func didRefresh() {
@@ -849,6 +853,8 @@ struct HTTPClient {
         // Finish the arrival faults before publishing that synchronization point.
         Fixture.didRefresh()
         switch response {
+        case .invalidClaudeGrant:
+            return .success(Response(status: 400, data: Data(#"{"error":"invalid_grant"}"#.utf8), retryAfter: nil))
         case .lost:
             return .failure(.transport("synthetic lost response"))
         case .delayedLost:
@@ -877,13 +883,18 @@ struct HTTPClient {
             try? await Task.sleep(nanoseconds: 100_000_000)
         case .heldRenewed:
             while Fixture.refreshIsPaused() { try? await Task.sleep(nanoseconds: 10_000_000) }
-        case .renewed:
+        case .renewed, .unchangedClaudeGrant, .accessOnlyClaudeGrant:
             break
         }
         let access = Fixture.accessToken(expiresAt: Date().addingTimeInterval(864_000).timeIntervalSince1970)
-        let data = try! JSONSerialization.data(withJSONObject: [
-            "access_token": access, "refresh_token": Fixture.distinctRefreshGrants ? "synthetic-rotated-" + (json["refresh_token"] as! String) : "synthetic-rotated", "expires_in": 3_600
-        ])
+        var payload: [String: Any] = ["access_token": access, "expires_in": 3_600]
+        if response == .unchangedClaudeGrant {
+            payload["refresh_token"] = json["refresh_token"]
+        } else if response != .accessOnlyClaudeGrant {
+            payload["refresh_token"] = Fixture.distinctRefreshGrants
+                ? "synthetic-rotated-" + (json["refresh_token"] as! String) : "synthetic-rotated"
+        }
+        let data = try! JSONSerialization.data(withJSONObject: payload)
         return .success(Response(status: 200, data: data, retryAfter: nil))
     }
 
@@ -1248,6 +1259,8 @@ enum Authentication {
             case "codex-completion-proof-metadata-backoff-control": try await codexCompletionProof(status: 429, replacing: false)
             case "claude-copied-grant-concurrent-audit": try await claudeCopiedGrantConcurrent()
             case "claude-distinct-grants-concurrent-control-audit": try await claudeCopiedGrantConcurrent(distinct: true)
+            case "claude-grant-restart-seed": try await claudeGrantRestartSeed(kind: CommandLine.arguments[3])
+            case "claude-grant-restart-replay": try await claudeGrantRestartReplay(kind: CommandLine.arguments[3])
             case "audit-claude-orphan-desktop-on": try auditClaudeOrphanDesktopReadd(enabled: true)
             case "audit-claude-orphan-desktop-off": try auditClaudeOrphanDesktopReadd(enabled: false)
             case "claude-primary-usage-owner-replacement-audit": try await claudePrimaryUsageOwnerAudit()
@@ -3045,6 +3058,70 @@ enum Authentication {
         print("distinct=\(distinct), simultaneous POSTs=\(whileHeld), total POSTs=\(Fixture.refreshCalls)")
         try expect(whileHeld == (distinct ? 2 : 1) && Fixture.refreshCalls == (distinct ? 2 : 1),
                    "Different Claude profile services submitted the same rotating grant concurrently")
+    }
+
+    private static func claudeGrantRestartProfile(_ name: String) -> DiscoveredAccount {
+        let directory = ProfileDirectories.claudeRoot.appendingPathComponent(name, isDirectory: true)
+        let service = AuthStorage$Claude.profileService(forConfigPath: directory.path)
+        return DiscoveredAccount(id: "claude:" + service, provider: .claude, profileName: name,
+                                 source: .claudeKeychain(service: service, configDir: directory))
+    }
+
+    private static func claudeGrantRestartSeed(kind: String) async throws {
+        Fixture.claudeEntries = [:]
+        let initial = Fixture.claudeLogin("copied-before-restart", expired: true)
+        let files = try JSONSerialization.data(withJSONObject: initial)
+        for name in ["copied-a", "copied-b"] {
+            let directory = ProfileDirectories.claudeRoot.appendingPathComponent(name, isDirectory: true)
+            try Foundation.FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try files.write(to: directory.appendingPathComponent(".credentials.json"))
+        }
+        switch kind {
+        case "rotated": Fixture.response = .renewed
+        case "rejected": Fixture.response = .invalidClaudeGrant
+        case "unchanged": Fixture.response = .unchangedClaudeGrant
+        case "access-only": Fixture.response = .accessOnlyClaudeGrant
+        case "unavailable": Fixture.response = .forbidden
+        default: throw Failure(description: "Unexpected refresh outcome fixture")
+        }
+        let provider = Provider$Claude()
+        _ = await provider.fetch(claudeGrantRestartProfile("copied-a"))
+        try expect(Fixture.refreshCalls == 1, "The first process did not submit the initial refresh grant")
+        let first = ProfileDirectories.claudeRoot.appendingPathComponent("copied-a/.credentials.json")
+        let peer = ProfileDirectories.claudeRoot.appendingPathComponent("copied-b/.credentials.json")
+        if kind == "rotated" {
+            try expect(try Data(contentsOf: first) != files, "The first process did not save the rotation")
+        }
+        try expect(try Data(contentsOf: peer) == files, "The peer did not retain the original copied grant")
+        let preferences = try PropertyListSerialization.data(
+            fromPropertyList: UserDefaults.standard.dictionaryRepresentation(), format: .binary, options: 0)
+        let oauth = initial["claudeAiOauth"] as? [String: Any]
+        if let secret = oauth?["refreshToken"] as? String {
+            try expect(preferences.range(of: Data(secret.utf8)) == nil, "Preferences contain an unredacted refresh token")
+        }
+        try preferences.write(to: Fixture.root.appendingPathComponent("claude-grant-restart.plist"))
+    }
+
+    private static func claudeGrantRestartReplay(kind: String) async throws {
+        Fixture.claudeEntries = [:]
+        let preferences = try Data(contentsOf: Fixture.root.appendingPathComponent("claude-grant-restart.plist"))
+        let defaults = try PropertyListSerialization.propertyList(from: preferences, format: nil) as! [String: Any]
+        for (key, value) in defaults { UserDefaults.standard.set(value, forKey: key) }
+        let retired = kind == "rotated" || kind == "rejected"
+        Fixture.response = retired ? .invalidClaudeGrant : .renewed
+        let provider = Provider$Claude()
+        let peer = claudeGrantRestartProfile("copied-b")
+        _ = await provider.fetch(peer)
+        let expectedCalls = retired ? 0 : 1
+        try expect(Fixture.refreshCalls == expectedCalls, "Restart submitted a retired grant or blocked a still usable grant")
+        if case .claudeKeychain(_, let directory?) = peer.source {
+            let fresh = Fixture.claudeLogin("independent-after-restart", expired: true)
+            try JSONSerialization.data(withJSONObject: fresh)
+                .write(to: directory.appendingPathComponent(".credentials.json"), options: .atomic)
+            Fixture.response = .renewed
+            _ = await provider.fetch(peer)
+            try expect(Fixture.refreshCalls == expectedCalls + 1, "A retired grant blocked an independently signed-in profile")
+        }
     }
 
     @MainActor

@@ -1,4 +1,21 @@
 // The harness prepends Authentication.swift's synthetic OS/network boundaries.
+private struct QueuedCodexUsage: UsageProvider {
+    let beforePublication: () throws -> Void
+
+    func fetch(_ account: DiscoveredAccount) async -> FetchOutcome {
+        await Provider$Codex().fetch(account)
+    }
+
+    func fetchValidated(_ account: DiscoveredAccount) async -> UsageFetchResult {
+        let result = await Provider$Codex().fetchValidated(account)
+        guard case .success = result.outcome, let isCurrent = result.isCurrent else { return result }
+        return UsageFetchResult(outcome: result.outcome, isCurrent: {
+            try beforePublication()
+            return try isCurrent()
+        }, loginID: result.loginID)
+    }
+}
+
 @main
 enum Lifecycle$Authentication {
     static func main() async {
@@ -10,6 +27,7 @@ enum Lifecycle$Authentication {
             case "switch": try await nativeSwitch(mode: parts[1], change: parts[2], late: parts[3] == "late")
             case "renew": try await nativeRenewal(mode: parts[1], change: parts[2])
             case "usage": try await usageLogin(codex: parts[1] == "codex", mode: parts[2], change: parts[3])
+            case "usage-keychain-owner": try await queuedKeychainUsage(replaceOwner: parts[1] == "replace")
             default: throw Failure(description: "Unknown authentication lifecycle scenario")
             }
         } catch { print("FAIL: \(error)"); exit(1) }
@@ -181,6 +199,55 @@ enum Lifecycle$Authentication {
     }
 
     @MainActor
+    private static func queuedKeychainUsage(replaceOwner: Bool) async throws {
+        Fixture.keychainExists = false
+        Fixture.manualPollingTimer = true
+        let home = ProfileDirectories.codexRoot.appendingPathComponent("queued-keychain")
+        let id = AuthSwap$Codex.profileColumnID(home.lastPathComponent)
+        let window = "main.primary_window"
+        try login(home, account: "queued-keychain", mode: "keyring")
+        guard let original = try AuthSwap$Codex.authData(home: home), let owner = DirectoryIdentity.capture(home) else {
+            throw Failure(description: "Missing initial Keychain login or profile directory")
+        }
+        Fixture.usageErrorBody = Data(#"{"rate_limit":{"primary_window":{"used_percent":85,"limit_window_seconds":18000}}}"#.utf8)
+        var reachedPublication = false
+        let provider = QueuedCodexUsage(beforePublication: {
+            guard !reachedPublication else { return }
+            if replaceOwner {
+                try Foundation.FileManager.default.moveItem(at: home, to: Fixture.root.appendingPathComponent("old-queued-keychain"))
+                try Fixture.codexMode(home, "keyring")
+            }
+            try expect(owner.matches(home) != replaceOwner && AuthSwap$Codex.authData(home: home) == original,
+                       "The publication boundary did not preserve Keychain data while checking the physical owner")
+            reachedPublication = true
+        })
+        let store = UsageStore(providers: [.codex: provider], discovery: RoutedUsageDiscovery(accountID: id))
+        store.start()
+        for _ in 0..<400 {
+            if reachedPublication { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        try expect(reachedPublication, "The successful usage response never reached its publication check")
+        let published = try currentUsageColumn(store, id: id)
+        let cached = UsageCache().load(id: id)
+        if replaceOwner {
+            try expect(!published.hasData && cached == nil && history(id, window).isEmpty && Fixture.notifications.isEmpty,
+                       "Queued usage was published after its Keychain-backed directory was replaced")
+            Fixture.usageErrorBody = Data(#"{"rate_limit":{"primary_window":{"used_percent":40,"limit_window_seconds":18000}}}"#.utf8)
+            store.refreshAll()
+            try await waitForUsage(store, id: id, value: 40)
+            try expect(history(id, window) == [40] && Fixture.notifications.isEmpty,
+                       "The new directory could not establish usage independently")
+        } else {
+            try expect(published.windows.first?.utilization == 85 && cached?.windows == published.windows
+                       && history(id, window) == [85] && Fixture.notifications.count == 1,
+                       "The unchanged Keychain owner did not publish its successful result")
+        }
+        try expect(Fixture.usageCalls == (replaceOwner ? 2 : 1) && Fixture.refreshCalls == 0,
+                   "Publication caused an extra usage poll or refresh")
+    }
+
+    @MainActor
     private static func usageLogin(codex: Bool, mode: String, change requested: String) async throws {
         let restart = requested.hasPrefix("restart-")
         let change = restart ? String(requested.dropFirst("restart-".count)) : requested
@@ -233,6 +300,12 @@ enum Lifecycle$Authentication {
         try await waitForUsage(store, id: id, value: 12)
         try expect(history(id, window) == [7, 12] && Fixture.refreshCalls == 0,
                    "The first completed production poll did not establish the original usage epoch")
+
+        if change.hasPrefix("warm-") {
+            try await checkWarmUsage(store, id: id, window: window, home: home, mode: mode,
+                                     codex: codex, phase: String(change.dropFirst("warm-".count)))
+            return
+        }
 
         if change == "denied" {
             // Even a readable fallback with the same tokens cannot prove who
@@ -338,6 +411,124 @@ enum Lifecycle$Authentication {
         }
         try expect(store.customNames[id] == "Preserved name" && store.hidden.contains(id),
                    "Retiring usage removed the user's name or visibility preference")
+    }
+
+    @MainActor
+    private static func checkWarmUsage(_ store: UsageStore, id: String, window: String, home: URL,
+                                       mode: String, codex: Bool, phase: String) async throws {
+        let replaced = ["replace", "replace-denied", "poll-denied"].contains(phase)
+        let denied = phase.hasSuffix("-denied")
+        let owner = DirectoryIdentity.capture(home)
+        guard let profile = store.account(for: id) else {
+            throw Failure(description: "Warm test did not start from a discovered profile")
+        }
+        let previous = try currentUsageColumn(store, id: id)
+        let expectedRequests = Fixture.usageCalls
+        let fallback: Data?
+        if !denied { fallback = nil }
+        else if codex { fallback = Fixture.codexKeychain[Fixture.codexKey(home)] }
+        else { fallback = try JSONSerialization.data(withJSONObject: Fixture.keychain) }
+        if replaced {
+            if codex { try login(home, account: "new-warm-usage", mode: mode) }
+            else {
+                let credentials = Fixture.claudeLogin("new-warm-usage", expired: false)
+                if mode == "keyring" { Fixture.keychain = credentials }
+                else {
+                    try JSONSerialization.data(withJSONObject: credentials)
+                        .write(to: home.appendingPathComponent(".credentials.json"), options: .atomic)
+                }
+            }
+        }
+        if denied {
+            guard let fallback else { throw Failure(description: "Missing older fallback for the denied owner") }
+            try fallback.write(to: home.appendingPathComponent(codex ? "auth.json" : ".credentials.json"))
+        }
+        try expect(owner == DirectoryIdentity.capture(home),
+                   "The same-path test changed the profile's physical owner")
+
+        Fixture.denyCodexRead = denied && codex
+        Fixture.denyClaudeRead = denied && !codex
+        if phase == "busy" {
+            try await rescanWithBusyKeychain(store)
+        } else if phase == "poll-denied" {
+            store.refreshAll()
+            var finished = false
+            for _ in 0..<400 {
+                switch try currentUsageColumn(store, id: id).status {
+                case .failed, .reauth: finished = true
+                default: break
+                }
+                if finished { break }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            try expect(finished, "The polling path did not observe its denied credential proof")
+        } else {
+            store.rediscover(force: true)
+        }
+        try expect(store.account(for: id)?.source == profile.source,
+                   "Warm discovery no longer points at the same profile route")
+        let hidden = try currentUsageColumn(store, id: id)
+        try expect(!hidden.hasData && hidden.subtitle == nil && hidden.updatedAt == nil && !hidden.fromCache,
+                   "Warm usage exposed the previous owner without a current proof")
+        if phase != "poll-denied" {
+            try expect(Fixture.usageCalls == expectedRequests && Fixture.refreshCalls == 0,
+                       "Rediscovery hid stale data only after calling a provider endpoint")
+        }
+        if denied || phase == "busy" {
+            try expect(UsageCache().load(id: id)?.windows == previous.windows && history(id, window) == [7, 12],
+                       "Temporary proof failure erased the last verified login's cache or history")
+            Fixture.denyCodexRead = false
+            Fixture.denyClaudeRead = false
+            let requestsBeforeProof = Fixture.usageCalls
+            store.rediscover(force: true)
+            try expect(Fixture.usageCalls == requestsBeforeProof && Fixture.refreshCalls == 0,
+                       "Restoring proof called a usage or refresh endpoint")
+        }
+        if replaced {
+            let admitted = try currentUsageColumn(store, id: id)
+            try expect(!admitted.hasData && UsageCache().load(id: id) == nil && history(id, window).isEmpty,
+                       "Confirmed replacement inherited the old owner's cache or history")
+            Fixture.usageErrorBody = Data(#"{"five_hour":{"utilization":85},"rate_limit":{"primary_window":{"used_percent":85,"limit_window_seconds":18000}}}"#.utf8)
+            store.refreshAll()
+            try await waitForUsage(store, id: id, value: 85)
+            try expect(history(id, window) == [85] && Fixture.notifications.count == 1,
+                       "Replacement usage reused history or notification thresholds")
+        } else {
+            let restored = try currentUsageColumn(store, id: id)
+            try expect(restored.fromCache && restored.updatedAt == previous.updatedAt
+                       && restored.windows == previous.windows && restored.stats == previous.stats
+                       && restored.subtitle == previous.subtitle && history(id, window) == [7, 12]
+                       && Fixture.notifications.isEmpty,
+                       "The unchanged login did not recover its prior usage and notification state")
+        }
+        try expect(store.customNames[id] == "Preserved name" && store.hidden.contains(id),
+                   "Warm ownership verification changed unrelated column preferences")
+    }
+
+    @MainActor
+    private static func currentUsageColumn(_ store: UsageStore, id: String) throws -> AccountColumn {
+        guard let column = store.columns.first(where: { $0.id == id }) else {
+            throw Failure(description: "Warm discovery lost the profile")
+        }
+        return column
+    }
+
+    @MainActor
+    private static func rescanWithBusyKeychain(_ store: UsageStore) async throws {
+        let ready = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let holder = Task.detached {
+            AuthStorage$Claude.access {
+                ready.signal()
+                return release.wait(timeout: .now() + 2) == .success ? errSecSuccess : errSecInteractionNotAllowed
+            }
+        }
+        let entered = ready.wait(timeout: .now() + 2) == .success
+        if entered { store.rediscover(force: true) }
+        release.signal()
+        let status = await holder.value
+        try expect(entered, "The synthetic operation did not hold the real Keychain interaction lock")
+        try expect(status == errSecSuccess, "Warm rediscovery waited behind an unrelated Keychain operation")
     }
 
     @MainActor

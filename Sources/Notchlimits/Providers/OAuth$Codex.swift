@@ -219,11 +219,8 @@ actor Renewal$Codex {
     private func currentResult(_ attempt: Attempt, renewal: AuthSwap$Codex.Renewal, home: URL) -> Result {
         guard attempt.result == .uncertain || attempt.result == .rejected else { return attempt.result }
         guard let identity = attempt.identity else { return .unavailable }
-        let snapshot = AuthSwap$Codex.AuthSnapshot(data: renewal.record.data, key: renewal.key,
-            generation: renewal.generation, columnGeneration: renewal.columnGeneration,
-            sourceKey: renewal.sourceKey, sourceGeneration: renewal.sourceGeneration)
         do {
-            return try AuthSwap$Codex.isCurrent(snapshot, columnID: renewal.columnID, home: home)
+            return try AuthSwap$Codex.isCurrent(renewal.snapshot, columnID: renewal.columnID, home: home)
                 && AuthSwap$Codex.authIdentity(renewal.record.data) == identity
                 ? attempt.result : .renewed
         } catch {

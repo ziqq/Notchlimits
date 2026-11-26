@@ -34,6 +34,8 @@ struct AuthStorage$Codex {
         private let generation: [Int64]
         private let handle: FileHandle
 
+        var fingerprint: [String] { [path] + generation.map(String.init) }
+
         init(path: String) throws {
             let descriptor = open(path, O_EVTONLY | O_NOFOLLOW | O_CLOEXEC)
             guard descriptor >= 0 else { throw Failure.settings }
@@ -142,6 +144,10 @@ struct AuthStorage$Codex {
     static func captureClassicKeychainRevision() -> ((() -> Bool) -> Bool)? {
         guard let revision = try? KeyringSearchRevision() else { return nil }
         return { checkingFiles in revision.isCurrent(checkingFiles: checkingFiles) }
+    }
+
+    static func classicKeychainDatabaseFingerprint(reference: Data) throws -> [String] {
+        try keyringDatabaseRevision(reference: reference).fingerprint
     }
 
     /// A later credential or configuration read can invalidate an earlier one.
@@ -540,8 +546,8 @@ struct AuthStorage$Codex {
         mode != .file || keyringStatus() == errSecItemNotFound
     }
 
-    func loginSelection() -> LoginSelection? {
-        if mode.usesKeyring, keyringStatus() == errSecSuccess { return .keyring }
+    func loginSelection(forDiscovery: Bool = false) -> LoginSelection? {
+        if mode.usesKeyring, keyringStatus(forDiscovery: forDiscovery) == errSecSuccess { return .keyring }
         guard mode == .file || mode == .auto, FileManager.default.fileExists(atPath: file.path) else { return nil }
         return .file((try? loadFile()).flatMap { AuthSwap$Codex.authIdentity($0.data) })
     }
@@ -845,11 +851,13 @@ struct AuthStorage$Codex {
         return Record(data: data, backend: .keyring)
     }
 
-    private func keyringStatus(in keychains: [SecKeychain]? = nil) -> OSStatus {
+    private func keyringStatus(in keychains: [SecKeychain]? = nil, forDiscovery: Bool = false) -> OSStatus {
         var request = query
         request[kSecReturnAttributes as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
         if let keychains { request[kSecMatchSearchList as String] = keychains }
+        // Discovery checks attributes only, just like Claude's service listing.
+        if forDiscovery { return SecItemCopyMatching(request as CFDictionary, nil) }
         return AuthStorage$Claude.access(interactive: false) { SecItemCopyMatching(request as CFDictionary, nil) }
     }
 

@@ -50,21 +50,23 @@ actor Provider$Claude: UsageProvider {
 
     /// nil means the current login could not be verified without prompting.
     static func cachedUsageMatches(_ loginID: UUID, account: DiscoveredAccount) -> Bool? {
-        guard case .claudeKeychain(let service, let directory) = account.source,
-              let credentials = AuthStorage$Claude.credentials(service: service, interactive: false, verifyingOwner: true),
-              (try? AuthStorage$Claude.isCurrent(credentials, service: service)) == true else { return nil }
-        if let directory {
-            guard let owner = account.claudeConfigOwner, owner.matches(directory),
-                  credentials.backend == .keychain || credentials.directory == owner else { return nil }
+        AuthStorage$Claude.withAvailableKeychainLock {
+            guard case .claudeKeychain(let service, let directory) = account.source,
+                  let credentials = AuthStorage$Claude.credentials(service: service, interactive: false, verifyingOwner: true),
+                  (try? AuthStorage$Claude.isCurrent(credentials, service: service)) == true else { return nil }
+            if let directory {
+                guard let owner = account.claudeConfigOwner, owner.matches(directory),
+                      credentials.backend == .keychain || credentials.directory == owner else { return nil }
+            }
+            if let expected = account.claudePrimaryOwner {
+                let observed: ClaudePrimaryOwner = credentials.directory.map(ClaudePrimaryOwner.file) ?? .keychain
+                guard expected == observed else { return nil }
+            }
+            let key = usageIdentity(service: service, accessToken: credentials.accessToken,
+                                    refreshToken: credentials.refreshToken)
+            let stored = UserDefaults.standard.dictionary(forKey: usageLoginsKey)?[key] as? String
+            return stored.flatMap { UUID(uuidString: $0) } == loginID
         }
-        if let expected = account.claudePrimaryOwner {
-            let observed: ClaudePrimaryOwner = credentials.directory.map(ClaudePrimaryOwner.file) ?? .keychain
-            guard expected == observed else { return nil }
-        }
-        let key = usageIdentity(service: service, accessToken: credentials.accessToken,
-                                refreshToken: credentials.refreshToken)
-        let stored = UserDefaults.standard.dictionary(forKey: usageLoginsKey)?[key] as? String
-        return stored.flatMap { UUID(uuidString: $0) } == loginID
     }
     private var terminating = false
     private var renewing: Set<String> = []
@@ -97,13 +99,35 @@ actor Provider$Claude: UsageProvider {
     }
 
     private var unsaved: [String: Pending] = [:]
-    /// A copied grant remains spent even after its original file owner is restored.
-    private var rotatedGrants: Set<String> = []
+    private static let retiredGrantsKey = "claudeRetiredRefreshGrants"
+    private static let retiredGrantsLock = NSLock()
     /// Different profile services can contain copies of the same rotating grant.
     private var renewingGrants: Set<String> = []
     /// Почему токена нет, если дело не во входе (сеть, запись в Keychain).
     private var issues: [String: String] = [:]
     private let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
+
+    private static func grantDigest(_ refreshToken: String) -> String {
+        SHA256.hash(data: Data(refreshToken.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func isRetiredGrant(_ digest: String) -> Bool {
+        retiredGrantsLock.withLock {
+            UserDefaults.standard.stringArray(forKey: retiredGrantsKey)?.contains(digest) == true
+        }
+    }
+
+    private static func retireGrant(_ digest: String) {
+        retiredGrantsLock.withLock {
+            let defaults = UserDefaults.standard
+            var retired = Set(defaults.stringArray(forKey: retiredGrantsKey) ?? [])
+            if retired.insert(digest).inserted {
+                // A restored or copied profile can still hold this grant after restart.
+                defaults.set(retired.sorted(), forKey: retiredGrantsKey)
+            }
+            _ = defaults.synchronize()
+        }
+    }
 
     func fetch(_ account: DiscoveredAccount) async -> FetchOutcome {
         let result = await fetchValidated(account)
@@ -305,17 +329,19 @@ actor Provider$Claude: UsageProvider {
             return nil
         }
         guard credentials.isRefreshable, let refreshToken = credentials.refreshToken else { return nil }
-        guard !rotatedGrants.contains(refreshToken) else { return nil }
-        guard renewingGrants.insert(refreshToken).inserted else {
+        let grant = Self.grantDigest(refreshToken)
+        guard !Self.isRetiredGrant(grant) else { return nil }
+        guard renewingGrants.insert(grant).inserted else {
             issues[service] = L.t("error.keychainWrite")
             return nil
         }
-        defer { renewingGrants.remove(refreshToken) }
+        defer { renewingGrants.remove(grant) }
 
         let writable = await Task.detached(priority: .utility) {
             AuthStorage$Claude.canWrite(service: service, renewalLock: lease, expected: credentials)
         }.value
         guard removalGenerations[service] == generation else { return nil }
+        guard !Self.isRetiredGrant(grant) else { return nil }
         guard writable, lease.isHeld, !terminating else {
             if !writable, !terminating {
                 let latest = await read(service, interactive: false, verifyingOwner: true)
@@ -336,7 +362,8 @@ actor Provider$Claude: UsageProvider {
         lease.onLost { request.cancel() }
         let response = await request.value
         if case .success(let fresh) = response, let replacement = fresh.refreshToken,
-           replacement != refreshToken { rotatedGrants.insert(refreshToken) }
+           replacement != refreshToken { Self.retireGrant(grant) }
+        if case .rejected = response { Self.retireGrant(grant) }
         guard removalGenerations[service] == generation else { return nil }
         switch response {
         case .success(let fresh):

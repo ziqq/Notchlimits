@@ -97,12 +97,89 @@ enum AuthStorage$Claude {
     }
 
     private static let removedPrimaryFallbackKey = "claudeRemovedPrimaryFallback"
+    private static let pendingPrimaryFallbackKey = "claudePendingPrimaryFallbackRemoval"
+    private static let primaryFallbackRemovalLock = NSLock()
 
-    /// Remember only the retained file's metadata while removal owns the native
-    /// locks. A later CLI login must be discovered even when it uses this file.
-    static func recordSharedPrimaryRemoval() {
-        let file = ProfileDirectories.home.appendingPathComponent(".claude/.credentials.json")
-        UserDefaults.standard.set(fallbackIdentity(file), forKey: removedPrimaryFallbackKey)
+    private struct SharedPrimaryRemoval: Codable {
+        let fallback: [String: String]
+        let login: DesktopLoginProof?
+    }
+
+    private static func pendingSharedPrimaryRemoval(_ defaults: UserDefaults) -> SharedPrimaryRemoval? {
+        if let record = defaults.data(forKey: pendingPrimaryFallbackKey) {
+            return try? PropertyListDecoder().decode(SharedPrimaryRemoval.self, from: record)
+        }
+        return (defaults.dictionary(forKey: pendingPrimaryFallbackKey) as? [String: String]).map {
+            SharedPrimaryRemoval(fallback: $0, login: nil)
+        }
+    }
+
+    /// Persist the retained owner's file before deleting the primary item.
+    static func withSharedPrimaryRemoval(_ delete: () throws -> Void) throws {
+        primaryFallbackRemovalLock.lock()
+        defer { primaryFallbackRemovalLock.unlock() }
+        let directory = ProfileDirectories.home.appendingPathComponent(".claude")
+        let file = directory.appendingPathComponent(".credentials.json")
+        let defaults = UserDefaults.standard
+        let identity = fallbackIdentity(file)
+        guard identity != nil || DirectoryIdentity.missingPath(file) != nil else { throw UnavailableCredentials() }
+        let retained = identity ?? [:]
+        let previous = defaults.object(forKey: pendingPrimaryFallbackKey)
+        // An interrupted attempt still owns the same retained fallback across a retry.
+        if pendingSharedPrimaryRemoval(defaults)?.fallback != retained {
+            let checkpoint = SharedPrimaryRemoval(fallback: retained,
+                                                 login: desktopLoginProof(service: baseService, directory: directory, keychainOnly: true))
+            defaults.set(try PropertyListEncoder().encode(checkpoint), forKey: pendingPrimaryFallbackKey)
+        }
+        do {
+            guard defaults.synchronize() else { throw UnavailableCredentials() }
+            try delete()
+        } catch {
+            defaults.set(previous, forKey: pendingPrimaryFallbackKey)
+            _ = defaults.synchronize()
+            throw error
+        }
+        try finishSharedPrimaryRemoval(retained)
+    }
+
+    static func recoverSharedPrimaryRemoval() {
+        guard primaryFallbackRemovalLock.try() else { return }
+        defer { primaryFallbackRemovalLock.unlock() }
+        let defaults = UserDefaults.standard
+        guard let pending = pendingSharedPrimaryRemoval(defaults),
+              let items = keychainItems() else { return }
+        let directory = ProfileDirectories.home.appendingPathComponent(".claude")
+        guard let current = desktopLoginProof(service: baseService, directory: directory, keychainOnly: true),
+              current.hasCredential == items.contains(where: { $0[kSecAttrService as String] as? String == baseService })
+        else { return }
+        guard current.hasCredential else {
+            try? finishSharedPrimaryRemoval(pending.fallback)
+            return
+        }
+        guard let previous = pending.login, previous.hasCredential else { return }
+        let isOriginal: Bool
+        if let opaque = previous.opaqueKeychain {
+            // An unrelated database write can invalidate an opaque proof.
+            guard removalKeychainProof(service: baseService) == opaque else { return }
+            isOriginal = true
+        } else {
+            guard current.opaqueKeychain == nil else { return }
+            isOriginal = current.login == previous.login && current.stub == previous.stub
+        }
+        if isOriginal {
+            defaults.removeObject(forKey: pendingPrimaryFallbackKey)
+            _ = defaults.synchronize()
+        } else {
+            try? finishSharedPrimaryRemoval(pending.fallback)
+        }
+    }
+
+    private static func finishSharedPrimaryRemoval(_ retained: [String: String]) throws {
+        let defaults = UserDefaults.standard
+        defaults.set(retained.isEmpty ? nil : retained, forKey: removedPrimaryFallbackKey)
+        guard defaults.synchronize() else { throw UnavailableCredentials() }
+        defaults.removeObject(forKey: pendingPrimaryFallbackKey)
+        _ = defaults.synchronize()
     }
 
     private static func fallbackIdentity(_ file: URL) -> [String: String]? {
@@ -122,7 +199,8 @@ enum AuthStorage$Claude {
     /// читается, диалога пароля не будет.
     static func items() -> [(service: String, modified: Date?)] {
         var found: [String: Date?] = [:]
-        for item in keychainItems() ?? [] {
+        let keychain = keychainItems()
+        for item in keychain ?? [] {
             guard let service = item[kSecAttrService as String] as? String,
                   service == baseService || service.hasPrefix(baseService + "-") else { continue }
             found[service] = item[kSecAttrModificationDate as String] as? Date
@@ -138,9 +216,11 @@ enum AuthStorage$Claude {
             if directory == directories[0] {
                 // Suppress only the unchanged fallback retained by explicit
                 // primary removal. A new native file login is a primary owner.
-                if !found.keys.contains(baseService),
-                   let retired = UserDefaults.standard.dictionary(forKey: removedPrimaryFallbackKey) as? [String: String],
-                   let current = fallbackIdentity(file), retired == current {
+                let defaults = UserDefaults.standard
+                let retired = defaults.dictionary(forKey: removedPrimaryFallbackKey) as? [String: String]
+                let pending = pendingSharedPrimaryRemoval(defaults)?.fallback
+                if !found.keys.contains(baseService), let current = fallbackIdentity(file),
+                   retired == current || pending == current {
                     guard let shared = found.keys.first(where: {
                         configDirectory(for: $0).map(ProfileDirectories.isClaudeBase) == true
                     }) else { continue }
@@ -290,8 +370,49 @@ enum AuthStorage$Claude {
         let directory: String?
         let login: Data?
         let stub: Data?
+        var opaqueKeychain: RemovalKeychainProof?
 
-        var hasCredential: Bool { login != nil || stub != nil }
+        var hasCredential: Bool { login != nil || stub != nil || opaqueKeychain != nil }
+    }
+
+    struct RemovalKeychainProof: Codable, Equatable {
+        let reference: Data
+        let modified: Date
+        let database: [String]
+    }
+
+    /// The classic item reference identifies the namespace even when its ACL
+    /// hides the secret. Bind it to the owning database to reject same-second writes.
+    static func removalKeychainProof(service: String) -> RemovalKeychainProof? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecReturnAttributes as String: true,
+            kSecReturnPersistentRef as String: true
+        ]
+        func observe() -> RemovalKeychainProof? {
+            var result: CFTypeRef?
+            let status = access(interactive: false) { SecItemCopyMatching(query as CFDictionary, &result) }
+            guard status == errSecSuccess, let attributes = result as? [String: Any],
+                  let reference = attributes[kSecValuePersistentRef as String] as? Data,
+                  let modified = attributes[kSecAttrModificationDate as String] as? Date,
+                  let database = try? AuthStorage$Codex.classicKeychainDatabaseFingerprint(reference: reference)
+            else { return nil }
+            return RemovalKeychainProof(reference: reference, modified: modified, database: database)
+        }
+        guard let proof = observe(), observe() == proof else { return nil }
+        return proof
+    }
+
+    static func removalKeychainIsAbsent(service: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecReturnAttributes as String: true
+        ]
+        return access(interactive: false) { SecItemCopyMatching(query as CFDictionary, nil) } == errSecItemNotFound
     }
 
     static func desktopDirectoryProof(_ owner: DirectoryIdentity) -> String? {
@@ -324,7 +445,10 @@ enum AuthStorage$Claude {
             if item.status == errSecItemNotFound {
                 return DesktopLoginProof(directory: directoryProof, login: nil, stub: nil)
             }
-            guard let json = item.json else { return nil }
+            guard let json = item.json else {
+                guard item.backend == .keychain, let opaque = removalKeychainProof(service: service) else { return nil }
+                return DesktopLoginProof(directory: directoryProof, login: nil, stub: nil, opaqueKeychain: opaque)
+            }
             let backend = item.backend == .keychain ? "keychain" : "file"
             if isNoLogin(json) {
                 guard let data = try? JSONSerialization.data(withJSONObject: json, options: .sortedKeys) else { return nil }
@@ -438,6 +562,13 @@ enum AuthStorage$Claude {
 
     private static let interactionLock = NSRecursiveLock()
     private static var interactionSuppressed = false
+
+    /// Cache verification runs on the UI thread and must not wait for a Keychain prompt.
+    static func withAvailableKeychainLock<T>(_ operation: () -> T?) -> T? {
+        guard interactionLock.try() else { return nil }
+        defer { interactionLock.unlock() }
+        return operation()
+    }
 
     /// Claude uses classic login Keychain items. LAContext's interaction flag
     /// does not govern their legacy ACL dialogs. Serialize the process-wide

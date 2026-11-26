@@ -406,6 +406,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let account = store.account(for: id),
               let column = store.columns.first(where: { $0.id == id }) else { return }
         let selectedLogin = AuthSwap$Codex.actionLogin(for: account)
+        let selectedClaudeLogin = AccountRemoval.claudeActionLogin(for: account)
 
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -420,7 +421,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard runModalAbovePanel(alert) == .alertFirstButtonReturn else { return }
 
-        store.removeAccount(account, expectedLogin: selectedLogin) { result in
+        store.removeAccount(account, expectedLogin: selectedLogin, expectedClaudeLogin: selectedClaudeLogin) { result in
             if case .failure(let error) = result { self.errorAlert(L.t("remove.failed.title"), error) }
         }
     }

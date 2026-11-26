@@ -156,6 +156,12 @@ class AuthenticationLifecycleRegressions(unittest.TestCase):
     def test_usage_codex_keyring_renew(self):
         self.check_scenario("usage:codex:keyring:renew")
 
+    def test_usage_codex_keyring_queued_directory_replace(self):
+        self.check_scenario("usage-keychain-owner:replace")
+
+    def test_usage_codex_keyring_queued_directory_stable(self):
+        self.check_scenario("usage-keychain-owner:stable")
+
     def test_usage_codex_auto_file_replace(self):
         self.check_scenario("usage:codex:auto-file:replace")
 
@@ -296,3 +302,26 @@ class AuthenticationLifecycleRegressions(unittest.TestCase):
 
     def test_usage_codex_file_restart_unowned(self):
         self.check_scenario("usage:codex:file:restart-unowned")
+
+    def test_usage_warm_relogin_before_poll(self):
+        for provider, modes in (("claude", ("file", "keyring")), ("codex", ("file", "keyring", "auto-file", "auto"))):
+            for mode in modes:
+                with self.subTest(provider=provider, mode=mode):
+                    self.check_scenario(f"usage:{provider}:{mode}:warm-replace")
+
+    def check_warm_keychain(self, phase):
+        for provider, mode in (("claude", "keyring"), ("codex", "keyring"), ("codex", "auto")):
+            with self.subTest(provider=provider, mode=mode):
+                self.check_scenario(f"usage:{provider}:{mode}:warm-{phase}")
+
+    def test_usage_warm_relogin_during_keychain_denial(self):
+        self.check_warm_keychain("replace-denied")
+
+    def test_usage_warm_poll_during_keychain_denial(self):
+        self.check_warm_keychain("poll-denied")
+
+    def test_usage_warm_unchanged_login_after_keychain_denial(self):
+        self.check_warm_keychain("stable-denied")
+
+    def test_usage_warm_unchanged_login_while_keychain_busy(self):
+        self.check_warm_keychain("busy")

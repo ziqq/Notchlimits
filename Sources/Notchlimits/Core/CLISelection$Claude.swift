@@ -55,6 +55,7 @@ enum CLISelection$Claude {
         let stagedName: String
         let entry: ProfileIdentity
         let hadFileLogin: Bool
+        var fallbackFile: String?
 
         init?(from source: URL, to stage: URL, owner: ProfileIdentity) {
             guard let parent = ProfileIdentity(source.deletingLastPathComponent()),
@@ -66,6 +67,9 @@ enum CLISelection$Claude {
             stagedName = stage.lastPathComponent
             self.entry = entry
             self.hadFileLogin = hadFileLogin
+            if hadFileLogin, let owner = DirectoryIdentity.capture(source) {
+                fallbackFile = CLISelection$Claude.credentialFileProof(in: owner)
+            }
         }
 
         private var directory: URL { URL(fileURLWithPath: parent.path, isDirectory: true) }
@@ -83,15 +87,33 @@ enum CLISelection$Claude {
 
         func canRestore(to profile: URL, owner: ProfileIdentity) -> Bool {
             ownsStage(owner)
-                && Self.fileLoginExists(at: staged) == hadFileLogin
+                && (Self.fileLoginExists(at: staged) == hadFileLogin || hasIsolatedFallback)
                 && DirectoryIdentity.missingPath(original) != nil
                 && DirectoryIdentity.missingPath(profile) != nil
+        }
+
+        var hasIsolatedFallback: Bool {
+            Self.fileLoginExists(at: staged) == false && hasFallbackCheckpoint
+        }
+
+        private var hasFallbackCheckpoint: Bool {
+            guard let fallbackFile, let owner = DirectoryIdentity.capture(staged) else { return false }
+            return CLISelection$Claude.credentialFileProof(in: owner, name: AccountRemoval.claudeFallbackName(staged))
+                == fallbackFile
         }
 
         func fileWasMoved(to profile: URL, owner: ProfileIdentity) -> Bool {
             hadFileLogin && ownsStage(owner)
                 && Self.fileLoginExists(at: staged) == false
                 && Self.fileLoginExists(at: profile) == true
+        }
+
+        func ownsIsolatedFallback(_ owner: ProfileIdentity) -> Bool {
+            ownsStage(owner) && hasIsolatedFallback
+        }
+
+        func ownsFallbackCheckpoint(_ owner: ProfileIdentity) -> Bool {
+            ownsStage(owner) && hasFallbackCheckpoint
         }
 
         private static func fileLoginExists(at directory: URL) -> Bool? {
@@ -105,7 +127,9 @@ enum CLISelection$Claude {
         let selection: String
         let owner: ProfileIdentity
         let fromFile: Bool
-        let fingerprint: Data
+        let fingerprint: Data?
+        var stub: Data?
+        var opaqueKeychain: AuthStorage$Claude.RemovalKeychainProof?
         var directoryMove: DirectoryMove?
         var recoveryService: String?
         var rollbackCredentialFile: String?
@@ -121,13 +145,41 @@ enum CLISelection$Claude {
             self.fingerprint = fingerprint
         }
 
+        init?(selection: String, owner: DirectoryIdentity, nonOAuth: AuthStorage$Claude.DesktopLoginProof) {
+            let profile = URL(fileURLWithPath: selection)
+            guard let identity = ProfileIdentity(profile), owner.matches(profile),
+                  nonOAuth.stub != nil || nonOAuth.opaqueKeychain != nil else { return nil }
+            self.selection = selection
+            self.owner = identity
+            fromFile = false
+            fingerprint = nil
+            stub = nonOAuth.stub
+            opaqueKeychain = nonOAuth.opaqueKeychain
+        }
+
         private static func fingerprint(_ credentials: AuthStorage$Claude.Credentials) -> Data? {
             guard let tokens = try? JSONEncoder().encode([credentials.accessToken, credentials.refreshToken]) else { return nil }
             return Data(SHA256.hash(data: tokens))
         }
 
         func matches(_ credentials: AuthStorage$Claude.Credentials) -> Bool {
-            fromFile == (credentials.backend == .file) && Self.fingerprint(credentials) == fingerprint
+            fingerprint != nil && fromFile == (credentials.backend == .file) && Self.fingerprint(credentials) == fingerprint
+        }
+
+        func matchesCurrent(directory: DirectoryIdentity? = nil) throws -> Bool {
+            if let opaqueKeychain {
+                return AuthStorage$Claude.removalKeychainProof(service: service) == opaqueKeychain
+            }
+            if let stub {
+                let path = directory?.path ?? selection
+                let current = AuthStorage$Claude.desktopLoginProof(service: service, directory: URL(fileURLWithPath: path),
+                                                                   keychainOnly: false)
+                return current?.stub == stub
+            }
+            guard let credentials = AuthStorage$Claude.credentials(service: service, interactive: false,
+                                                                   verifyingOwner: true, directory: directory),
+                  matches(credentials) else { return false }
+            return try AuthStorage$Claude.isCurrent(credentials, service: service, directory: directory)
         }
 
         var service: String {
@@ -200,12 +252,12 @@ enum CLISelection$Claude {
             && lstat(url.path, &current) == 0 && current.st_dev == pinned.st_dev && current.st_ino == pinned.st_ino
     }
 
-    private static func credentialFileProof(in owner: DirectoryIdentity) -> String? {
+    private static func credentialFileProof(in owner: DirectoryIdentity, name: String = ".credentials.json") -> String? {
         let descriptor = open(owner.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard descriptor >= 0 else { return nil }
         defer { _ = close(descriptor) }
         guard DirectoryIdentity.capture(descriptor: descriptor) == owner else { return nil }
-        return AppSwitcher$Claude.credentialFileProof(descriptor)
+        return AppSwitcher$Claude.credentialFileProof(descriptor, name: name)
     }
 
     private static func matchesRollbackFile(_ proof: RetirementProof, profile: URL) -> Bool {
@@ -245,7 +297,7 @@ enum CLISelection$Claude {
     private static func archiveIfReplaced(_ receipt: URL, file: FileHandle, proof: RetirementProof,
                                           owner: DirectoryIdentity) throws {
         let profile = URL(fileURLWithPath: proof.selection)
-        guard proof.directoryMove != nil, ProfileIdentity(profile) != proof.owner,
+        guard proof.directoryMove != nil, proof.opaqueKeychain == nil, ProfileIdentity(profile) != proof.owner,
               owner.matches(profile),
               let routed = AuthStorage$Claude.configDirectory(for: proof.service), owner.matches(routed),
               let credentials = AuthStorage$Claude.credentials(service: proof.service, interactive: false,
@@ -299,6 +351,11 @@ enum CLISelection$Claude {
         let profile = URL(fileURLWithPath: proof.selection)
         let service = proof.service
         guard !publishSelection || DirectoryIdentity.missingPath(pointer) != nil else { return }
+        if let move = proof.directoryMove, !proof.fromFile, move.ownsFallbackCheckpoint(proof.owner),
+           AuthStorage$Claude.removalKeychainIsAbsent(service: service) {
+            try? finishCommittedFallback(move, proof: proof, receipt: receipt, file: file)
+            return
+        }
         if ProfileIdentity(profile) != proof.owner {
             if let owner = DirectoryIdentity.capture(profile) {
                 if publishSelection, proof.fromFile,
@@ -330,8 +387,7 @@ enum CLISelection$Claude {
                       let current = retirementFile(at: receipt), let saved = readProof(current),
                       saved.selection == proof.selection, saved.recoveryService == nil,
                       ProfileIdentity(profile) == saved.owner, saved.matchesRoute(), matchesRollbackFile(saved, profile: profile),
-                      let credentials = AuthStorage$Claude.credentials(service: service, interactive: false, verifyingOwner: true),
-                      saved.matches(credentials), try AuthStorage$Claude.isCurrent(credentials, service: service)
+                      try saved.matchesCurrent()
                 else { return }
                 try validate()
                 guard ProfileIdentity(profile) == saved.owner, matchesRollbackFile(saved, profile: profile),
@@ -387,17 +443,27 @@ enum CLISelection$Claude {
                       let move = saved.directoryMove, move == proof.directoryMove,
                       move.canRestore(to: profile, owner: saved.owner),
                       let owner = DirectoryIdentity.capture(move.staged),
-                      let credentials = AuthStorage$Claude.credentials(service: service, interactive: false, verifyingOwner: true, directory: owner),
-                      saved.matches(credentials), try AuthStorage$Claude.isCurrent(credentials, service: service, directory: owner)
+                      try saved.matchesCurrent(directory: owner)
                 else { return }
                 try validate()
                 guard legacy?.isHeld != false, move.canRestore(to: profile, owner: saved.owner),
                       isSameFile(file.fileDescriptor, at: receipt) else { return }
+                if let fallback = move.fallbackFile, move.hasIsolatedFallback {
+                    try AccountRemoval.resolveClaudeFallback(in: move.staged, matching: fallback, restoring: true) {
+                        try validate()
+                        guard legacy?.isHeld != false, move.ownsIsolatedFallback(saved.owner),
+                              try saved.matchesCurrent(directory: owner) else {
+                            throw Failure(errorDescription: L.t("error.cliProfile"))
+                        }
+                    }
+                    guard credentialFileProof(in: owner) == fallback else { return }
+                } else if move.ownsFallbackCheckpoint(saved.owner) {
+                    return
+                }
                 try restore(move.staged, move.original)
                 guard ProfileIdentity(profile) == saved.owner,
                       saved.matchesRoute(),
-                      let current = AuthStorage$Claude.credentials(service: service, interactive: false, verifyingOwner: true),
-                      saved.matches(current), try AuthStorage$Claude.isCurrent(current, service: service)
+                      try saved.matchesCurrent()
                 else { return }
                 try validate()
                 guard legacy?.isHeld != false, ProfileIdentity(profile) == saved.owner,
@@ -408,13 +474,40 @@ enum CLISelection$Claude {
         })
     }
 
+    private static func finishCommittedFallback(_ move: DirectoryMove, proof: RetirementProof, receipt: URL,
+                                                file: FileHandle) throws {
+        guard let fallback = move.fallbackFile else { return }
+        try AuthStorage$Claude.withRemovalLock(directory: move.staged, validating: { _, validate in
+            _ = try withSelectionLock {
+                try AccountRemoval.resolveClaudeFallback(in: move.staged, matching: fallback, restoring: false) {
+                    try validate()
+                    guard isSameFile(file.fileDescriptor, at: receipt), move.ownsFallbackCheckpoint(proof.owner),
+                          AuthStorage$Claude.removalKeychainIsAbsent(service: proof.service) else {
+                        throw Failure(errorDescription: L.t("error.cliProfile"))
+                    }
+                }
+                _ = unlink(receipt.path)
+            }
+        })
+    }
+
+    private static func clearFinishedRetirement(_ receipt: URL) {
+        if let file = retirementFile(at: receipt), let proof = readProof(file),
+           proof.directoryMove?.ownsFallbackCheckpoint(proof.owner) == true {
+            // Keep the receipt when cleanup has been refused. Discovery can
+            // finish the isolated file without exposing it as a login.
+            return
+        }
+        _ = unlink(receipt.path)
+    }
+
     /// An old shell must refuse a retired extra profile even after its path is
     /// reused. Keep the native default and any other selected profile intact.
     static func withRetiredSelection(services: Set<String>, directoryRecoveryService: String? = nil,
                                      operation: (_ fileRestored: @escaping (Int32, Int32) -> Void,
-                                                 _ beforeMove: @escaping (URL, URL) throws -> Void) throws -> Void) throws {
+                                                 _ beforeMove: @escaping (URL, URL) throws -> String?) throws -> Void) throws {
         guard services.contains(where: { $0 != AuthStorage$Claude.baseService }) else {
-            try operation({ _, _ in }, { _, _ in })
+            try operation({ _, _ in }, { _, _ in nil })
             return
         }
         if directoryRecoveryService != nil {
@@ -428,22 +521,23 @@ enum CLISelection$Claude {
         }
         if completed == nil {
             guard directoryRecoveryService == nil else { throw Failure(errorDescription: L.t("error.cliProfile")) }
-            try operation({ _, _ in }, { _, _ in })
+            try operation({ _, _ in }, { _, _ in nil })
         }
     }
 
     private static func retireSelection(services: Set<String>, directoryRecoveryService: String?,
                                         operation: (_ fileRestored: @escaping (Int32, Int32) -> Void,
-                                                    _ beforeMove: @escaping (URL, URL) throws -> Void) throws -> Void) throws {
+                                                    _ beforeMove: @escaping (URL, URL) throws -> String?) throws -> Void) throws {
         func withoutSelectedRetirement() throws {
             var receipt: URL?
             try operation({ _, _ in }, { source, stage in
                 try archiveReplacedRetirements(at: source)
-                if let directoryRecoveryService {
-                    receipt = try recordUnselectedMove(service: directoryRecoveryService, source: source, stage: stage)
-                }
+                guard let directoryRecoveryService else { return nil }
+                let recorded = try recordUnselectedMove(service: directoryRecoveryService, source: source, stage: stage)
+                receipt = recorded.receipt
+                return recorded.fallback
             })
-            if let receipt { _ = unlink(receipt.path) }
+            if let receipt { clearFinishedRetirement(receipt) }
         }
 
         let descriptor = open(pointer.path, O_RDWR | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
@@ -468,7 +562,10 @@ enum CLISelection$Claude {
         let selectionIsCurrent = AuthStorage$Claude.captureSelectionRevision(for: service)
         var credentials = AuthStorage$Claude.credentials(service: service, interactive: false, verifyingOwner: true)
         var restoredOwner: DirectoryIdentity?
-        let proof = owner.flatMap { owner in credentials.flatMap { RetirementProof(selection: selection, owner: owner, credentials: $0) } }
+        let proof = owner.flatMap {
+            retirementProof(service: service, selection: selection, owner: $0, credentials: credentials)
+        }
+        guard directoryRecoveryService == nil || proof != nil else { throw Failure(errorDescription: L.t("error.cliProfile")) }
         try writeProof(proof, descriptor: descriptor)
         // An existing live selection supersedes an earlier retirement.
         try parkSupersededRetirement()
@@ -482,16 +579,19 @@ enum CLISelection$Claude {
                 restoredOwner = DirectoryIdentity.capture(descriptor: destination)
             }, { source, stage in
                 try archiveReplacedRetirements(at: source)
-                guard var proof else { return }
-                guard let move = DirectoryMove(from: source, to: stage, owner: proof.owner),
+                guard var proof else { return nil }
+                guard try proof.matchesCurrent(),
+                      let move = DirectoryMove(from: source, to: stage, owner: proof.owner),
                       isSameFile(descriptor, at: retirement) else { throw Failure(errorDescription: L.t("error.cliProfile")) }
                 proof.directoryMove = move
                 try writeProof(proof, descriptor: descriptor)
+                return move.fallbackFile
             })
         } catch {
             // A failed deletion can leave a different login at the same path.
             guard isSameFile(descriptor, at: retirement) else { throw error }
-            if selectionIsCurrent(), owner?.matches(profile) == true {
+            if owner?.matches(profile) == true,
+               selectionIsCurrent() || (try? proof?.matchesCurrent()) == true {
                 try moveSelection(from: retirement, to: pointer)
                 throw error
             }
@@ -506,18 +606,31 @@ enum CLISelection$Claude {
             try moveSelection(from: retirement, to: pointer)
             throw error
         }
-        _ = unlink(retirement.path)
+        clearFinishedRetirement(retirement)
     }
 
-    private static func recordUnselectedMove(service: String, source: URL, stage: URL) throws -> URL? {
+    private static func retirementProof(service: String, selection: String, owner: DirectoryIdentity,
+                                        credentials: AuthStorage$Claude.Credentials?) -> RetirementProof? {
+        if let credentials {
+            return RetirementProof(selection: selection, owner: owner, credentials: credentials)
+        }
+        guard let known = AuthStorage$Claude.desktopLoginProof(service: service, directory: URL(fileURLWithPath: owner.path),
+                                                               keychainOnly: false) else { return nil }
+        return RetirementProof(selection: selection, owner: owner, nonOAuth: known)
+    }
+
+    private static func recordUnselectedMove(service: String, source: URL, stage: URL) throws
+        -> (receipt: URL, fallback: String?) {
         guard !source.path.contains("\n"), !source.path.contains("\r"),
               let owner = DirectoryIdentity.capture(source),
-              let credentials = AuthStorage$Claude.credentials(service: service, interactive: false, verifyingOwner: true),
-              (try? AuthStorage$Claude.isCurrent(credentials, service: service)) == true,
-              var proof = RetirementProof(selection: source.path, owner: owner, credentials: credentials)
-        else { return nil }
+              var proof = retirementProof(service: service, selection: source.path, owner: owner,
+                                          credentials: AuthStorage$Claude.credentials(service: service, interactive: false,
+                                                                                       verifyingOwner: true)) else {
+            throw Failure(errorDescription: L.t("error.cliProfile"))
+        }
         proof.recoveryService = service
-        guard proof.matchesRoute(), let move = DirectoryMove(from: source, to: stage, owner: proof.owner)
+        guard proof.matchesRoute(), try proof.matchesCurrent(),
+              let move = DirectoryMove(from: source, to: stage, owner: proof.owner)
         else { throw Failure(errorDescription: L.t("error.cliProfile")) }
         proof.directoryMove = move
 
@@ -531,7 +644,7 @@ enum CLISelection$Claude {
         try writeProof(proof, descriptor: descriptor)
         let receipt = root.appendingPathComponent(parkedPrefix + UUID().uuidString)
         try moveSelection(from: prepared, to: receipt)
-        return receipt
+        return (receipt, move.fallbackFile)
     }
 
     private static func moveSelection(from source: URL, to destination: URL) throws {

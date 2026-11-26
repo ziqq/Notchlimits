@@ -21,6 +21,11 @@ class ClaudeLifecycleRegressions(unittest.TestCase):
         hooks = {
             "func SecKeychainCopySearchList(_ result: UnsafeMutablePointer<CFArray?>) -> OSStatus {":
                 "if let searchList = ClaudeLifecycleSignals.searchList { return searchList(result) }",
+            "_ item: UnsafeMutablePointer<SecKeychainItem?>) -> OSStatus {":
+                """if ClaudeLifecycleSignals.ownsPersistentReference(reference) {
+        item.pointee = unsafeBitCast("fixture-claude-item" as CFString, to: SecKeychainItem.self)
+        return errSecSuccess
+    }""",
             "_ to: UnsafePointer<CChar>, _ flags: UInt32) -> Int32 {":
                 """if flags == UInt32(RENAME_SWAP) {
         if !ClaudeLifecycleSignals.replaceOnRepair { ClaudeLifecycleSignals.replaceExpiredLock(at: fromFD, path: from) }
@@ -32,12 +37,16 @@ class ClaudeLifecycleRegressions(unittest.TestCase):
         for anchor, body in hooks.items():
             assert support.count(anchor) == 1
             support = support.replace(anchor, anchor + "\n    " + body)
+        attributes = "result?.pointee = [kSecAttrService as String: service] as NSDictionary"
+        assert support.count(attributes) == 2
+        support = support.replace(attributes, """result?.pointee = ClaudeLifecycleSignals.attributes(service, query: query) as NSDictionary""", 1)
         rename = "return Darwin.renameatx_np(fromFD, from, toFD, to, flags)"
         assert support.count(rename) == 1
         support = support.replace(rename, """let result = Darwin.renameatx_np(fromFD, from, toFD, to, flags)
     ClaudeLifecycleSignals.afterRename(flags, result, parent: fromFD)
     ClaudeLifecycleSignals.afterSelectionRename(String(cString: from), result: result)
     ClaudeLifecycleSignals.afterCredentialRollback(parent: fromFD, name: String(cString: from), result: result)
+    ClaudeLifecycleSignals.afterFallbackIsolation(from: String(cString: from), to: String(cString: to), result: result)
     return result""")
         move = "try super.moveItem(at: srcURL, to: dstURL)"
         assert support.count(move) == 1
@@ -55,6 +64,15 @@ class ClaudeLifecycleRegressions(unittest.TestCase):
         authentication.AuthenticationRegressions.setUpClass.__func__(cls)
 
     check_scenario = authentication.AuthenticationRegressions.check_scenario
+
+    def test_removal_confirmation_stays_with_original_claude_login(self):
+        for backend in ("file", "keychain", "primary"):
+            for login in ("replacement", "unchanged"):
+                with self.subTest(backend=backend, login=login):
+                    self.check_scenario(f"remove-confirmed:{backend}:{login}")
+
+    def test_removal_rechecks_confirmed_claude_login_after_staging(self):
+        self.check_scenario("remove-confirmed:keychain:staged")
 
     def check_cli_retirement_restart(self, phase, backend, selection, behavior="restore"):
         with tempfile.TemporaryDirectory(prefix="notchlimits-cli-retirement-", dir="/private/tmp") as directory:
@@ -93,6 +111,25 @@ class ClaudeLifecycleRegressions(unittest.TestCase):
     def test_interrupted_directory_staging_keeps_newer_cli_selection(self):
         self.check_cli_retirement_restart("directory", "keychain", "target", "newer")
 
+    def test_interrupted_removal_started_with_unreadable_keychain_restores_exact_owner(self):
+        for selection in ("target", "previous", "none"):
+            with self.subTest(selection=selection):
+                self.check_cli_retirement_restart("opaque", "keychain", selection)
+
+    def test_interrupted_removal_never_restores_opaque_keychain_after_same_date_write(self):
+        self.check_cli_retirement_restart("opaque", "keychain", "target", "opaque-replaced")
+
+    def test_removal_without_any_keychain_owner_proof_leaves_profile_untouched(self):
+        self.check_scenario("retirement-without-proof")
+
+    def test_interrupted_dual_store_removal_restores_the_exact_fallback(self):
+        for selection, behavior in (("target", "denied"), ("previous", "restore")):
+            with self.subTest(selection=selection):
+                self.check_cli_retirement_restart("fallback", "both", selection, behavior)
+
+    def test_committed_dual_store_removal_does_not_leave_usable_fallback(self):
+        self.check_cli_retirement_restart("fallback-committed", "both", "target")
+
     def check_desktop_retirement_restart(self, phase, case="desktop-retirement"):
         with tempfile.TemporaryDirectory(prefix="notchlimits-desktop-retirement-", dir="/private/tmp") as directory:
             root = pathlib.Path(directory)
@@ -115,6 +152,41 @@ class ClaudeLifecycleRegressions(unittest.TestCase):
 
     def test_desktop_retirement_reuses_session_after_verified_rollback_rename(self):
         self.check_desktop_retirement_restart("restored", case="desktop-rollback")
+
+    def test_interrupted_shared_primary_removal_does_not_adopt_the_alias_fallback(self):
+        for phase in ("deleted", "metadata-denied"):
+            with self.subTest(phase=phase):
+                self.check_desktop_retirement_restart(phase, case="shared-primary")
+
+    def test_interrupted_shared_primary_preparation_does_not_commit_removal(self):
+        self.check_desktop_retirement_restart("before", case="shared-primary")
+
+    def test_interrupted_shared_primary_removal_admits_a_fresh_file_login(self):
+        self.check_desktop_retirement_restart("replacement", case="shared-primary")
+
+    def test_replacement_shared_primary_keeps_the_retained_alias_fallback_suppressed(self):
+        self.check_desktop_retirement_restart("keychain-replacement", case="shared-primary")
+
+    def test_refused_shared_primary_retry_preserves_the_pending_receipt(self):
+        for phase in ("retry-same", "retry-new"):
+            with self.subTest(phase=phase):
+                self.check_desktop_retirement_restart(phase, case="shared-primary")
+
+    def test_interrupted_native_primary_removal_restores_the_exact_fallback(self):
+        for phase in ("before", "opaque"):
+            with self.subTest(phase=phase):
+                self.check_desktop_retirement_restart(phase, case="native-primary")
+
+    def test_committed_native_primary_removal_finishes_fallback_cleanup(self):
+        self.check_desktop_retirement_restart("deleted", case="native-primary")
+
+    def test_interrupted_native_primary_removal_preserves_a_replacement_file(self):
+        self.check_desktop_retirement_restart("replacement", case="native-primary")
+
+    def test_interrupted_native_primary_retains_the_checkpoint_without_the_original_keychain_login(self):
+        for phase in ("keychain-replacement", "keychain-denied"):
+            with self.subTest(phase=phase):
+                self.check_desktop_retirement_restart(phase, case="native-primary")
 
     def test_cli_retirement_rebinds_only_the_original_rollback_file(self):
         for phase in ("selected", "locked", "copied"):

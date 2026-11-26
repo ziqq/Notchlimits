@@ -16,6 +16,9 @@ class CodexRestorationRegressions(unittest.TestCase):
         cls.addClassCleanup(fixture.cleanup)
         support = (swift_regression.FIXTURES / "Authentication.swift").read_text().split("\n@main\n", 1)[0]
         boundaries = {
+            "func SecKeychainCopySearchList(_ result: UnsafeMutablePointer<CFArray?>) -> OSStatus {":
+                """func SecKeychainCopySearchList(_ result: UnsafeMutablePointer<CFArray?>) -> OSStatus {
+    guard !RestorationSignals.keychainSearchUnavailable else { return errSecNoSuchKeychain }""",
             "guard let data = Fixture.codexKeychain[key] else { return errSecItemNotFound }":
                 """if RestorationSignals.keychainDenied || key == RestorationSignals.unavailableKey
             || RestorationSignals.denyRead?(key) == true { return errSecInteractionNotAllowed }
@@ -518,3 +521,16 @@ for mode in ("keyring", "auto"):
     setattr(CodexRestorationRegressions, f"test_file_transfer_publication_{mode}_restart", audit_published_fallback_restart(mode))
     setattr(CodexRestorationRegressions, f"test_file_transfer_publication_{mode}_restart_remove_file",
             audit_published_fallback_restart(mode, remove_new_file=True))
+
+
+stash_cases = [(mode, relogin, "available") for mode, relogin in product(("file", "keyring"), repeat=2)]
+stash_cases.append(("file", "file", "unavailable"))
+for action, (mode, relogin, availability) in product(("switch", "remove"), stash_cases):
+    name = f"test_inactive_stash_{action}_{mode}_{relogin}_{availability}"
+    setattr(CodexRestorationRegressions, name, scenario_test(f"inactive-stash:{action}:{mode}:{relogin}:{availability}"))
+
+for mode, change in product(("file", "keyring"), ("stable", "replaced")):
+    setattr(CodexRestorationRegressions, f"test_incoming_selection_{mode}_{change}", scenario_test(f"incoming-selection:{mode}:{change}"))
+
+for mode in ("file", "keyring"):
+    setattr(CodexRestorationRegressions, f"test_incoming_rotation_{mode}", scenario_test(f"incoming-rotation:{mode}"))

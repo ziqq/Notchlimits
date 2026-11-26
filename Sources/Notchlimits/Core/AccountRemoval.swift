@@ -10,6 +10,52 @@ enum AccountRemoval {
         let retainedFile: DirectoryIdentity?
     }
 
+    struct ClaudeActionLogin {
+        fileprivate let directoryWasMissing: Bool
+        fileprivate let matches: (URL) -> Bool
+        fileprivate let matchesKeychain: (URL) -> Bool
+    }
+
+    static func claudeActionLogin(for account: DiscoveredAccount) -> ClaudeActionLogin? {
+        guard case .claudeKeychain(let service, let configDir) = account.source else { return nil }
+        let directory = configDir ?? AuthStorage$Claude.configDirectory(for: service)
+            ?? ProfileDirectories.home.appendingPathComponent(".claude")
+        let directoryOwner = DirectoryIdentity.capture(directory)
+        let wasMissing = DirectoryIdentity.missingPath(directory) != nil
+        let revisionIsCurrent = AuthStorage$Claude.captureSelectionRevision(for: service)
+        let expected = AuthStorage$Claude.desktopLoginProof(service: service, directory: directory, keychainOnly: false)
+        let opaque = expected?.opaqueKeychain ?? (expected == nil ? AuthStorage$Claude.removalKeychainProof(service: service) : nil)
+        let permitsRevisionCheck = expected == nil && opaque == nil && AuthStorage$Claude.contains(service: service)
+            && revisionIsCurrent()
+        let keychain = AuthStorage$Claude.desktopLoginProof(service: service, directory: directory, keychainOnly: true)
+        let matchesKeychain = { (current: URL) -> Bool in
+            if let item = opaque ?? keychain?.opaqueKeychain {
+                return AuthStorage$Claude.removalKeychainProof(service: service) == item
+            }
+            guard let keychain,
+                  let observed = AuthStorage$Claude.desktopLoginProof(service: service, directory: current, keychainOnly: true)
+            else { return false }
+            return observed.opaqueKeychain == nil && observed.login == keychain.login && observed.stub == keychain.stub
+        }
+        return ClaudeActionLogin(directoryWasMissing: wasMissing, matches: { current in
+            if wasMissing {
+                guard DirectoryIdentity.missingPath(current.appendingPathComponent(".credentials.json")) != nil else {
+                    return false
+                }
+            } else {
+                guard directoryOwner?.matches(current) == true else { return false }
+            }
+            if let opaque { return AuthStorage$Claude.removalKeychainProof(service: service) == opaque }
+            guard let expected else { return permitsRevisionCheck && revisionIsCurrent() }
+            guard expected.hasCredential,
+                  let observed = AuthStorage$Claude.desktopLoginProof(service: service, directory: current, keychainOnly: false)
+            else { return false }
+            // The primary lock may have created a previously missing directory.
+            if wasMissing { return observed.login == expected.login && observed.stub == expected.stub }
+            return observed == expected
+        }, matchesKeychain: matchesKeychain)
+    }
+
     enum Failure: LocalizedError {
         case keychain(OSStatus), busy, unsupported
 
@@ -39,9 +85,13 @@ enum AccountRemoval {
     static func remove(_ account: DiscoveredAccount, requireIncomplete: Bool = false,
                        claudeRemoval: ((ClaudeRemoval) -> Void)? = nil,
                        expectedLogin: AuthSwap$Codex.ActionLogin? = nil,
+                       expectedClaudeLogin: ClaudeActionLogin? = nil,
                        completion: @escaping (Result<Void, Error>) -> Void) {
         guard account.provider == .codex else {
-            completion(Result { try remove(account, requireIncomplete: requireIncomplete, claudeRemoval: claudeRemoval) })
+            completion(Result {
+                try remove(account, requireIncomplete: requireIncomplete, claudeRemoval: claudeRemoval,
+                           expectedClaudeLogin: expectedClaudeLogin)
+            })
             return
         }
         guard !AppSwitchState.inProgress.contains(.codex) else {
@@ -86,12 +136,13 @@ enum AccountRemoval {
                 // Logout removes Keychain metadata but leaves the profile and
                 // its Desktop session. Retire every supported path spelling.
                 let desktopServices = Set(services + AuthStorage$Claude.profileServices(in: directory))
-                try AppSwitcher$Claude.withDesktopRetirement(services: desktopServices, directory: directory) { recordMove, _ in
+                try AppSwitcher$Claude.withDesktopRetirement(services: desktopServices, directory: directory,
+                                                             validating: validate) { recordMove, _, _ in
                     try CLISelection$Claude.withRetiredSelection(services: desktopServices) { _, beforeMove in
                         try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot, move: { try move($0, $1) },
                                                  beforeStaging: { source, staged in
                             try recordMove(staged)
-                            try beforeMove(source, staged)
+                            _ = try beforeMove(source, staged)
                         }) { _ in
                             for service in services { try deleteKeychainEntry(service: service, validating: { try validate() }) }
                         }
@@ -105,12 +156,16 @@ enum AccountRemoval {
 
     static func remove(_ account: DiscoveredAccount, requireIncomplete: Bool = false,
                        claudeRemoval: ((ClaudeRemoval) -> Void)? = nil,
-                       expectedLogin: AuthSwap$Codex.ActionLogin? = nil) throws {
+                       expectedLogin: AuthSwap$Codex.ActionLogin? = nil,
+                       expectedClaudeLogin: ClaudeActionLogin? = nil) throws {
         switch account.source {
         case .claudeKeychain(let service, let configDir):
             let directory = configDir ?? AuthStorage$Claude.configDirectory(for: service)
             let owner = directory ?? (service == AuthStorage$Claude.baseService
                 ? ProfileDirectories.home.appendingPathComponent(".claude") : nil)
+            if expectedClaudeLogin?.directoryWasMissing == true {
+                guard let owner, DirectoryIdentity.missingPath(owner) != nil else { throw Failure.busy }
+            }
             do {
                 try AuthStorage$Claude.withRemovalLock(service: service, configDir: directory, validating: { move, validate in
                     // A stale logical path must not authorize the replacement
@@ -124,6 +179,12 @@ enum AccountRemoval {
                             ? AuthStorage$Claude.matchesPrimaryOwner(account)
                             : account.claudeConfigOwner?.matches(owner) == true),
                           let owners = AuthStorage$Claude.keychainServices(in: owner) else { throw Failure.busy }
+                    guard expectedClaudeLogin?.matches(owner) != false else { throw Failure.busy }
+                    try validate()
+                    func validateSelectedKeychain(in directory: URL) throws {
+                        guard expectedClaudeLogin?.matchesKeychain(directory) != false else { throw Failure.busy }
+                        try validate()
+                    }
                     let shared = owners.contains { $0 != service }
                         || service != AuthStorage$Claude.baseService && ProfileDirectories.isClaudeBase(owner)
                     // A file-only login cannot claim the common fallback after
@@ -132,8 +193,11 @@ enum AccountRemoval {
                     var retainedFile: DirectoryIdentity?
                     let recoveryService = !shared && directory?.path.hasPrefix(ProfileDirectories.claudeRoot.path + "/") == true
                         ? service : nil
+                    let protectsNativeFallback = !shared && service == AuthStorage$Claude.baseService && owners.contains(service)
                     try AppSwitcher$Claude.withDesktopRetirement(services: [service], directory: owner,
-                                                                 keychainOnly: shared) { recordMove, recordDesktopRollback in
+                                                                 keychainOnly: shared,
+                                                                 protectsNativeFallback: protectsNativeFallback,
+                                                                 validating: validate) { recordMove, recordDesktopRollback, nativeFallback in
                         try CLISelection$Claude.withRetiredSelection(services: [service],
                                                                     directoryRecoveryService: recoveryService) { fileRestored, beforeMove in
                             if shared {
@@ -142,19 +206,35 @@ enum AccountRemoval {
                                     guard let identity = DirectoryIdentity.capture(owner) else { throw Failure.busy }
                                     retainedFile = identity
                                 }
-                                try deleteKeychainEntry(service: service, validating: { try validate() })
-                                if service == AuthStorage$Claude.baseService {
-                                    AuthStorage$Claude.recordSharedPrimaryRemoval()
+                                let delete = {
+                                    try deleteKeychainEntry(service: service, validating: { try validateSelectedKeychain(in: owner) })
                                 }
+                                if service == AuthStorage$Claude.baseService {
+                                    try AuthStorage$Claude.withSharedPrimaryRemoval(delete)
+                                } else {
+                                    try delete()
+                                }
+                            } else if protectsNativeFallback {
+                                try deleteClaudeCredentials(service: service, configDir: owner, isolateFallback: true,
+                                                            fallbackProof: nativeFallback?.proof, fallbackName: nativeFallback?.name,
+                                                            validating: validate,
+                                                            validatingKeychain: { try validateSelectedKeychain(in: owner) })
                             } else {
+                                var fallbackProof: String?
                                 try withProfileDirectory(directory, root: ProfileDirectories.claudeRoot,
                                                          move: { try move($0, $1) },
                                                          beforeStaging: { source, staged in
+                                    guard expectedClaudeLogin?.matches(owner) != false else { throw Failure.busy }
                                     try recordMove(staged)
-                                    try beforeMove(source, staged)
+                                    fallbackProof = try beforeMove(source, staged)
                                 }, restoringClaudeFile: recordDesktopRollback,
                                    restoredClaudeFileOwner: fileRestored) { moved in
-                                    try deleteClaudeCredentials(service: service, configDir: moved, validating: { try validate() })
+                                    let isolated = recoveryService != nil && owners.contains(service)
+                                        && moved?.lastPathComponent.hasPrefix(".removed-") == true
+                                    try deleteClaudeCredentials(service: service, configDir: moved, isolateFallback: isolated,
+                                                                fallbackProof: fallbackProof,
+                                                                validating: validate,
+                                                                validatingKeychain: { try validateSelectedKeychain(in: moved ?? owner) })
                                 }
                             }
                         }
@@ -435,16 +515,82 @@ enum AccountRemoval {
         }
     }
 
-    private static func deleteClaudeCredentials(service: String, configDir: URL?, validating validate: () throws -> Void) throws {
+    static func claudeFallbackName(_ staged: URL) -> String {
+        ".credentials-" + staged.lastPathComponent.dropFirst(".removed-".count) + ".removal"
+    }
+
+    static func resolveClaudeFallback(in staged: URL, matching proof: String, named checkpoint: String? = nil, restoring: Bool,
+                                      validating validate: () throws -> Void) throws {
+        guard let owner = DirectoryIdentity.capture(staged) else { throw Failure.busy }
+        let descriptor = open(owner.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw Failure.busy }
+        defer { close(descriptor) }
+        let name = checkpoint ?? claudeFallbackName(staged)
+        try validate()
+        guard DirectoryIdentity.capture(descriptor: descriptor) == owner, owner.matches(staged),
+              AppSwitcher$Claude.credentialFileProof(descriptor, name: name) == proof else { throw Failure.busy }
+        if restoring {
+            guard renameatx_np(descriptor, name, descriptor, ".credentials.json", UInt32(RENAME_EXCL)) == 0 else {
+                if errno == EEXIST { return }
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+        } else {
+            guard unlinkat(descriptor, name, 0) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+        }
+    }
+
+    private static func isolateClaudeFallback(in staged: URL, matching proof: String, named checkpoint: String?,
+                                              validating validate: () throws -> Void) throws {
+        guard let owner = DirectoryIdentity.capture(staged) else { throw Failure.busy }
+        let descriptor = open(owner.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw Failure.busy }
+        defer { close(descriptor) }
+        let name = checkpoint ?? claudeFallbackName(staged)
+        try validate()
+        guard DirectoryIdentity.capture(descriptor: descriptor) == owner, owner.matches(staged),
+              AppSwitcher$Claude.credentialFileProof(descriptor) == proof else { throw Failure.busy }
+        guard renameatx_np(descriptor, ".credentials.json", descriptor, name, UInt32(RENAME_EXCL)) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        if AppSwitcher$Claude.credentialFileProof(descriptor, name: name) != proof {
+            // The actual entry moved at the boundary may be a newer login.
+            // Put it back only if that name is still free.
+            _ = renameatx_np(descriptor, name, descriptor, ".credentials.json", UInt32(RENAME_EXCL))
+            throw Failure.busy
+        }
+    }
+
+    private static func deleteClaudeCredentials(service: String, configDir: URL?, isolateFallback: Bool, fallbackProof: String?,
+                                                fallbackName: String? = nil,
+                                                validating validate: () throws -> Void,
+                                                validatingKeychain validateKeychain: () throws -> Void) throws {
         let file = configDir?.appendingPathComponent(".credentials.json") ?? AuthStorage$Claude.credentialFile(service: service)
-        let backup = try file.flatMap { FileManager.default.fileExists(atPath: $0.path) ? try Data(contentsOf: $0) : nil }
+        let staged = isolateFallback ? configDir : nil
+        let backup = staged == nil
+            ? try file.flatMap { FileManager.default.fileExists(atPath: $0.path) ? try Data(contentsOf: $0) : nil } : nil
         // An unlink failure must leave Keychain and pending grants untouched.
-        if let file, backup != nil { try validate(); try FileManager.default.removeItem(at: file) }
+        if let staged {
+            if let fallbackProof {
+                try isolateClaudeFallback(in: staged, matching: fallbackProof, named: fallbackName, validating: validate)
+            } else if let file, DirectoryIdentity.missingPath(file) == nil { throw Failure.busy }
+        } else if let file, backup != nil {
+            try validate()
+            try FileManager.default.removeItem(at: file)
+        }
         do {
-            try deleteKeychainEntry(service: service, validating: { try validate() })
+            try deleteKeychainEntry(service: service, validating: validateKeychain)
         } catch {
-            if let file, let backup { try restoreCredentialFile(backup, at: file) }
+            if let staged, let fallbackProof {
+                try resolveClaudeFallback(in: staged, matching: fallbackProof, named: fallbackName, restoring: true, validating: {})
+            } else if let file, let backup {
+                try restoreCredentialFile(backup, at: file)
+            }
             throw error
+        }
+        if let staged, let fallbackProof {
+            try? resolveClaudeFallback(in: staged, matching: fallbackProof, named: fallbackName, restoring: false, validating: validate)
         }
     }
 

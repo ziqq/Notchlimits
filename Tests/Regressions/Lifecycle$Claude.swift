@@ -50,10 +50,14 @@ private enum ClaudeLifecycleSignals {
     static var deniedSelection: String?
     static var cutAfterSelectionMove: String?
     static var cutAfterProfileMove: String?
+    static var afterStagingForConfirmation: ((URL) -> Void)?
     static var cutBeforeProfileMove: String?
     static var cutAfterProfileCleanup: URL?
     static var cutAfterCredentialDelete: String?
+    static var afterKeychainDeletion: ((String) -> Void)?
+    static var cutAfterFallback = false
     static var cutAfterCredentialRollback = false
+    static var opaqueService: String?
     static var replacingLock: String?
     static var nativeLock: Int32 = -1
     static var crashOnSwap = false
@@ -107,6 +111,7 @@ private enum ClaudeLifecycleSignals {
     }
 
     static func afterProfileMove(from source: URL, to destination: URL) {
+        if destination.lastPathComponent.hasPrefix(".removed-") { afterStagingForConfirmation?(source) }
         if source.path == cutAfterProfileMove, destination.lastPathComponent.hasPrefix(".removed-") {
             _exit(86)
         }
@@ -119,12 +124,34 @@ private enum ClaudeLifecycleSignals {
     }
 
     static func afterProfileCleanup(_ directory: URL) {
-        if directory.deletingLastPathComponent().path == cutAfterProfileCleanup?.path,
+        let parent = directory.deletingLastPathComponent()
+        if cutAfterFallback, directory.lastPathComponent == ".credentials.json",
+           parent.lastPathComponent.hasPrefix(".removed-") || parent.path == Fixture.storageDirectory.path { _exit(86) }
+        if parent.path == cutAfterProfileCleanup?.path,
            directory.lastPathComponent.hasPrefix(".removed-") { _exit(86) }
     }
 
+    static func afterFallbackIsolation(from: String, to: String, result: Int32) {
+        if cutAfterFallback, result == 0, from == ".credentials.json", to.hasSuffix(".removal") { _exit(86) }
+    }
+
     static func afterCredentialDelete(_ service: String) {
+        afterKeychainDeletion?(service)
         if service == cutAfterCredentialDelete { _exit(86) }
+    }
+
+    static func attributes(_ service: String, query: CFDictionary) -> [String: Any] {
+        var attributes: [String: Any] = [kSecAttrService as String: service]
+        if service == opaqueService, (query as NSDictionary)[kSecReturnPersistentRef as String] as? Bool == true {
+            attributes[kSecValuePersistentRef as String] = Data(("fixture-claude-ref-" + service).utf8)
+            attributes[kSecAttrModificationDate as String] = Date(timeIntervalSince1970: 1)
+        }
+        return attributes
+    }
+
+    static func ownsPersistentReference(_ reference: CFData) -> Bool {
+        guard let service = opaqueService, Fixture.claudeEntries?[service] != nil else { return false }
+        return (reference as Data) == Data(("fixture-claude-ref-" + service).utf8)
     }
 
     static func afterCredentialRollback(parent: Int32, name: String, result: Int32) {
@@ -147,6 +174,8 @@ enum Lifecycle$Claude {
                 try cliRetirementCut(phase: args[1], backend: args[2], selection: args[3])
             case "cli-retirement-replay":
                 try cliRetirementReplay(phase: args[1], backend: args[2], selection: args[3], behavior: args[4])
+            case "retirement-without-proof":
+                try retirementWithoutProof()
             case "desktop-retirement-cut":
                 try desktopRetirementCut(deleted: args[1] == "deleted")
             case "desktop-retirement-replay":
@@ -159,6 +188,16 @@ enum Lifecycle$Claude {
                 try desktopRollbackCut(selected: args[1] != "restored")
             case "desktop-rollback-replay":
                 try desktopRollbackReplay(mode: args[1])
+            case "shared-primary-cut":
+                try sharedPrimaryCut(phase: args[1])
+            case "shared-primary-replay":
+                try sharedPrimaryReplay(phase: args[1])
+            case "native-primary-cut":
+                try nativePrimaryCut(phase: args[1])
+            case "native-primary-replay":
+                try nativePrimaryReplay(phase: args[1])
+            case "remove-confirmed":
+                try removeConfirmed(backend: args[1], phase: args[2])
             case "dotdir":
                 try dotdir(mode: args[1])
             case "lock-syscall":
@@ -185,6 +224,56 @@ enum Lifecycle$Claude {
         } catch {
             print("FAIL:", error)
             exit(1)
+        }
+    }
+
+    @MainActor
+    private static func removeConfirmed(backend: String, phase: String) throws {
+        Fixture.claudeEntries = [:]
+        let service: String
+        let directory: URL
+        if backend == "primary" {
+            service = Fixture.service
+            directory = ProfileDirectories.home.appendingPathComponent(".claude")
+            Fixture.claudeEntries?[service] = Fixture.claudeLogin("primary", expired: false)
+            try expect(DirectoryIdentity.missingPath(directory) != nil, "Fixture primary home already exists")
+        } else {
+            let (account, home) = try profile(file: backend == "file")
+            guard case .claudeKeychain(let namespace, _) = account.source else {
+                throw Failure(description: "Fixture Claude profile was not discovered")
+            }
+            service = namespace
+            directory = home
+        }
+        let id = "claude:" + service
+        let store = UsageStore(providers: [:], discovery: Discovery$Real())
+        store.rediscover(force: true)
+        try expect(store.account(for: id) != nil, "Fixture removal menu has no account")
+        let menu = RegressionProfileMenu(store: store)
+        let replacement = Fixture.claudeLogin("new-owner", expired: false)
+        if phase == "staged" {
+            ClaudeLifecycleSignals.afterStagingForConfirmation = { source in
+                guard source.path == directory.path else { return }
+                Fixture.claudeEntries?[service] = replacement
+                ClaudeLifecycleSignals.afterStagingForConfirmation = nil
+            }
+        } else if phase == "replacement" {
+            menu.beforeConfirmation = {
+                if backend == "file" {
+                    try! JSONSerialization.data(withJSONObject: replacement)
+                        .write(to: directory.appendingPathComponent(".credentials.json"), options: .atomic)
+                } else {
+                    Fixture.claudeEntries?[service] = replacement
+                }
+            }
+        }
+        menu.remove(column: id)
+        let login = AuthStorage$Claude.credentials(service: service, interactive: false)?.accessToken
+        if phase != "unchanged" {
+            try expect(ClaudeLifecycleSignals.afterStagingForConfirmation == nil, "Fixture did not reach profile staging")
+            try expect(menu.failure != nil && login == "synthetic-new-owner", "The previous confirmation retired the new login")
+        } else {
+            try expect(menu.failure == nil && login == nil, "The unchanged login did not remove successfully")
         }
     }
 
@@ -313,6 +402,228 @@ enum Lifecycle$Claude {
                    "Replaying stub removal reused a retired Desktop or discarded an unchanged session")
     }
 
+    private static var sharedPrimaryCheckpoint: URL {
+        Fixture.root.appendingPathComponent("shared-primary-defaults.plist")
+    }
+
+    @MainActor
+    private static func sharedPrimaryCut(phase: String) throws {
+        let fs = Foundation.FileManager.default
+        let base = AuthStorage$Claude.baseService
+        let directory = ProfileDirectories.home.appendingPathComponent(".claude")
+        let alias = ProfileDirectories.claudeRoot.appendingPathComponent("shared-primary-owner")
+        try fs.createDirectory(at: alias, withIntermediateDirectories: true)
+        try fs.createSymbolicLink(at: directory, withDestinationURL: alias)
+        let alternate = AuthStorage$Claude.profileService(forConfigPath: alias.path)
+        Fixture.claudeEntries = [base: Fixture.claudeLogin("old-primary", expired: false),
+                                 alternate: Fixture.claudeLogin("alternate", expired: false)]
+        let file = directory.appendingPathComponent(".credentials.json")
+        try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("alias-fallback", expired: false))
+            .write(to: file)
+        guard let account = Discovery$Real().discover().first(where: { $0.id == "claude:" + base }),
+              AuthStorage$Claude.keychainServices(in: directory)?.contains(alternate) == true else {
+            throw Failure(description: "Fixture did not attach both Keychain accounts to the shared directory")
+        }
+        if phase.hasPrefix("retry-") {
+            ClaudeLifecycleSignals.opaqueService = base
+            Fixture.denyClaudeRead = true
+        }
+        func cut() {
+            let values = UserDefaults.standard.dictionaryRepresentation()
+            try! PropertyListSerialization.data(fromPropertyList: values, format: .binary, options: 0)
+                .write(to: sharedPrimaryCheckpoint)
+            _exit(86)
+        }
+        if phase == "before" {
+            Fixture.beforeCredentialDelete = cut
+        } else {
+            ClaudeLifecycleSignals.afterKeychainDeletion = { if $0 == base { cut() } }
+        }
+        try AccountRemoval.remove(account)
+        throw Failure(description: "The shared primary did not reach the Keychain interruption boundary")
+    }
+
+    @MainActor
+    private static func sharedPrimaryReplay(phase: String) throws {
+        let values = try PropertyListSerialization.propertyList(from: Data(contentsOf: sharedPrimaryCheckpoint),
+                                                                 options: [], format: nil) as! [String: Any]
+        for (key, value) in values { UserDefaults.standard.set(value, forKey: key) }
+        let base = AuthStorage$Claude.baseService
+        let primaryID = "claude:" + base
+        let directory = ProfileDirectories.home.appendingPathComponent(".claude")
+        let alias = ProfileDirectories.claudeRoot.appendingPathComponent("shared-primary-owner")
+        let alternate = AuthStorage$Claude.profileService(forConfigPath: alias.path)
+        Fixture.claudeEntries = [alternate: Fixture.claudeLogin("alternate", expired: false)]
+        if phase == "before" { Fixture.claudeEntries?[base] = Fixture.claudeLogin("old-primary", expired: false) }
+        if phase == "keychain-replacement" || phase.hasPrefix("retry-") {
+            Fixture.claudeEntries?[base] = Fixture.claudeLogin("replacement-primary", expired: false)
+        }
+        let file = directory.appendingPathComponent(".credentials.json")
+        if phase.hasPrefix("retry-") {
+            try sharedPrimaryRetry(file: file, sameFallback: phase == "retry-same")
+            return
+        }
+        if phase == "replacement" {
+            try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("new-native-file", expired: false))
+                .write(to: file, options: .atomic)
+        }
+        if phase == "metadata-denied" {
+            Fixture.denyClaudeMetadata = true
+            try expect(!Discovery$Real().discover().contains(where: { $0.id == primaryID }),
+                       "Metadata refusal promoted the retained alias fallback to primary")
+            Fixture.denyClaudeMetadata = false
+        }
+        let accounts = Discovery$Real().discover()
+        try expect(accounts.contains(where: { $0.id == "claude:" + alternate }),
+                   "Recovery removed the independent Keychain alias")
+        let wantedPrimary = ["before", "replacement", "keychain-replacement"].contains(phase)
+        try expect(accounts.contains(where: { $0.id == primaryID }) == wantedPrimary,
+                   "Restart reintroduced a deleted primary or hid an independent fresh login")
+        if phase == "before" {
+            Fixture.claudeEntries?[base] = nil
+            try expect(Discovery$Real().discover().contains(where: { $0.id == primaryID }),
+                       "An interrupted preparation suppressed the native file after an unrelated logout")
+        }
+        if phase == "keychain-replacement" {
+            try expect(Fixture.claudeEntries?[base].flatMap(AuthStorage$Claude.parse)?.accessToken
+                       == "synthetic-replacement-primary", "Recovery changed the independent primary Keychain login")
+            Fixture.claudeEntries?[base] = nil
+            try expect(!Discovery$Real().discover().contains(where: { $0.id == primaryID }),
+                       "The replacement primary's later logout exposed the retained alias fallback")
+        }
+        let data = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
+        let expected = phase == "replacement" ? "new-native-file" : "alias-fallback"
+        try expect(AuthStorage$Claude.parse(data)?.accessToken == "synthetic-" + expected,
+                   "Recovery altered the native fallback file")
+    }
+
+    @MainActor
+    private static func sharedPrimaryRetry(file: URL, sameFallback: Bool) throws {
+        let key = "claudePendingPrimaryFallbackRemoval"
+        let defaults = UserDefaults.standard
+        let service = AuthStorage$Claude.baseService
+        guard let previous = defaults.data(forKey: key),
+              let account = Discovery$Real().discover().first(where: { $0.id == "claude:" + service }),
+              defaults.data(forKey: key) == previous else {
+            throw Failure(description: "The fixture did not retain the earlier unresolved shared-primary receipt")
+        }
+        if !sameFallback {
+            try nativeFallbackBytes("another-alias-fallback").write(to: file, options: .atomic)
+        }
+        var prepared: Data?
+        Fixture.beforeCredentialDelete = { prepared = defaults.data(forKey: key) }
+        Fixture.denyKeychainDelete = true
+        var refused = false
+        do { try AccountRemoval.remove(account) } catch { refused = true }
+        try expect(refused && prepared != nil && Fixture.claudeEntries?[service] != nil,
+                   "The retry did not reach the refused Keychain deletion")
+        try expect((prepared == previous) == sameFallback,
+                   "The retry changed the receipt for the same fallback or did not record a new fallback")
+        try expect(defaults.data(forKey: key) == previous, "The refused retry discarded the earlier shared-primary receipt")
+    }
+
+    private static var nativeFallbackInode: URL {
+        Fixture.root.appendingPathComponent("native-fallback-inode")
+    }
+
+    private static func nativeFallbackBytes(_ login: String) throws -> Data {
+        try JSONSerialization.data(withJSONObject: Fixture.claudeLogin(login, expired: true), options: .sortedKeys)
+    }
+
+    @MainActor
+    private static func nativePrimaryCut(phase: String) throws {
+        let manager = Foundation.FileManager.default
+        let directory = Fixture.storageDirectory
+        let service = AuthStorage$Claude.baseService
+        try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent(".credentials.json")
+        try nativeFallbackBytes("old-native-file").write(to: file)
+        let attributes = try manager.attributesOfItem(atPath: file.path)
+        let inode = (attributes[.systemFileNumber] as! NSNumber).stringValue
+        try Data(inode.utf8).write(to: nativeFallbackInode)
+        try Data("native-config".utf8).write(to: directory.appendingPathComponent("config-marker"))
+        Fixture.claudeEntries = [service: Fixture.claudeLogin("old-native-keychain", expired: false)]
+        guard let account = Discovery$Real().discover().first(where: { $0.id == "claude:" + service }),
+              AuthStorage$Claude.keychainServices(in: directory) == [service] else {
+            throw Failure(description: "The fixture did not discover an unshared native login")
+        }
+        if phase == "opaque" {
+            ClaudeLifecycleSignals.opaqueService = service
+            Fixture.denyClaudeRead = true
+        }
+        if phase == "deleted" { ClaudeLifecycleSignals.cutAfterCredentialDelete = service }
+        else { ClaudeLifecycleSignals.cutAfterFallback = true }
+        try AccountRemoval.remove(account)
+        throw Failure(description: "Native removal did not reach the expected interruption boundary")
+    }
+
+    @MainActor
+    private static func nativePrimaryReplay(phase: String) throws {
+        let manager = Foundation.FileManager.default
+        let directory = Fixture.storageDirectory
+        let file = directory.appendingPathComponent(".credentials.json")
+        let service = AuthStorage$Claude.baseService
+        let deleted = phase == "deleted"
+        Fixture.claudeEntries = deleted ? [:] : [service: Fixture.claudeLogin("old-native-keychain", expired: false)]
+        if phase == "opaque" { ClaudeLifecycleSignals.opaqueService = service }
+        try expect(!manager.fileExists(atPath: file.path), "The child stopped before isolating the native fallback")
+        func checkpoints() throws -> [URL] {
+            try manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+                .filter { $0.lastPathComponent.hasPrefix(".credentials-") && $0.lastPathComponent.hasSuffix(".removal") }
+        }
+        let original = try nativeFallbackBytes("old-native-file")
+        if phase == "keychain-replacement" || phase == "keychain-denied" {
+            let replaced = phase == "keychain-replacement"
+            if replaced {
+                Fixture.claudeEntries?[service] = Fixture.claudeLogin("replacement-primary", expired: false)
+            } else {
+                Fixture.denyClaudeRead = true
+                Fixture.denyClaudeMetadata = true
+            }
+            let accounts = Discovery$Real().discover()
+            let pending = try checkpoints()
+            try expect(!manager.fileExists(atPath: file.path) && pending.count == 1
+                       && Data(contentsOf: pending[0]) == original,
+                       "Recovery exposed or lost the native fallback without verifying Keychain ownership")
+            if replaced {
+                try expect(accounts.contains(where: { $0.id == "claude:" + service })
+                           && Fixture.claudeEntries?[service].flatMap(AuthStorage$Claude.parse)?.accessToken
+                                == "synthetic-replacement-primary",
+                           "Recovery changed the replacement primary")
+                return
+            }
+            Fixture.denyClaudeRead = false
+            Fixture.denyClaudeMetadata = false
+        }
+        if phase == "replacement" {
+            let replacement = try nativeFallbackBytes("replacement-native-file")
+            try replacement.write(to: file)
+            _ = Discovery$Real().discover()
+            let pending = try checkpoints()
+            try expect(try Data(contentsOf: file) == replacement && pending.count == 1
+                       && Data(contentsOf: pending[0]) == original,
+                       "Recovery did not preserve both the new native file and the original checkpoint")
+            // Retry after the independent login no longer occupies the native path.
+            try manager.removeItem(at: file)
+        }
+        let accounts = Discovery$Real().discover()
+        try expect(try checkpoints().isEmpty, "Restart left a resolved native checkpoint behind")
+        try expect(try String(contentsOf: directory.appendingPathComponent("config-marker"), encoding: .utf8) == "native-config",
+                   "Native credential cleanup changed unrelated profile configuration")
+        try expect(accounts.contains(where: { $0.id == "claude:" + service }) == !deleted,
+                   "Restart changed the committed state of the native account")
+        if deleted {
+            try expect(!manager.fileExists(atPath: file.path), "Restart restored a committed removal's fallback")
+        } else {
+            try expect(manager.fileExists(atPath: file.path), "Restart did not restore the native fallback")
+            let expectedInode = try String(contentsOf: nativeFallbackInode, encoding: .utf8)
+            let attributes = try manager.attributesOfItem(atPath: file.path)
+            let inode = (attributes[.systemFileNumber] as? NSNumber)?.stringValue
+            try expect(try Data(contentsOf: file) == original && inode == expectedInode,
+                       "Restart did not restore the original native fallback inode and bytes")
+        }
+    }
+
     @MainActor
     private static func desktopRollbackCut(selected: Bool) throws {
         Fixture.claudeEntries = [:]
@@ -381,6 +692,16 @@ enum Lifecycle$Claude {
     private static func cliRetirementCut(phase: String, backend: String, selection: String) throws {
         Fixture.claudeEntries = [:]
         let (target, directory) = try profile(file: backend == "file", name: retiringProfileName)
+        let service = AuthStorage$Claude.profileService(forConfigPath: directory.path)
+        if backend == "both" {
+            let file = directory.appendingPathComponent(".credentials.json")
+            let bytes = try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("file-fallback", expired: false))
+            try bytes.write(to: file)
+            let attrs = try Foundation.FileManager.default.attributesOfItem(atPath: file.path)
+            let inode = (attrs[.systemFileNumber] as! NSNumber).stringValue
+            try bytes.write(to: Fixture.root.appendingPathComponent("retirement-fallback.original"))
+            try Data(inode.utf8).write(to: Fixture.root.appendingPathComponent("retirement-fallback.inode"))
+        }
         if selection == "target" {
             try switchTo(target)
         } else if selection == "previous" {
@@ -388,11 +709,37 @@ enum Lifecycle$Claude {
         }
         if phase == "pointer" {
             ClaudeLifecycleSignals.cutAfterSelectionMove = cliPointer.path
+        } else if phase == "fallback" {
+            ClaudeLifecycleSignals.cutAfterFallback = true
+        } else if phase == "fallback-committed" {
+            ClaudeLifecycleSignals.cutAfterCredentialDelete = service
         } else {
             ClaudeLifecycleSignals.cutAfterProfileMove = directory.path
         }
+        if phase == "opaque" {
+            ClaudeLifecycleSignals.opaqueService = service
+            Fixture.denyClaudeRead = true
+        }
         try AccountRemoval.remove(target)
         throw Failure(description: "The interrupted removal boundary was not reached")
+    }
+
+    @MainActor
+    private static func retirementWithoutProof() throws {
+        Fixture.claudeEntries = [:]
+        let (account, directory) = try profile(file: false, name: retiringProfileName)
+        try switchTo(account)
+        Fixture.denyClaudeRead = true
+        var refused = false
+        do { try AccountRemoval.remove(account) } catch { refused = true }
+        let manager = Foundation.FileManager.default
+        let hidden = try manager.contentsOfDirectory(atPath: ProfileDirectories.claudeRoot.path)
+            .contains(where: { $0.hasPrefix(".removed-") })
+        let service = AuthStorage$Claude.profileService(forConfigPath: directory.path)
+        try expect(refused && !hidden && manager.fileExists(atPath: directory.path)
+                   && Fixture.claudeEntries?[service] != nil
+                   && (try? String(contentsOf: cliPointer, encoding: .utf8)) == directory.path + "\n",
+                   "Opaque removal without a durable proof changed the managed route or credentials")
     }
 
     @MainActor
@@ -404,7 +751,7 @@ enum Lifecycle$Claude {
         let file = directory.appendingPathComponent(".credentials.json")
         let staged = try manager.contentsOfDirectory(at: ProfileDirectories.claudeRoot, includingPropertiesForKeys: nil)
             .filter { $0.lastPathComponent.hasPrefix(".removed-") }
-        try expect(staged.count == (phase == "directory" ? 1 : 0)
+        try expect(staged.count == (phase == "pointer" ? 0 : 1)
                    && manager.fileExists(atPath: directory.path) == (phase == "pointer"),
                    "The child did not stop at the expected physical removal boundary")
         guard let originalOwner = DirectoryIdentity.capture(staged.first ?? directory) else {
@@ -412,12 +759,30 @@ enum Lifecycle$Claude {
         }
         let archivedFile = staged.first?.appendingPathComponent(".credentials.json")
         let originalFile = backend == "file" ? try Data(contentsOf: archivedFile ?? file) : nil
-        Fixture.claudeEntries = backend == "file" ? [:] : [service: Fixture.claudeLogin(retiringProfileName, expired: false)]
+        Fixture.claudeEntries = backend == "file" || phase == "fallback-committed"
+            ? [:] : [service: Fixture.claudeLogin(retiringProfileName, expired: false)]
+        if phase == "opaque" { ClaudeLifecycleSignals.opaqueService = service }
         let prior = try? String(contentsOf: cliPointer, encoding: .utf8)
         let previous = ProfileDirectories.claudeRoot.appendingPathComponent("previous").path + "\n"
         try expect(prior == (selection == "previous" ? previous : nil),
                    "The cut unexpectedly changed a different profile's CLI route")
 
+        if phase == "fallback-committed" {
+            _ = Discovery$Real().discover()
+            let names = try manager.contentsOfDirectory(atPath: staged[0].path)
+            try expect(!names.contains(where: { $0 == ".credentials.json" || $0.hasSuffix(".removal") })
+                       && !manager.fileExists(atPath: directory.path) && !manager.fileExists(atPath: cliPointer.path),
+                       "The committed Keychain removal left an isolated fallback or restored the deleted profile")
+            return
+        }
+        if behavior == "opaque-replaced" {
+            Fixture.claudeEntries?[service] = Fixture.claudeLogin("replacement", expired: false)
+            try Data("different classic Keychain generation".utf8).write(to: Fixture.classicKeychainDatabase(), options: .atomic)
+            _ = Discovery$Real().discover()
+            try expect(!manager.fileExists(atPath: directory.path) && !manager.fileExists(atPath: cliPointer.path),
+                       "Recovery adopted a changed opaque Keychain item with the same modification date")
+            return
+        }
         if behavior == "replacement" || behavior == "replacement-before-discovery" {
             let replacement = try JSONSerialization.data(withJSONObject: Fixture.claudeLogin("replacement", expired: false))
             try manager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -446,7 +811,7 @@ enum Lifecycle$Claude {
             Fixture.denyClaudeRead = true
             _ = Discovery$Real().discover()
             try expect(!manager.fileExists(atPath: cliPointer.path)
-                       && (phase != "directory" || !manager.fileExists(atPath: directory.path)),
+                       && (phase == "pointer" || !manager.fileExists(atPath: directory.path)),
                        "Replay published an unreadable login")
             if behavior == "newer" {
                 let (newer, newerDirectory) = try profile(file: true, name: "newer")
@@ -467,6 +832,12 @@ enum Lifecycle$Claude {
                    "A fresh discovery did not recover the original Claude login")
         if backend == "file" {
             try expect(try Data(contentsOf: file) == originalFile, "Replay changed the original file credential")
+        } else if backend == "both" {
+            let original = try Data(contentsOf: Fixture.root.appendingPathComponent("retirement-fallback.original"))
+            let inode = try String(contentsOf: Fixture.root.appendingPathComponent("retirement-fallback.inode"), encoding: .utf8)
+            let restored = try manager.attributesOfItem(atPath: file.path)[.systemFileNumber] as? NSNumber
+            try expect(try Data(contentsOf: file) == original && restored?.stringValue == inode,
+                       "Recovery did not restore the exact fallback inode and bytes")
         }
         let expectedRoute = newerSelection ?? (selection == "target" ? directory.path + "\n" : prior)
         try expect((try? String(contentsOf: cliPointer, encoding: .utf8)) == expectedRoute,

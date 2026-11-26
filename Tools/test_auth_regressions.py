@@ -74,6 +74,13 @@ final class NSAlert {
             depth += (delegate[end] == "{") - (delegate[end] == "}")
             end += 1
         removal_body = delegate[start:end].replace("@objc private", "private", 1)
+        start = delegate.index("    @objc private func removeColumn(")
+        end = delegate.index("{", start) + 1
+        depth = 1
+        while depth:
+            depth += (delegate[end] == "{") - (delegate[end] == "}")
+            end += 1
+        column_removal_body = delegate[start:end].replace("@objc private", "private", 1)
         menu = pathlib.Path(cls.build.name) / "ProfileMenu.swift"
         menu.write_text('''
 import Foundation
@@ -81,16 +88,24 @@ final class NSMenuItem { var representedObject: Any? }
 @MainActor final class RegressionProfileMenu {
     enum ModalResponse { case alertFirstButtonReturn }
     var failure: Error?
-    func runModalAbovePanel(_ alert: NSAlert) -> ModalResponse { .alertFirstButtonReturn }
+    var beforeConfirmation: () -> Void = {}
+    func runModalAbovePanel(_ alert: NSAlert) -> ModalResponse {
+        beforeConfirmation()
+        return .alertFirstButtonReturn
+    }
     func errorAlert(_ title: String, _ error: Error) { failure = error }
     func remove(path: String) {
         let sender = NSMenuItem(); sender.representedObject = path
         removeOrphanProfile(sender)
     }
+    func remove(column: String) {
+        let sender = NSMenuItem(); sender.representedObject = column
+        removeColumn(sender)
+    }
     let store: UsageStore
     init(store: UsageStore) { self.store = store }
     func profiles() -> [(label: String, url: URL)] { orphanProfiles() }
-''' + menu_body + "\n" + removal_body + "\n}\n")
+''' + menu_body + "\n" + removal_body + "\n" + column_removal_body + "\n}\n")
         cls.executable = compile_fixture(cls.build.name, "Authentication", [
             "Model/Models.swift", "Model/Account.swift", "Core/JWT.swift",
             *(["Core/StorageLock$Claude.swift"] if (SOURCES / "Core/StorageLock$Claude.swift").exists() else []),
@@ -446,6 +461,16 @@ final class NSMenuItem { var representedObject: Any? }
 
     def test_claude_distinct_grants_concurrent_control_audit(self):
         self.check_scenario("claude-distinct-grants-concurrent-control-audit")
+
+    def test_claude_grant_disposition_survives_restart(self):
+        for outcome in ("rotated", "rejected", "unchanged", "access-only", "unavailable"):
+            with self.subTest(outcome=outcome):
+                with tempfile.TemporaryDirectory(prefix="notchlimits-claude-grant-", dir="/private/tmp") as directory:
+                    root = pathlib.Path(directory)
+                    seed = run_fixture(self.executable, "claude-grant-restart-seed", root, outcome)
+                    self.assertEqual(seed.returncode, 0, seed.stdout + seed.stderr)
+                    replay = run_fixture(self.executable, "claude-grant-restart-replay", root, outcome)
+                    self.assertEqual(replay.returncode, 0, replay.stdout + replay.stderr)
 
     def test_audit_claude_orphan_desktop_on(self):
         self.check_scenario("audit-claude-orphan-desktop-on")
