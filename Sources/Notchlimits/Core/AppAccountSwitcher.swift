@@ -275,8 +275,12 @@ final class AppSwitcher$Claude: AppAccountSwitcher {
                                                                      keychainOnly: true),
                   current.directory == fallback.directory, owner.matches(directory) else { throw RetiredAccount() }
             if !current.hasCredential { return false }
-            guard retirement.matchesPreviousLogin(current) else { throw RetiredAccount() }
-            return true
+            if retirement.matchesPreviousLogin(current) { return true }
+            // A verified replacement can use a fresh Desktop generation. Only
+            // the isolated fallback belongs to the earlier confirmed removal.
+            guard let previous = retirement.previousLogin, previous.hasCredential,
+                  previous.opaqueKeychain == nil, current.opaqueKeychain == nil else { throw RetiredAccount() }
+            return false
         }
         let restore = try shouldRestore()
         try AccountRemoval.resolveClaudeFallback(in: directory, matching: fallback.credentialFile,

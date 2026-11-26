@@ -183,10 +183,11 @@ class ClaudeLifecycleRegressions(unittest.TestCase):
     def test_interrupted_native_primary_removal_preserves_a_replacement_file(self):
         self.check_desktop_retirement_restart("replacement", case="native-primary")
 
-    def test_interrupted_native_primary_retains_the_checkpoint_without_the_original_keychain_login(self):
-        for phase in ("keychain-replacement", "keychain-denied"):
-            with self.subTest(phase=phase):
-                self.check_desktop_retirement_restart(phase, case="native-primary")
+    def test_interrupted_native_primary_retains_the_checkpoint_when_keychain_refuses_proof(self):
+        self.check_desktop_retirement_restart("keychain-denied", case="native-primary")
+
+    def test_replacement_native_primary_can_switch_desktop_and_be_removed(self):
+        self.check_desktop_retirement_restart("keychain-replacement", case="native-primary")
 
     def test_cli_retirement_rebinds_only_the_original_rollback_file(self):
         for phase in ("selected", "locked", "copied"):

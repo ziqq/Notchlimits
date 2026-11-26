@@ -547,6 +547,9 @@ enum Lifecycle$Claude {
               AuthStorage$Claude.keychainServices(in: directory) == [service] else {
             throw Failure(description: "The fixture did not discover an unshared native login")
         }
+        CLISelection$Claude.isEnabled = false
+        try switchTo(account)
+        try Data("old Desktop session".utf8).write(to: desktopDirectory().appendingPathComponent("session"))
         if phase == "opaque" {
             ClaudeLifecycleSignals.opaqueService = service
             Fixture.denyClaudeRead = true
@@ -572,26 +575,38 @@ enum Lifecycle$Claude {
                 .filter { $0.lastPathComponent.hasPrefix(".credentials-") && $0.lastPathComponent.hasSuffix(".removal") }
         }
         let original = try nativeFallbackBytes("old-native-file")
-        if phase == "keychain-replacement" || phase == "keychain-denied" {
-            let replaced = phase == "keychain-replacement"
-            if replaced {
-                Fixture.claudeEntries?[service] = Fixture.claudeLogin("replacement-primary", expired: false)
-            } else {
-                Fixture.denyClaudeRead = true
-                Fixture.denyClaudeMetadata = true
+        if phase == "keychain-replacement" {
+            let id = "claude:" + service
+            let previous = DesktopApp.supportDirectory.appendingPathComponent("claude-app/" + AccountSwitcher.slug(id))
+            let oldSession = previous.appendingPathComponent("session")
+            let newFallback = try nativeFallbackBytes("replacement-fallback")
+            try newFallback.write(to: file)
+            Fixture.claudeEntries?[service] = Fixture.claudeLogin("replacement-primary", expired: false)
+            guard let replacement = Discovery$Real().discover().first(where: { $0.id == id }) else {
+                throw Failure(description: "Recovery hid the replacement primary")
             }
-            let accounts = Discovery$Real().discover()
+            CLISelection$Claude.isEnabled = false
+            try switchTo(replacement)
+            try expect(try desktopDirectory().path != previous.path && manager.fileExists(atPath: oldSession.path),
+                       "The replacement did not get a fresh Desktop session")
+            try expect(try Data(contentsOf: file) == newFallback && checkpoints().isEmpty
+                       && Fixture.claudeEntries?[service].flatMap(AuthStorage$Claude.parse)?.accessToken
+                           == "synthetic-replacement-primary",
+                       "Replay did not limit cleanup to the earlier removal's checkpoint")
+            try AccountRemoval.remove(replacement)
+            try expect(Fixture.claudeEntries?[service] == nil && manager.fileExists(atPath: oldSession.path)
+                       && manager.fileExists(atPath: directory.appendingPathComponent("config-marker").path),
+                       "The independent replacement could not be removed without affecting the old Desktop session")
+            return
+        }
+        if phase == "keychain-denied" {
+            Fixture.denyClaudeRead = true
+            Fixture.denyClaudeMetadata = true
+            _ = Discovery$Real().discover()
             let pending = try checkpoints()
             try expect(!manager.fileExists(atPath: file.path) && pending.count == 1
                        && Data(contentsOf: pending[0]) == original,
                        "Recovery exposed or lost the native fallback without verifying Keychain ownership")
-            if replaced {
-                try expect(accounts.contains(where: { $0.id == "claude:" + service })
-                           && Fixture.claudeEntries?[service].flatMap(AuthStorage$Claude.parse)?.accessToken
-                                == "synthetic-replacement-primary",
-                           "Recovery changed the replacement primary")
-                return
-            }
             Fixture.denyClaudeRead = false
             Fixture.denyClaudeMetadata = false
         }
